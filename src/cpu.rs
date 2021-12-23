@@ -1,8 +1,11 @@
+mod display;
+
+use std::collections::btree_map::Range;
 use std::fmt::Display;
 use std::{fmt::Debug, ops::RangeInclusive};
 
 use crate::bit_manipulation::BitManipulation;
-use crate::bus::Bus;
+use crate::bus::{Bus, DataAccess};
 
 #[derive(Debug)]
 pub struct Cpu {
@@ -43,34 +46,20 @@ pub struct Cpu {
     r13_und: u32,
     r14_und: u32,
     spsr_und: u32,
-    bus: Bus,
+    cycle_count: u64,
+    pub bus: Bus,
 }
 
-impl Display for Cpu {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
-            f,
-            " R0: 0x{:08x}  R1: 0x{:08x}  R2: 0x{:08x}  R3: 0x{:08x}",
-            self.r0, self.r1, self.r2, self.r3
-        )?;
-        writeln!(
-            f,
-            " R4: 0x{:08x}  R5: 0x{:08x}  R6: 0x{:08x}  R7: 0x{:08x}",
-            self.r4, self.r5, self.r6, self.r7
-        )?;
-        writeln!(
-            f,
-            " R8: 0x{:08x}  R9: 0x{:08x} R10: 0x{:08x} R11: 0x{:08x}",
-            self.r8, self.r9, self.r10, self.r11
-        )?;
-        write!(
-            f,
-            "R12: 0x{:08x} R13: 0x{:08x} R14: 0x{:08x} R15: 0x{:08x}",
-            self.r12, self.r13, self.r14, self.r15
-        )?;
-
-        Ok(())
-    }
+#[derive(Clone, Copy, Debug)]
+enum ExceptionType {
+    Reset,
+    Undefined,
+    Swi,
+    PrefetchAbort,
+    DataAbort,
+    AddressExceeds26Bit,
+    InterruptRequest,
+    FastInterruptRequest,
 }
 
 impl Default for Cpu {
@@ -92,7 +81,7 @@ impl Default for Cpu {
             r13: 0,
             r14: 0,
             r15: 0,
-            cpsr: Self::SUPERVISOR_MODE_BITS,
+            cpsr: Self::SYSTEM_MODE_BITS,
             r8_fiq: 0,
             r9_fiq: 0,
             r10_fiq: 0,
@@ -113,6 +102,7 @@ impl Default for Cpu {
             r13_und: 0,
             r14_und: 0,
             spsr_und: 0,
+            cycle_count: 0,
             bus: Bus::default(),
         }
     }
@@ -175,31 +165,6 @@ impl Register {
     }
 }
 
-impl Display for Register {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::R0 => f.write_str("r0"),
-            Self::R1 => f.write_str("r1"),
-            Self::R2 => f.write_str("r2"),
-            Self::R3 => f.write_str("r3"),
-            Self::R4 => f.write_str("r4"),
-            Self::R5 => f.write_str("r5"),
-            Self::R6 => f.write_str("r6"),
-            Self::R7 => f.write_str("r7"),
-            Self::R8 => f.write_str("r8"),
-            Self::R9 => f.write_str("r9"),
-            Self::R10 => f.write_str("r10"),
-            Self::R11 => f.write_str("r11"),
-            Self::R12 => f.write_str("r12"),
-            Self::R13 => f.write_str("sp"),
-            Self::R14 => f.write_str("lr"),
-            Self::R15 => f.write_str("pc"),
-            Self::Cpsr => f.write_str("cpsr"),
-            _ => todo!("{:?}", self),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub enum InstructionCondition {
     Equal,
@@ -220,42 +185,10 @@ pub enum InstructionCondition {
     Never,
 }
 
-impl Display for InstructionCondition {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Equal => f.write_str("eq"),
-            Self::NotEqual => f.write_str("ne"),
-            Self::UnsignedHigherOrSame => f.write_str("cs"),
-            Self::UnsignedLower => f.write_str("cc"),
-            Self::SignedNegative => f.write_str("mi"),
-            Self::SignedPositiveOrZero => f.write_str("pl"),
-            Self::SignedOverflow => f.write_str("vs"),
-            Self::SignedNoOverflow => f.write_str("vc"),
-            Self::UnsignedHigher => f.write_str("hi"),
-            Self::UnsignedLowerOrSame => f.write_str("ls"),
-            Self::SignedGreaterOrEqual => f.write_str("ge"),
-            Self::SignedLessThan => f.write_str("lt"),
-            Self::SignedGreaterThan => f.write_str("g"),
-            Self::SignedLessOrEqual => f.write_str("le"),
-            Self::Always => Ok(()),
-            Self::Never => unreachable!("never branch condition"),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
-pub enum OffsetModifierType {
+enum OffsetModifierType {
     AddToBase,
     SubtractFromBase,
-}
-
-impl Display for OffsetModifierType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            OffsetModifierType::AddToBase => f.write_str("+"),
-            OffsetModifierType::SubtractFromBase => f.write_str("-"),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -286,6 +219,7 @@ pub enum ArmInstructionType {
         destination_register: Register,
         offset_info: SingleDataTransferOffsetInfo,
         access_size: SingleDataMemoryAccessSize,
+        sign_extend: bool,
     },
     Str {
         index_type: SingleDataTransferIndexType,
@@ -330,9 +264,13 @@ pub enum ArmInstructionType {
     Mul {
         operation: MultiplyOperation,
         set_conditions: bool,
-        destination_rdhi_register: Register,
-        accumulate_rdlo_register: Register,
-        operand_register: Register,
+        destination_register: Register,
+        accumulate_register: Register,
+        operand_register_rs: Register,
+        operand_register_rm: Register,
+    },
+    Swi {
+        comment: u32,
     },
 }
 
@@ -357,12 +295,20 @@ pub enum ThumbInstructionType {
         source: ThumbRegisterOrImmediate,
         second_operand: Option<ThumbRegisterOrImmediate>,
     },
+    HighRegister {
+        operation: ThumbHighRegisterOperation,
+        destination_register: Register,
+        source: Register,
+    },
     B {
         condition: InstructionCondition,
         offset: i16,
     },
-    Bl {
+    BlPartOne {
         offset: i32,
+    },
+    BlPartTwo {
+        offset: u16,
     },
     Bx {
         operand: Register,
@@ -414,45 +360,17 @@ pub enum ThumbRegisterOperation {
     Mvn,
 }
 
-impl Display for ThumbRegisterOperation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ThumbRegisterOperation::Lsl => f.write_str("lsl"),
-            ThumbRegisterOperation::Lsr => f.write_str("lsr"),
-            ThumbRegisterOperation::Asr => f.write_str("asr"),
-            ThumbRegisterOperation::Add => f.write_str("add"),
-            ThumbRegisterOperation::Sub => f.write_str("sub"),
-            ThumbRegisterOperation::Mov => f.write_str("mov"),
-            ThumbRegisterOperation::Cmp => f.write_str("cmp"),
-            ThumbRegisterOperation::And => f.write_str("and"),
-            ThumbRegisterOperation::Eor => f.write_str("eor"),
-            ThumbRegisterOperation::Adc => f.write_str("adc"),
-            ThumbRegisterOperation::Sbc => f.write_str("sbc"),
-            ThumbRegisterOperation::Ror => f.write_str("ror"),
-            ThumbRegisterOperation::Tst => f.write_str("tst"),
-            ThumbRegisterOperation::Neg => f.write_str("neg"),
-            ThumbRegisterOperation::Cmn => f.write_str("cmn"),
-            ThumbRegisterOperation::Orr => f.write_str("orr"),
-            ThumbRegisterOperation::Mul => f.write_str("mul"),
-            ThumbRegisterOperation::Bic => f.write_str("bic"),
-            ThumbRegisterOperation::Mvn => f.write_str("mvn"),
-        }
-    }
+#[derive(Clone, Copy, Debug)]
+pub enum ThumbHighRegisterOperation {
+    Add,
+    Cmp,
+    Mov,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum ThumbRegisterOrImmediate {
     Immediate(u32),
     Register(Register),
-}
-
-impl Display for ThumbRegisterOrImmediate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ThumbRegisterOrImmediate::Immediate(value) => write!(f, "#{}", value),
-            ThumbRegisterOrImmediate::Register(register) => write!(f, "{}", register),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -463,647 +381,16 @@ pub enum ThumbLoadStoreDataSize {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum Instruction {
-    ArmInstruction(ArmInstruction),
-    ThumbInstruction(ThumbInstruction),
-}
-
-impl Display for Instruction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Instruction::ArmInstruction(instruction) => {
-                write!(f, "ARM   0x{:08x}: {}", instruction.address, instruction)
-            }
-            Instruction::ThumbInstruction(instruction) => {
-                write!(f, "Thumb 0x{:08x}: {}", instruction.address, instruction)
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
 pub struct ArmInstruction {
     instruction_type: ArmInstructionType,
     condition: InstructionCondition,
     address: u32,
 }
 
-impl Display for ArmInstruction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.instruction_type {
-            ArmInstructionType::Alu {
-                operation,
-                set_conditions: _,
-                first_operand,
-                second_operand,
-                destination_operand,
-            } => match operation {
-                AluOperation::And
-                | AluOperation::Eor
-                | AluOperation::Sub
-                | AluOperation::Rsb
-                | AluOperation::Add
-                | AluOperation::Adc
-                | AluOperation::Sbc
-                | AluOperation::Rsc
-                | AluOperation::Orr
-                | AluOperation::Bic => write!(
-                    f,
-                    "{}{} {}, {}, {}",
-                    operation, self.condition, destination_operand, first_operand, second_operand
-                ),
-                AluOperation::Tst | AluOperation::Teq | AluOperation::Cmp | AluOperation::Cmn => {
-                    write!(
-                        f,
-                        "{}{} {}, {}",
-                        operation, self.condition, first_operand, second_operand
-                    )
-                }
-                AluOperation::Mov | AluOperation::Mvn => write!(
-                    f,
-                    "{}{} {}, {}",
-                    operation, self.condition, destination_operand, second_operand
-                ),
-                _ => todo!(),
-            },
-            ArmInstructionType::B { offset } => write!(f, "b{} 0x{:08X}", self.condition, offset),
-            ArmInstructionType::Bl { offset } => write!(f, "bl{} 0x{:08X}", self.condition, offset),
-            ArmInstructionType::Bx { operand } => write!(f, "bx{} {}", self.condition, operand),
-            ArmInstructionType::Ldr {
-                access_size,
-                base_register,
-                destination_register,
-                index_type,
-                offset_info,
-            } => {
-                write!(f, "ldr{}", self.condition)?;
-                if offset_info.sign {
-                    f.write_str("s")?;
-                }
-
-                match access_size {
-                    SingleDataMemoryAccessSize::Byte => f.write_str("b")?,
-                    SingleDataMemoryAccessSize::HalfWord => f.write_str("h")?,
-                    SingleDataMemoryAccessSize::Word => {}
-                    SingleDataMemoryAccessSize::DoubleWord => f.write_str("d")?,
-                };
-
-                write!(f, " {}, ", destination_register)?;
-
-                match index_type {
-                    SingleDataTransferIndexType::PreIndex { write_back } => {
-                        write!(f, "[{}, {}]", base_register, offset_info)?;
-                        if write_back {
-                            f.write_str("!")?;
-                        }
-                    }
-                    SingleDataTransferIndexType::PostIndex { .. } => {
-                        write!(f, "[{}], {}", base_register, offset_info)?
-                    }
-                }
-
-                Ok(())
-            }
-            ArmInstructionType::Str {
-                access_size,
-                base_register,
-                source_register,
-                index_type,
-                offset_info,
-            } => {
-                write!(f, "str{}", self.condition)?;
-                if offset_info.sign {
-                    f.write_str("s")?;
-                }
-
-                match access_size {
-                    SingleDataMemoryAccessSize::Byte => f.write_str("b")?,
-                    SingleDataMemoryAccessSize::HalfWord => f.write_str("h")?,
-                    SingleDataMemoryAccessSize::Word => {}
-                    SingleDataMemoryAccessSize::DoubleWord => f.write_str("d")?,
-                };
-
-                write!(f, " {}, ", source_register)?;
-
-                match index_type {
-                    SingleDataTransferIndexType::PreIndex { write_back } => {
-                        write!(f, "[{}, {}]", base_register, offset_info)?;
-                        if write_back {
-                            f.write_str("!")?;
-                        }
-                    }
-                    SingleDataTransferIndexType::PostIndex { .. } => {
-                        write!(f, "[{}], {}", base_register, offset_info)?;
-                    }
-                }
-
-                Ok(())
-            }
-            ArmInstructionType::Mrs {
-                destination_register,
-                source_psr,
-            } => write!(
-                f,
-                "mrs{} {}, {}",
-                self.condition, destination_register, source_psr
-            ),
-            ArmInstructionType::Msr {
-                destination_psr,
-                write_flags_field,
-                write_status_field,
-                write_extension_field,
-                write_control_field,
-                source_info,
-            } => {
-                write!(f, "msr{} {}", self.condition, destination_psr)?;
-
-                if write_flags_field
-                    || write_status_field
-                    || write_extension_field
-                    || write_control_field
-                {
-                    f.write_str("_")?;
-                }
-
-                if write_control_field {
-                    f.write_str("c")?;
-                }
-
-                if write_flags_field {
-                    f.write_str("f")?;
-                }
-
-                if write_status_field {
-                    f.write_str("s")?;
-                }
-
-                if write_extension_field {
-                    f.write_str("x")?;
-                }
-
-                write!(f, ", {}", source_info)?;
-
-                Ok(())
-            }
-            ArmInstructionType::Stm {
-                base_register,
-                index_type,
-                offset_modifier,
-                register_bit_list,
-                write_back,
-            } => {
-                write!(f, "stm{}", self.condition)?;
-
-                match offset_modifier {
-                    OffsetModifierType::AddToBase => f.write_str("i")?,
-                    OffsetModifierType::SubtractFromBase => f.write_str("d")?,
-                };
-
-                match index_type {
-                    BlockDataTransferIndexType::PreIndex => f.write_str("b")?,
-                    BlockDataTransferIndexType::PostIndex => f.write_str("a")?,
-                };
-
-                write!(f, " {}", base_register)?;
-
-                if write_back {
-                    f.write_str("!")?;
-                }
-                f.write_str(" {")?;
-
-                let mut start_idx = 0;
-                let mut printed_register = false;
-                for (register_idx, register_used) in register_bit_list.into_iter().enumerate() {
-                    if !register_used {
-                        let idx_delta = register_idx - start_idx;
-
-                        if idx_delta == 1 {
-                            if printed_register {
-                                f.write_str(", ")?;
-                            }
-
-                            write!(f, "r{}", start_idx)?;
-                            printed_register = true
-                        } else if idx_delta > 1 {
-                            if printed_register {
-                                f.write_str(", ")?;
-                            }
-
-                            write!(f, "r{}-r{}", start_idx, register_idx - 1)?;
-                            printed_register = true;
-                        }
-
-                        start_idx = register_idx + 1;
-                    }
-                }
-
-                let idx_delta = register_bit_list.len() - start_idx;
-                if idx_delta == 1 {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
-
-                    write!(f, "r{}", start_idx)?;
-                } else if idx_delta > 1 {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
-
-                    write!(f, "r{}-r{}", start_idx, register_bit_list.len() - 1)?;
-                }
-
-                f.write_str("}")?;
-
-                Ok(())
-            }
-            ArmInstructionType::Ldm {
-                base_register,
-                index_type,
-                offset_modifier,
-                register_bit_list,
-                write_back,
-            } => {
-                f.write_str("ldm")?;
-                write!(f, "ldm{}", self.condition)?;
-
-                match offset_modifier {
-                    OffsetModifierType::AddToBase => f.write_str("i")?,
-                    OffsetModifierType::SubtractFromBase => f.write_str("d")?,
-                };
-
-                match index_type {
-                    BlockDataTransferIndexType::PreIndex => f.write_str("b")?,
-                    BlockDataTransferIndexType::PostIndex => f.write_str("a")?,
-                };
-
-                write!(f, " {}", base_register)?;
-
-                if write_back {
-                    f.write_str("!")?;
-                }
-                f.write_str(" {")?;
-
-                let mut start_idx = 0;
-                let mut printed_register = false;
-                for (register_idx, register_used) in register_bit_list.into_iter().enumerate() {
-                    if !register_used {
-                        let idx_delta = register_idx - start_idx;
-
-                        if idx_delta == 1 {
-                            if printed_register {
-                                f.write_str(", ")?;
-                            }
-
-                            write!(f, "r{}", start_idx)?;
-                            printed_register = true
-                        } else if idx_delta > 1 {
-                            if printed_register {
-                                f.write_str(", ")?;
-                            }
-
-                            write!(f, "r{}-r{}", start_idx, register_idx - 1)?;
-                            printed_register = true;
-                        }
-
-                        start_idx = register_idx + 1;
-                    }
-                }
-
-                let idx_delta = register_bit_list.len() - start_idx;
-                if idx_delta == 1 {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
-
-                    write!(f, "r{}", start_idx)?;
-                } else if idx_delta > 1 {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
-
-                    write!(f, "r{}-r{}", start_idx, register_bit_list.len() - 1)?;
-                }
-
-                f.write_str("}")?;
-
-                Ok(())
-            }
-            _ => todo!(),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct ThumbInstruction {
     instruction_type: ThumbInstructionType,
     address: u32,
-}
-
-impl Display for ThumbInstruction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.instruction_type {
-            ThumbInstructionType::Register {
-                operation,
-                destination_register,
-                source,
-                second_operand,
-            } => {
-                write!(f, "{} {}, {}", operation, destination_register, source)?;
-                if let Some(second_operand) = second_operand {
-                    write!(f, ", {}", second_operand)?;
-                }
-                Ok(())
-            }
-            ThumbInstructionType::Ldr {
-                base_register,
-                destination_register,
-                offset,
-                sign_extend,
-                size,
-            } => {
-                f.write_str("ld")?;
-                if sign_extend {
-                    f.write_str("s")?;
-                } else {
-                    f.write_str("r")?;
-                }
-
-                match size {
-                    ThumbLoadStoreDataSize::Byte => f.write_str("b")?,
-                    ThumbLoadStoreDataSize::HalfWord => f.write_str("h")?,
-                    ThumbLoadStoreDataSize::Word => {}
-                };
-                f.write_str(" ")?;
-
-                write!(
-                    f,
-                    "{}, [{}, {}]",
-                    destination_register, base_register, offset
-                )?;
-
-                Ok(())
-            }
-            ThumbInstructionType::Str {
-                base_register,
-                source_register,
-                offset,
-                size,
-            } => {
-                f.write_str("str")?;
-
-                match size {
-                    ThumbLoadStoreDataSize::Byte => f.write_str("b")?,
-                    ThumbLoadStoreDataSize::HalfWord => f.write_str("h")?,
-                    ThumbLoadStoreDataSize::Word => {}
-                };
-                f.write_str(" ")?;
-
-                write!(f, "{}, [{}, {}]", source_register, base_register, offset)?;
-
-                Ok(())
-            }
-            ThumbInstructionType::Bl { offset } => write!(f, "bl 0x{:08x}", offset),
-            ThumbInstructionType::B { condition, offset } => {
-                write!(f, "b{} 0x{:08X}", condition, offset)
-            }
-            ThumbInstructionType::Bx { operand } => write!(f, "bx {}", operand),
-            ThumbInstructionType::Push {
-                register_bit_list,
-                push_lr,
-            } => {
-                f.write_str("push {")?;
-                let mut start_idx = 0;
-                let mut printed_register = false;
-
-                for (register_idx, register_used) in register_bit_list.into_iter().enumerate() {
-                    if !register_used {
-                        let idx_delta = register_idx - start_idx;
-                        if idx_delta == 1 {
-                            if printed_register {
-                                f.write_str(", ")?;
-                            }
-                            write!(f, "r{}", start_idx)?;
-                            printed_register = true;
-                        } else if idx_delta > 1 {
-                            if printed_register {
-                                f.write_str(", ")?;
-                            }
-
-                            write!(f, "r{}-r{}", start_idx, register_idx - 1)?;
-                            printed_register = true;
-                        }
-
-                        start_idx = register_idx + 1;
-                    }
-                }
-
-                let idx_delta = register_bit_list.len() - start_idx;
-                if idx_delta == 1 {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
-                    write!(f, "r{}", start_idx)?;
-                    printed_register = true;
-                } else if idx_delta > 1 {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
-
-                    write!(f, "r{}-r{}", start_idx, register_bit_list.len() - 1)?;
-                    printed_register = true;
-                }
-
-                if push_lr {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
-
-                    f.write_str("r14")?;
-                }
-
-                f.write_str("}")?;
-
-                Ok(())
-            }
-            ThumbInstructionType::Pop {
-                register_bit_list,
-                pop_pc,
-            } => {
-                f.write_str("pop {")?;
-                let mut start_idx = 0;
-                let mut printed_register = false;
-
-                for (register_idx, register_used) in register_bit_list.into_iter().enumerate() {
-                    if !register_used {
-                        let idx_delta = register_idx - start_idx;
-                        if idx_delta == 1 {
-                            if printed_register {
-                                f.write_str(", ")?;
-                            }
-                            write!(f, "r{}", start_idx)?;
-                            printed_register = true;
-                        } else if idx_delta > 1 {
-                            if printed_register {
-                                f.write_str(", ")?;
-                            }
-
-                            write!(f, "r{}-r{}", start_idx, register_idx - 1)?;
-                            printed_register = true;
-                        }
-
-                        start_idx = register_idx + 1;
-                    }
-                }
-
-                let idx_delta = register_bit_list.len() - start_idx;
-                if idx_delta == 1 {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
-                    write!(f, "r{}", start_idx)?;
-                    printed_register = true;
-                } else if idx_delta > 1 {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
-
-                    write!(f, "r{}-r{}", start_idx, register_bit_list.len() - 1)?;
-                    printed_register = true;
-                }
-
-                if pop_pc {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
-
-                    f.write_str("r15")?;
-                }
-
-                f.write_str("}")?;
-
-                Ok(())
-            }
-            ThumbInstructionType::AddSpecial {
-                source_register,
-                dest_register,
-                unsigned_offset,
-                sign_bit,
-            } => {
-                if sign_bit {
-                    f.write_str("sub")?;
-                } else {
-                    f.write_str("add")?;
-                }
-
-                write!(
-                    f,
-                    " {}, {}, #{}",
-                    dest_register, source_register, unsigned_offset
-                )?;
-
-                Ok(())
-            }
-            ThumbInstructionType::LdmiaWriteBack {
-                base_register,
-                register_bit_list,
-            } => {
-                write!(f, "ldmia {}!, {{", base_register)?;
-
-                let mut start_idx = 0;
-                let mut printed_register = false;
-
-                for (register_idx, register_used) in register_bit_list.into_iter().enumerate() {
-                    if !register_used {
-                        let idx_delta = register_idx - start_idx;
-                        if idx_delta == 1 {
-                            if printed_register {
-                                f.write_str(", ")?;
-                            }
-                            write!(f, "r{}", start_idx)?;
-                            printed_register = true;
-                        } else if idx_delta > 1 {
-                            if printed_register {
-                                f.write_str(", ")?;
-                            }
-
-                            write!(f, "r{}-r{}", start_idx, register_idx - 1)?;
-                            printed_register = true;
-                        }
-
-                        start_idx = register_idx + 1;
-                    }
-                }
-
-                let idx_delta = register_bit_list.len() - start_idx;
-                if idx_delta == 1 {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
-                    write!(f, "r{}", start_idx)?;
-                } else if idx_delta > 1 {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
-
-                    write!(f, "r{}-r{}", start_idx, register_bit_list.len() - 1)?;
-                }
-
-                f.write_str("}")?;
-
-                Ok(())
-            }
-            ThumbInstructionType::StmiaWriteBack {
-                base_register,
-                register_bit_list,
-            } => {
-                write!(f, "stmia {}!, {{", base_register)?;
-
-                let mut start_idx = 0;
-                let mut printed_register = false;
-
-                for (register_idx, register_used) in register_bit_list.into_iter().enumerate() {
-                    if !register_used {
-                        let idx_delta = register_idx - start_idx;
-                        if idx_delta == 1 {
-                            if printed_register {
-                                f.write_str(", ")?;
-                            }
-                            write!(f, "r{}", start_idx)?;
-                            printed_register = true;
-                        } else if idx_delta > 1 {
-                            if printed_register {
-                                f.write_str(", ")?;
-                            }
-
-                            write!(f, "r{}-r{}", start_idx, register_idx - 1)?;
-                            printed_register = true;
-                        }
-
-                        start_idx = register_idx + 1;
-                    }
-                }
-
-                let idx_delta = register_bit_list.len() - start_idx;
-                if idx_delta == 1 {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
-                    write!(f, "r{}", start_idx)?;
-                } else if idx_delta > 1 {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
-
-                    write!(f, "r{}-r{}", start_idx, register_bit_list.len() - 1)?;
-                }
-
-                f.write_str("}")?;
-
-                Ok(())
-            }
-            _ => todo!("{:#?}", self),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1120,19 +407,8 @@ pub enum ShiftType {
     Ror,
 }
 
-impl Display for ShiftType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ShiftType::Lsl => f.write_str("lsl"),
-            ShiftType::Lsr => f.write_str("lsr"),
-            ShiftType::Asr => f.write_str("asr"),
-            ShiftType::Ror => f.write_str("ror"),
-        }
-    }
-}
-
 impl ShiftType {
-    fn calculate(self, value: u32, shift: u32) -> (bool, u32) {
+    fn calculate(self, value: u32, shift: u32) -> (Option<bool>, u32) {
         assert!(shift < 32);
 
         let result = match self {
@@ -1143,14 +419,14 @@ impl ShiftType {
         };
 
         let carry = if shift == 0 {
-            false
+            None
         } else {
-            match self {
+            Some(match self {
                 ShiftType::Lsl => value.get_bit(32 - (shift as usize)),
                 ShiftType::Lsr => value.get_bit((shift as usize) - 1),
                 ShiftType::Asr => value.get_bit((shift as usize) - 1),
                 ShiftType::Ror => value.get_bit((shift as usize) - 1),
-            }
+            })
         };
 
         (carry, result)
@@ -1193,15 +469,6 @@ pub enum PsrTransferPsr {
     Spsr,
 }
 
-impl Display for PsrTransferPsr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PsrTransferPsr::Cpsr => f.write_str("cpsr"),
-            PsrTransferPsr::Spsr => f.write_str("spsr"),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct SingleDataTransferOffsetInfo {
     value: SingleDataTransferOffsetValue,
@@ -1223,38 +490,6 @@ pub enum SingleDataTransferOffsetValue {
     },
 }
 
-impl Display for SingleDataTransferOffsetInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.value {
-            SingleDataTransferOffsetValue::Immediate { offset } => {
-                f.write_str("#")?;
-                if self.sign {
-                    f.write_str("-")?;
-                }
-                write!(f, "{}", offset)?;
-            }
-            SingleDataTransferOffsetValue::Register { offset_register } => {
-                if self.sign {
-                    f.write_str("-")?;
-                }
-                write!(f, "{}", offset_register)?;
-            }
-            SingleDataTransferOffsetValue::RegisterImmediate {
-                offset_register,
-                shift_amount,
-                shift_type,
-            } => {
-                if self.sign {
-                    f.write_str("-")?;
-                }
-                write!(f, "{}, {} #{}", offset_register, shift_type, shift_amount)?;
-            }
-        };
-
-        Ok(())
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub enum AluSecondOperandInfo {
     Register {
@@ -1263,36 +498,15 @@ pub enum AluSecondOperandInfo {
         register: Register,
     },
     Immediate {
-        value: u32,
+        base: u32,
+        shift: u32,
     },
-}
-
-impl Display for AluSecondOperandInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AluSecondOperandInfo::Register {
-                register,
-                shift_info,
-                shift_type,
-            } => write!(f, "{}, {} {}", register, shift_type, shift_info),
-            AluSecondOperandInfo::Immediate { value } => write!(f, "#{}", value),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum AluSecondOperandRegisterShiftInfo {
     Immediate(u32),
     Register(Register),
-}
-
-impl Display for AluSecondOperandRegisterShiftInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AluSecondOperandRegisterShiftInfo::Immediate(value) => write!(f, "#{}", value),
-            AluSecondOperandRegisterShiftInfo::Register(register) => write!(f, "{}", register),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1315,29 +529,6 @@ pub enum AluOperation {
     Mvn,
 }
 
-impl Display for AluOperation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AluOperation::And => f.write_str("and"),
-            AluOperation::Eor => f.write_str("eor"),
-            AluOperation::Sub => f.write_str("sub"),
-            AluOperation::Rsb => f.write_str("rsb"),
-            AluOperation::Add => f.write_str("add"),
-            AluOperation::Adc => f.write_str("adc"),
-            AluOperation::Sbc => f.write_str("sbc"),
-            AluOperation::Rsc => f.write_str("rsc"),
-            AluOperation::Tst => f.write_str("tst"),
-            AluOperation::Teq => f.write_str("teq"),
-            AluOperation::Cmp => f.write_str("cmp"),
-            AluOperation::Cmn => f.write_str("cmn"),
-            AluOperation::Orr => f.write_str("orr"),
-            AluOperation::Mov => f.write_str("mov"),
-            AluOperation::Bic => f.write_str("bic"),
-            AluOperation::Mvn => f.write_str("mvn"),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub enum MultiplyOperation {
     Mul,
@@ -1347,26 +538,12 @@ pub enum MultiplyOperation {
     Umlal,
     Smull,
     Smlal,
-    Smlaxy,
-    Smlawy,
-    Smulwy,
-    Smlalxy,
-    Smulxy,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum MsrSourceInfo {
     Register(Register),
     Immediate { value: u32 },
-}
-
-impl Display for MsrSourceInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MsrSourceInfo::Register(register) => write!(f, "{}", register),
-            MsrSourceInfo::Immediate { value } => write!(f, "#{}", value),
-        }
-    }
 }
 
 impl Cpu {
@@ -1402,14 +579,7 @@ impl Cpu {
             (CpuMode::Abort, Register::R14) => self.r14_abt = value,
             (CpuMode::Irq, Register::R14) => self.r14_irq = value,
             (CpuMode::Undefined, Register::R14) => self.r14_und = value,
-            (_, Register::R15) => {
-                const NEW_STATE_BIT_INDEX: usize = 0;
-
-                let new_state_bit = value.get_bit(NEW_STATE_BIT_INDEX);
-                self.set_cpu_state_bit(new_state_bit);
-
-                self.r15 = value & (!1);
-            }
+            (_, Register::R15) => self.r15 = value,
             (_, Register::Cpsr) => self.cpsr = value,
             (mode @ (CpuMode::User | CpuMode::System), register @ Register::Spsr) => {
                 unreachable!("{:?}, {:?}", mode, register)
@@ -1523,74 +693,210 @@ impl Cpu {
 }
 
 impl Cpu {
-    pub fn decode(&mut self) -> Instruction {
-        // println!("decoding: {:?}", self.get_instruction_mode());
-        let pc = self.r15;
-        match self.get_instruction_mode() {
-            InstructionSet::Arm => {
-                let opcode = self.bus.read_word_address(self.r15);
-                println!("0b{:032b}", opcode);
-                let condition = opcode.get_condition();
+    pub fn fetch_decode_execute(&mut self, debug: bool) {
+        let pc_offset = if self.get_cpu_state_bit() {
+            |pc| pc + 2
+        } else {
+            |pc| pc + 4
+        };
 
-                let maybe_instruction_type = None
-                    .or_else(|| Self::try_decode_arm_branch(opcode))
-                    .or_else(|| Self::try_decode_arm_branch_exchange(opcode))
-                    .or_else(|| Self::try_decode_arm_data_process(opcode))
-                    .or_else(|| Self::try_decode_arm_multiply(opcode))
-                    .or_else(|| Self::try_decode_arm_psr_transfer(opcode))
-                    .or_else(|| Self::try_decode_arm_single_data_transfer(opcode))
-                    .or_else(|| Self::try_decode_arm_block_data_transfer(opcode));
+        if debug {
+            print!("{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} cpsr: {:08X} | ",
+                self.read_register(Register::R0, |_| unreachable!()),
+                self.read_register(Register::R1, |_| unreachable!()),
+                self.read_register(Register::R2, |_| unreachable!()),
+                self.read_register(Register::R3, |_| unreachable!()),
+                self.read_register(Register::R4, |_| unreachable!()),
+                self.read_register(Register::R5, |_| unreachable!()),
+                self.read_register(Register::R6, |_| unreachable!()),
+                self.read_register(Register::R7, |_| unreachable!()),
+                self.read_register(Register::R8, |_| unreachable!()),
+                self.read_register(Register::R9, |_| unreachable!()),
+                self.read_register(Register::R10, |_| unreachable!()),
+                self.read_register(Register::R11, |_| unreachable!()),
+                self.read_register(Register::R12, |_| unreachable!()),
+                self.read_register(Register::R13, |_| unreachable!()),
+                self.read_register(Register::R14, |_| unreachable!()),
+                self.read_register(Register::R15, pc_offset),
+                self.read_register(Register::Cpsr, |_| unreachable!())
+            );
+        }
+        self.bus.step();
 
-                let instruction_type = if let Some(instruction_type) = maybe_instruction_type {
-                    instruction_type
-                } else {
-                    todo!("unrecognized ARM opcode")
-                };
+        if !self.get_irq_disable() && self.bus.get_irq_pending() {
+            self.handle_exception(ExceptionType::InterruptRequest);
+        } else {
+            let pc = self.read_register(Register::R15, |pc| pc);
+            match self.get_instruction_mode() {
+                InstructionSet::Arm => {
+                    if pc % 4 != 0 {
+                        unreachable!("unaligned ARM pc");
+                    }
+                    let opcode = self.bus.read_word_address(pc);
+                    if debug {
+                        print!("{:08X}: ", opcode);
+                    }
 
-                self.r15 += 4;
-                Instruction::ArmInstruction(ArmInstruction {
-                    condition,
-                    instruction_type,
-                    address: pc,
-                })
+                    let instruction = Self::decode_arm(opcode, pc);
+                    if debug {
+                        println!("{}", instruction);
+                    }
+
+                    self.write_register(pc + 4, Register::R15);
+                    self.execute_arm(instruction);
+                }
+                InstructionSet::Thumb => {
+                    if pc % 2 != 0 {
+                        unreachable!("unaligned Thumb pc");
+                    }
+
+                    let opcode = self.bus.read_halfword_address(pc);
+                    if debug {
+                        print!("    {:04X}: ", opcode);
+                    }
+
+                    let instruction = Self::decode_thumb(opcode, pc);
+                    if debug {
+                        println!("{}", instruction);
+                    }
+                    self.write_register(pc + 2, Register::R15);
+                    self.execute_thumb(instruction);
+                }
             }
-            InstructionSet::Thumb => {
-                println!("address: 0x{:08x}", pc);
-                let opcode = self.bus.read_halfword_address(pc);
-                let second_opcode = self.bus.read_halfword_address(pc + 2);
-                println!("0b{:016b}", opcode);
+        }
 
-                let maybe_instruction_type = None
-                    .or_else(|| Self::try_decode_thumb_register_operation(opcode))
-                    .or_else(|| Self::try_decode_thumb_memory_load_store(opcode))
-                    .or_else(|| Self::try_decode_thumb_memory_addressing(opcode))
-                    .or_else(|| Self::try_decode_thumb_memory_multiple_load_store(opcode))
-                    .or_else(|| Self::try_decode_thumb_jump_call(opcode));
+        self.cycle_count += 1;
+    }
 
-                let maybe_long_instruction_type =
-                    Self::try_decode_thumb_long_branch_link(opcode, second_opcode);
+    fn handle_exception(&mut self, exception_type: ExceptionType) {
+        let new_mode = match exception_type {
+            ExceptionType::Reset => CpuMode::Supervisor,
+            ExceptionType::Undefined => CpuMode::Undefined,
+            ExceptionType::Swi => CpuMode::Supervisor,
+            ExceptionType::PrefetchAbort => CpuMode::Abort,
+            ExceptionType::DataAbort => CpuMode::Abort,
+            ExceptionType::AddressExceeds26Bit => CpuMode::Supervisor,
+            ExceptionType::InterruptRequest => CpuMode::Irq,
+            ExceptionType::FastInterruptRequest => CpuMode::Fiq,
+        };
 
-                let instruction_type = if let Some(instruction_type) = maybe_instruction_type {
-                    self.r15 += 2;
-                    instruction_type
-                } else if let Some(long_instruction_type) = maybe_long_instruction_type {
-                    self.r15 += 4;
-                    long_instruction_type
-                } else {
-                    todo!("unrecognized Thumb opcode")
-                };
+        let old_pc = self.read_register(Register::R15, |pc| pc);
 
-                Instruction::ThumbInstruction(ThumbInstruction {
-                    instruction_type,
-                    address: pc,
-                })
-            }
+        // save old pc in new mode lr
+        match new_mode {
+            CpuMode::Abort => self.r14_abt = old_pc,
+            CpuMode::Fiq => self.r14_fiq = old_pc,
+            CpuMode::Irq => self.r14_irq = old_pc,
+            CpuMode::Supervisor => self.r14_svc = old_pc,
+            CpuMode::Undefined => self.r14_und = old_pc,
+            _ => unreachable!(),
+        };
+
+        let old_flags = self.read_register(Register::Cpsr, |_| unreachable!());
+
+        // save old cpsr in new mode spsr
+        match new_mode {
+            CpuMode::Abort => self.spsr_abt = old_flags,
+            CpuMode::Fiq => self.spsr_fiq = old_flags,
+            CpuMode::Irq => self.spsr_irq = old_flags,
+            CpuMode::Supervisor => self.spsr_svc = old_flags,
+            CpuMode::Undefined => self.spsr_und = old_flags,
+            _ => unreachable!(),
+        };
+
+        self.set_cpu_state_bit(false);
+        self.set_cpu_mode(new_mode);
+        self.set_irq_disable(true);
+
+        // fiq only disabled by reset and fiq
+        if matches!(
+            exception_type,
+            ExceptionType::Reset | ExceptionType::FastInterruptRequest
+        ) {
+            self.set_fiq_disable(true);
+        }
+
+        let new_pc = Self::get_exception_vector_address(exception_type);
+        self.write_register(new_pc, Register::R15);
+    }
+
+    fn get_exception_vector_address(exception_type: ExceptionType) -> u32 {
+        const RESET_EXCEPTION_VECTOR: u32 = 0x00000000;
+        const UNDEFINED_INSTRUCTION_VECTOR: u32 = 0x00000004;
+        const SOFTWARE_INTERRUPT_VECTOR: u32 = 0x00000008;
+        const PREFETCH_ABORT_VECTOR: u32 = 0x0000000C;
+        const DATA_ABORT_VECTOR: u32 = 0x00000010;
+        const ADDRESS_EXCEEDS_26_BIT_VECTOR: u32 = 0x00000014;
+        const INTERRUPT_REQUEST_VECTOR: u32 = 0x00000018;
+        const FAST_INTERRUPT_REQUEST_VECTOR: u32 = 0x0000001C;
+
+        match exception_type {
+            ExceptionType::Reset => RESET_EXCEPTION_VECTOR,
+            ExceptionType::Undefined => UNDEFINED_INSTRUCTION_VECTOR,
+            ExceptionType::Swi => SOFTWARE_INTERRUPT_VECTOR,
+            ExceptionType::PrefetchAbort => PREFETCH_ABORT_VECTOR,
+            ExceptionType::DataAbort => DATA_ABORT_VECTOR,
+            ExceptionType::AddressExceeds26Bit => ADDRESS_EXCEEDS_26_BIT_VECTOR,
+            ExceptionType::InterruptRequest => INTERRUPT_REQUEST_VECTOR,
+            ExceptionType::FastInterruptRequest => FAST_INTERRUPT_REQUEST_VECTOR,
+        }
+    }
+}
+
+impl Cpu {
+    pub fn decode_arm(opcode: u32, address: u32) -> ArmInstruction {
+        let condition = opcode.get_condition();
+
+        let maybe_instruction_type = None
+            .or_else(|| Self::try_decode_arm_branch(opcode))
+            .or_else(|| Self::try_decode_arm_data_process(opcode))
+            .or_else(|| Self::try_decode_arm_multiply(opcode))
+            .or_else(|| Self::try_decode_arm_psr_transfer(opcode))
+            .or_else(|| Self::try_decode_arm_single_data_transfer(opcode))
+            .or_else(|| Self::try_decode_arm_block_data_transfer(opcode));
+
+        let instruction_type = if let Some(instruction_type) = maybe_instruction_type {
+            instruction_type
+        } else {
+            todo!("unrecognized ARM opcode 0x{:08X}", opcode)
+        };
+
+        ArmInstruction {
+            condition,
+            instruction_type,
+            address,
+        }
+    }
+
+    pub fn decode_thumb(opcode: u16, address: u32) -> ThumbInstruction {
+        let maybe_instruction_type = None
+            .or_else(|| Self::try_decode_thumb_register_operation(opcode))
+            .or_else(|| Self::try_decode_thumb_memory_load_store(opcode))
+            .or_else(|| Self::try_decode_thumb_memory_addressing(opcode))
+            .or_else(|| Self::try_decode_thumb_memory_multiple_load_store(opcode))
+            .or_else(|| Self::try_decode_thumb_jump_call(opcode));
+
+        let instruction_type = if let Some(instruction_type) = maybe_instruction_type {
+            instruction_type
+        } else {
+            todo!("unrecognized Thumb opcode")
+        };
+
+        ThumbInstruction {
+            instruction_type,
+            address,
         }
     }
 }
 
 impl Cpu {
     fn try_decode_arm_branch(opcode: u32) -> Option<ArmInstructionType> {
+        None.or_else(|| Self::try_decode_arm_branch_basic(opcode))
+            .or_else(|| Self::try_decode_arm_branch_exchange(opcode))
+            .or_else(|| Self::try_decode_arm_swi(opcode))
+    }
+
+    fn try_decode_arm_branch_basic(opcode: u32) -> Option<ArmInstructionType> {
         const BRANCH_MASK: u32 = 0b00001110_00000000_00000000_00000000;
         const BRANCH_MASK_RESULT: u32 = 0b00001010_00000000_00000000_00000000;
 
@@ -1631,6 +937,19 @@ impl Cpu {
                     _ => unreachable!(),
                 }
             })
+    }
+
+    fn try_decode_arm_swi(opcode: u32) -> Option<ArmInstructionType> {
+        const MUST_BE_1111_BIT_RANGE: RangeInclusive<usize> = 24..=27;
+        const COMMENT_FIELD_BIT_RANGE: RangeInclusive<usize> = 0..=23;
+
+        if opcode.get_bit_range(MUST_BE_1111_BIT_RANGE) != 0b1111 {
+            return None;
+        }
+
+        let comment = opcode.get_bit_range(COMMENT_FIELD_BIT_RANGE);
+
+        Some(ArmInstructionType::Swi { comment })
     }
 
     fn try_decode_arm_data_process(opcode: u32) -> Option<ArmInstructionType> {
@@ -1704,11 +1023,12 @@ impl Cpu {
                 const SECOND_OPERAND_IMMEDIATE_BIT_RANGE: RangeInclusive<usize> = 0..=7;
 
                 let shift = opcode.get_bit_range(LITERAL_SHIFT_BIT_RANGE) * 2;
-                let unshifted_value = opcode.get_bit_range(SECOND_OPERAND_IMMEDIATE_BIT_RANGE);
+                let base_value = opcode.get_bit_range(SECOND_OPERAND_IMMEDIATE_BIT_RANGE);
 
-                let value = unshifted_value.rotate_right(shift);
-
-                AluSecondOperandInfo::Immediate { value }
+                AluSecondOperandInfo::Immediate {
+                    base: base_value,
+                    shift,
+                }
             } else {
                 // Register as 2nd operand
                 const SHIFT_BY_REGISTER_BIT_INDEX: usize = 4;
@@ -1760,8 +1080,14 @@ impl Cpu {
     }
 
     fn try_decode_arm_multiply(opcode: u32) -> Option<ArmInstructionType> {
-        const MULTIPLY_MASK: u32 = 0b00011100_00000000_00000000_00000000;
-        const MULTIPLY_MASK_RESULT: u32 = 0b00000000_00000000_00000000_00000000;
+        const MUST_BE_000_BIT_RANGE: RangeInclusive<usize> = 25..=27;
+        const MUL_OPCODE_BIT_RANGE: RangeInclusive<usize> = 21..=24;
+        const SET_CONDITION_CODES_BIT_INDEX: usize = 20;
+        const DESTINATION_REGISTER_OFFSET: usize = 16;
+        const ACCUMULATE_REGISTER_OFFSET: usize = 12;
+        const OPERAND_REGISTER_RS_OFFSET: usize = 8;
+        const MUST_BE_1001_BIT_RANGE: RangeInclusive<usize> = 4..=7;
+        const OPERAND_REGISTER_RM_OFFSET: usize = 0;
 
         fn lookup_mul_opcode(opcode_value: u32) -> MultiplyOperation {
             match opcode_value {
@@ -1772,41 +1098,108 @@ impl Cpu {
                 0b0101 => MultiplyOperation::Umlal,
                 0b0110 => MultiplyOperation::Smull,
                 0b0111 => MultiplyOperation::Smlal,
-                0b1000 => MultiplyOperation::Smlaxy,
-                0b1001 => MultiplyOperation::Smulwy,
-                0b1010 => MultiplyOperation::Smlalxy,
-                0b1011 => MultiplyOperation::Smulxy,
                 _ => unreachable!(),
             }
         }
 
-        return None;
-        if opcode.match_mask(MULTIPLY_MASK, MULTIPLY_MASK_RESULT) {
-            todo!();
-
-            const MUST_BE_000_BIT_RANGE: RangeInclusive<usize> = 25..=27;
-            const MUL_OPCODE_BIT_RANGE: RangeInclusive<usize> = 21..=24;
-            const SET_CONDITION_CODES_BIT_INDEX: usize = 20;
-            const DESTINATION_REGISTER_OFFSET: usize = 16;
-            const ACCUMULATE_REGISTER_OFFSET: usize = 12;
-
-            let mul_operation_value = opcode.get_bit_range(MUL_OPCODE_BIT_RANGE);
-            let set_condition_codes_bit = opcode.get_bit(SET_CONDITION_CODES_BIT_INDEX);
-            let destination_register = opcode.get_register_at_offset(DESTINATION_REGISTER_OFFSET);
-            let accumulate_register = opcode.get_register_at_offset(ACCUMULATE_REGISTER_OFFSET);
-
-            let mul_operation = lookup_mul_opcode(opcode.get_bit_range(MUL_OPCODE_BIT_RANGE));
-        } else {
-            None
+        if opcode.get_bit_range(MUST_BE_000_BIT_RANGE) != 0b000 {
+            return None;
         }
+
+        if opcode.get_bit_range(MUST_BE_1001_BIT_RANGE) != 0b1001 {
+            return None;
+        }
+
+        let mul_opcode_value = opcode.get_bit_range(MUL_OPCODE_BIT_RANGE);
+        let set_condition_codes_bit = opcode.get_bit(SET_CONDITION_CODES_BIT_INDEX);
+        let destination_register = opcode.get_register_at_offset(DESTINATION_REGISTER_OFFSET);
+        let accumulate_register = opcode.get_register_at_offset(ACCUMULATE_REGISTER_OFFSET);
+        let operand_rs = opcode.get_register_at_offset(OPERAND_REGISTER_RS_OFFSET);
+        let operand_rm = opcode.get_register_at_offset(OPERAND_REGISTER_RM_OFFSET);
+
+        let operation_type = lookup_mul_opcode(mul_opcode_value);
+
+        Some(ArmInstructionType::Mul {
+            operation: operation_type,
+            set_conditions: set_condition_codes_bit,
+            accumulate_register,
+            destination_register,
+            operand_register_rm: operand_rm,
+            operand_register_rs: operand_rs,
+        })
     }
 
     fn try_decode_arm_psr_transfer(opcode: u32) -> Option<ArmInstructionType> {
+        None.or_else(|| Self::try_decode_arm_mrs(opcode))
+            .or_else(|| Self::try_decode_arm_msr(opcode))
+    }
+
+    fn try_decode_arm_mrs(opcode: u32) -> Option<ArmInstructionType> {
+        const MUST_BE_00_BIT_RANGE: RangeInclusive<usize> = 26..=27;
+        const MUST_BE_0_BIT_INDEX_1: usize = 25;
+        const MUST_BE_10_BIT_RANGE: RangeInclusive<usize> = 23..=24;
+        const SOURCE_DEST_PSR_BIT_INDEX: usize = 22;
+        const OPCODE_VALUE_BIT_INDEX: usize = 21;
+        const MUST_BE_0_BIT_INDEX_2: usize = 20;
+        const MUST_BE_1111_BIT_RANGE: RangeInclusive<usize> = 16..=19;
+        const DEST_REGISTER_OFFSET: usize = 12;
+        const MUST_BE_0000_0000_0000_BIT_RANGE: RangeInclusive<usize> = 0..=11;
+
+        if opcode.get_bit_range(MUST_BE_00_BIT_RANGE) != 0b00 {
+            return None;
+        }
+
+        if opcode.get_bit(MUST_BE_0_BIT_INDEX_1) {
+            return None;
+        }
+
+        if opcode.get_bit_range(MUST_BE_10_BIT_RANGE) != 0b10 {
+            return None;
+        }
+
+        if opcode.get_bit(MUST_BE_0_BIT_INDEX_2) {
+            return None;
+        }
+
+        if opcode.get_bit_range(MUST_BE_1111_BIT_RANGE) != 0b1111 {
+            return None;
+        }
+
+        if opcode.get_bit_range(MUST_BE_0000_0000_0000_BIT_RANGE) != 0b0000_0000_0000 {
+            return None;
+        }
+
+        // Opcode
+        //  0: MRS{cond} Rd,Psr          ;Rd = Psr
+        //  1: MSR{cond} Psr{_field},Op  ;Psr[field] = Op
+        if opcode.get_bit(OPCODE_VALUE_BIT_INDEX) {
+            return None;
+        }
+
+        let source_dest_psr_bit = opcode.get_bit(SOURCE_DEST_PSR_BIT_INDEX);
+
+        let source_dest_psr = if source_dest_psr_bit {
+            // SPSR
+            PsrTransferPsr::Spsr
+        } else {
+            // CPSR
+            PsrTransferPsr::Cpsr
+        };
+
+        let destination_register = opcode.get_register_at_offset(DEST_REGISTER_OFFSET);
+
+        Some(ArmInstructionType::Mrs {
+            source_psr: source_dest_psr,
+            destination_register,
+        })
+    }
+
+    fn try_decode_arm_msr(opcode: u32) -> Option<ArmInstructionType> {
         const MUST_BE_00_BIT_RANGE: RangeInclusive<usize> = 26..=27;
         const IMMEDIATE_OFFSET_BIT_INDEX: usize = 25;
         const MUST_BE_10_BIT_RANGE: RangeInclusive<usize> = 23..=24;
         const SOURCE_DEST_PSR_BIT_INDEX: usize = 22;
-        const PSR_OPCODE_BIT_INDEX: usize = 21;
+        const OPCODE_VALUE_BIT_INDEX: usize = 21;
         const MUST_BE_0_BIT_RANGE: RangeInclusive<usize> = 20..=20;
 
         if opcode.get_bit_range(MUST_BE_00_BIT_RANGE) != 0b00 {
@@ -1821,9 +1214,15 @@ impl Cpu {
             return None;
         }
 
+        // Opcode
+        //  0: MRS{cond} Rd,Psr          ;Rd = Psr
+        //  1: MSR{cond} Psr{_field},Op  ;Psr[field] = Op
+        if !opcode.get_bit(OPCODE_VALUE_BIT_INDEX) {
+            return None;
+        }
+
         let immediate_operand_flag_bit = opcode.get_bit(IMMEDIATE_OFFSET_BIT_INDEX);
         let source_dest_psr_bit = opcode.get_bit(SOURCE_DEST_PSR_BIT_INDEX);
-        let opcode_bit = opcode.get_bit(PSR_OPCODE_BIT_INDEX);
 
         let source_dest_psr = if source_dest_psr_bit {
             // SPSR
@@ -1833,71 +1232,50 @@ impl Cpu {
             PsrTransferPsr::Cpsr
         };
 
-        let transfer_type = if opcode_bit {
-            // MSR
-            PsrTransferType::Msr
+        const WRITE_FLAGS_FIELD_BIT_INDEX: usize = 19;
+        const WRITE_STATUS_FIELD_BIT_INDEX: usize = 18;
+        const WRITE_EXTENSION_FIELD_BIT_INDEX: usize = 17;
+        const WRITE_CONTROL_FIELD_BIT_INDEX: usize = 16;
+
+        let write_flags_field = opcode.get_bit(WRITE_FLAGS_FIELD_BIT_INDEX);
+        let write_status_field = opcode.get_bit(WRITE_STATUS_FIELD_BIT_INDEX);
+        let write_extension_field = opcode.get_bit(WRITE_EXTENSION_FIELD_BIT_INDEX);
+        let write_control_field = opcode.get_bit(WRITE_CONTROL_FIELD_BIT_INDEX);
+
+        let source_info = if immediate_operand_flag_bit {
+            // MSR Psr,Imm
+
+            const APPLIED_SHIFT_BIT_RANGE: RangeInclusive<usize> = 8..=11;
+            const IMMEDIATE_BIT_RANGE: RangeInclusive<usize> = 0..=7;
+
+            let shift = opcode.get_bit_range(APPLIED_SHIFT_BIT_RANGE) * 2;
+            let immediate = opcode.get_bit_range(IMMEDIATE_BIT_RANGE);
+
+            let value = immediate.rotate_right(shift);
+            MsrSourceInfo::Immediate { value }
         } else {
-            // MRS
-            PsrTransferType::Mrs
+            // MSR Psr,Rm
+
+            const SHOULD_BE_00000000_BIT_RANGE: RangeInclusive<usize> = 4..=11;
+            const SOURCE_REGISTER_OFFSET: usize = 0;
+
+            if opcode.get_bit_range(SHOULD_BE_00000000_BIT_RANGE) != 0b00000000 {
+                return None;
+            }
+
+            let source_register = opcode.get_register_at_offset(SOURCE_REGISTER_OFFSET);
+
+            MsrSourceInfo::Register(source_register)
         };
 
-        match transfer_type {
-            PsrTransferType::Mrs => {
-                const DEST_REGISTER_OFFSET: usize = 12;
-                let destination_register = opcode.get_register_at_offset(DEST_REGISTER_OFFSET);
-
-                Some(ArmInstructionType::Mrs {
-                    source_psr: source_dest_psr,
-                    destination_register,
-                })
-            }
-            PsrTransferType::Msr => {
-                const WRITE_FLAGS_FIELD_BIT_INDEX: usize = 19;
-                const WRITE_STATUS_FIELD_BIT_INDEX: usize = 18;
-                const WRITE_EXTENSION_FIELD_BIT_INDEX: usize = 17;
-                const WRITE_CONTROL_FIELD_BIT_INDEX: usize = 16;
-
-                let write_flags_field = opcode.get_bit(WRITE_FLAGS_FIELD_BIT_INDEX);
-                let write_status_field = opcode.get_bit(WRITE_STATUS_FIELD_BIT_INDEX);
-                let write_extension_field = opcode.get_bit(WRITE_EXTENSION_FIELD_BIT_INDEX);
-                let write_control_field = opcode.get_bit(WRITE_CONTROL_FIELD_BIT_INDEX);
-
-                let source_info = if immediate_operand_flag_bit {
-                    // MSR Psr,Imm
-
-                    const APPLIED_SHIFT_BIT_RANGE: RangeInclusive<usize> = 8..=11;
-                    const IMMEDIATE_BIT_RANGE: RangeInclusive<usize> = 0..=7;
-
-                    let shift = opcode.get_bit_range(APPLIED_SHIFT_BIT_RANGE) * 2;
-                    let immediate = opcode.get_bit_range(IMMEDIATE_BIT_RANGE);
-
-                    let value = immediate.rotate_right(shift);
-                    MsrSourceInfo::Immediate { value }
-                } else {
-                    // MSR Psr,Rm
-
-                    const SHOULD_BE_00000000_BIT_RANGE: RangeInclusive<usize> = 4..=11;
-                    const SOURCE_REGISTER_OFFSET: usize = 0;
-
-                    if opcode.get_bit_range(SHOULD_BE_00000000_BIT_RANGE) != 0b00000000 {
-                        return None;
-                    }
-
-                    let source_register = opcode.get_register_at_offset(SOURCE_REGISTER_OFFSET);
-
-                    MsrSourceInfo::Register(source_register)
-                };
-
-                Some(ArmInstructionType::Msr {
-                    destination_psr: source_dest_psr,
-                    write_flags_field,
-                    write_status_field,
-                    write_extension_field,
-                    write_control_field,
-                    source_info,
-                })
-            }
-        }
+        Some(ArmInstructionType::Msr {
+            destination_psr: source_dest_psr,
+            write_flags_field,
+            write_status_field,
+            write_extension_field,
+            write_control_field,
+            source_info,
+        })
     }
 
     fn try_decode_arm_single_data_transfer(opcode: u32) -> Option<ArmInstructionType> {
@@ -1995,6 +1373,7 @@ impl Cpu {
                     destination_register: source_destination_register,
                     offset_info,
                     access_size,
+                    sign_extend: false,
                 },
                 SingleDataTransferType::Str => ArmInstructionType::Str {
                     index_type,
@@ -2095,9 +1474,24 @@ impl Cpu {
                     destination_register: source_dest_register,
                     index_type,
                     offset_info,
+                    sign_extend: false,
                 },
-                2 => todo!("support sign extension"),
-                3 => todo!("support sign extension"),
+                2 => ArmInstructionType::Ldr {
+                    access_size: SingleDataMemoryAccessSize::Byte,
+                    base_register,
+                    destination_register: source_dest_register,
+                    index_type,
+                    offset_info,
+                    sign_extend: true,
+                },
+                3 => ArmInstructionType::Ldr {
+                    access_size: SingleDataMemoryAccessSize::HalfWord,
+                    base_register,
+                    destination_register: source_dest_register,
+                    index_type,
+                    offset_info,
+                    sign_extend: true,
+                },
                 _ => unreachable!(),
             }
         } else {
@@ -2121,6 +1515,7 @@ impl Cpu {
                     index_type,
                     offset_info,
                     destination_register: source_dest_register,
+                    sign_extend: false,
                 },
                 3 => ArmInstructionType::Str {
                     access_size: SingleDataMemoryAccessSize::DoubleWord,
@@ -2426,23 +1821,20 @@ impl Cpu {
         let source_register = Register::from_index(u32::from(source_register_index));
 
         Some(match opcode_value {
-            0 => ThumbInstructionType::Register {
+            0 => ThumbInstructionType::HighRegister {
                 destination_register: dest_register,
-                source: ThumbRegisterOrImmediate::Register(source_register),
-                operation: ThumbRegisterOperation::Add,
-                second_operand: None,
+                source: source_register,
+                operation: ThumbHighRegisterOperation::Add,
             },
-            1 => ThumbInstructionType::Register {
+            1 => ThumbInstructionType::HighRegister {
                 destination_register: dest_register,
-                source: ThumbRegisterOrImmediate::Register(source_register),
-                operation: ThumbRegisterOperation::Cmp,
-                second_operand: None,
+                source: source_register,
+                operation: ThumbHighRegisterOperation::Cmp,
             },
-            2 => ThumbInstructionType::Register {
+            2 => ThumbInstructionType::HighRegister {
                 destination_register: dest_register,
-                source: ThumbRegisterOrImmediate::Register(source_register),
-                operation: ThumbRegisterOperation::Mov,
-                second_operand: None,
+                source: source_register,
+                operation: ThumbHighRegisterOperation::Mov,
             },
             3 => {
                 if dest_register_msb_bl_flag {
@@ -2867,6 +2259,8 @@ impl Cpu {
     fn try_decode_thumb_jump_call(opcode: u16) -> Option<ThumbInstructionType> {
         None.or_else(|| Self::try_decode_thumb_conditional_branch(opcode))
             .or_else(|| Self::try_decode_thumb_unconditional_branch(opcode))
+            .or_else(|| Self::try_decode_thumb_long_branch_link_1(opcode))
+            .or_else(|| Self::try_decode_thumb_long_branch_link_2(opcode))
     }
 
     fn try_decode_thumb_conditional_branch(opcode: u16) -> Option<ThumbInstructionType> {
@@ -2896,7 +2290,7 @@ impl Cpu {
             0xC => InstructionCondition::SignedGreaterThan,
             0xD => InstructionCondition::SignedLessOrEqual,
             0xE => unreachable!("Undefined"),
-            0xF => todo!("SWI"),
+            0xF => todo!("Swi"),
             _ => unreachable!(),
         };
 
@@ -2931,209 +2325,230 @@ impl Cpu {
     // First Instruction - LR = PC+4+(nn SHL 12)
     // 15-11  Must be 11110b for BL/BLX type of instructions
     // 10-0   nn - Upper 11 bits of Target Address
-    // Second Instruction - PC = LR + (nn SHL 1), and LR = PC+2 OR 1 (and BLX: T=0)
-    // 15-11  Opcode
-    //      11111b: BL label   ;branch long with link
-    //      11101b: BLX label  ;branch long with link switch to ARM mode (ARM9) (UNUSED)
-    // 10-0   nn - Lower 11 bits of Target Address (BLX: Bit0 Must be zero)
-    //
-    // Offset is calculated as sign-extended (first_nn << 12) | (second_nn << 1).
-    fn try_decode_thumb_long_branch_link(
-        first_opcode: u16,
-        second_opcode: u16,
-    ) -> Option<ThumbInstructionType> {
-        const OPCODE_1_MUST_BE_11110_BIT_RANGE: RangeInclusive<usize> = 11..=15;
-        const OPCODE_1_TARGET_ADDRESS_UPPER_11_BITS_RANGE: RangeInclusive<usize> = 0..=10;
+    fn try_decode_thumb_long_branch_link_1(opcode: u16) -> Option<ThumbInstructionType> {
+        const OPCODE_MUST_BE_11110_BIT_RANGE: RangeInclusive<usize> = 11..=15;
+        const OPCODE_TARGET_ADDRESS_UPPER_11_BITS_RANGE: RangeInclusive<usize> = 0..=10;
 
-        const OPCODE_2_MUST_BE_11111_BIT_RANGE: RangeInclusive<usize> = 11..=15;
-        const OPCODE_2_TARGET_ADDRESS_LOWER_11_BITS_RANGE: RangeInclusive<usize> = 0..=10;
-
-        if first_opcode.get_bit_range(OPCODE_1_MUST_BE_11110_BIT_RANGE) != 0b11110 {
+        if opcode.get_bit_range(OPCODE_MUST_BE_11110_BIT_RANGE) != 0b11110 {
             return None;
         }
 
-        if second_opcode.get_bit_range(OPCODE_2_MUST_BE_11111_BIT_RANGE) != 0b11111 {
-            return None;
-        }
-
-        let target_offset_upper_11_bits =
-            first_opcode.get_bit_range(OPCODE_1_TARGET_ADDRESS_UPPER_11_BITS_RANGE);
-        let target_offset_lower_11_bits =
-            second_opcode.get_bit_range(OPCODE_2_TARGET_ADDRESS_LOWER_11_BITS_RANGE);
-
-        let offset_unsigned = (u32::from(target_offset_lower_11_bits) << 1)
-            | (u32::from(target_offset_upper_11_bits) << 12);
+        let offset_unsigned =
+            u32::from(opcode.get_bit_range(OPCODE_TARGET_ADDRESS_UPPER_11_BITS_RANGE)) << 12;
 
         // 23-bit sign extension, by left shifting until effective sign bit is in MSB, then ASR
         // an equal amount back over.
         let offset = ((offset_unsigned as i32) << 9) >> 9;
 
-        Some(ThumbInstructionType::Bl { offset })
+        Some(ThumbInstructionType::BlPartOne { offset })
+    }
+
+    // Second Instruction - PC = LR + (nn SHL 1), and LR = PC+2 OR 1 (and BLX: T=0)
+    // 15-11  Opcode
+    //      11111b: BL label   ;branch long with link
+    //      11101b: BLX label  ;branch long with link switch to ARM mode (ARM9) (UNUSED)
+    // 10-0   nn - Lower 11 bits of Target Address (BLX: Bit0 Must be zero)
+    fn try_decode_thumb_long_branch_link_2(opcode: u16) -> Option<ThumbInstructionType> {
+        const OPCODE_MUST_BE_11111_BIT_RANGE: RangeInclusive<usize> = 11..=15;
+        const OPCODE_TARGET_ADDRESS_LOWER_11_BITS_RANGE: RangeInclusive<usize> = 0..=10;
+
+        if opcode.get_bit_range(OPCODE_MUST_BE_11111_BIT_RANGE) != 0b11111 {
+            return None;
+        }
+
+        let offset = opcode.get_bit_range(OPCODE_TARGET_ADDRESS_LOWER_11_BITS_RANGE) << 1;
+
+        Some(ThumbInstructionType::BlPartTwo { offset })
     }
 }
 
 impl Cpu {
-    pub fn execute(&mut self, instruction: Instruction) {
-        match instruction {
-            Instruction::ArmInstruction(arm_instruction) => {
-                if self.evaluate_instruction_condition(arm_instruction.condition) {
-                    match arm_instruction.instruction_type {
-                        ArmInstructionType::Alu {
-                            operation,
-                            first_operand,
-                            second_operand,
-                            destination_operand,
-                            set_conditions,
-                        } => self.execute_arm_alu(
-                            operation,
-                            first_operand,
-                            second_operand,
-                            destination_operand,
-                            set_conditions,
-                        ),
-                        ArmInstructionType::B { offset } => self.execute_arm_b(offset),
-                        ArmInstructionType::Bl { offset } => self.execute_arm_bl(offset),
-                        ArmInstructionType::Bx { operand } => self.execute_arm_bx(operand),
-                        ArmInstructionType::Msr {
-                            destination_psr,
-                            source_info,
-                            write_control_field,
-                            write_extension_field,
-                            write_flags_field,
-                            write_status_field,
-                        } => self.execute_arm_msr(
-                            destination_psr,
-                            source_info,
-                            write_control_field,
-                            write_extension_field,
-                            write_flags_field,
-                            write_status_field,
-                        ),
-                        ArmInstructionType::Ldr {
-                            access_size,
-                            base_register,
-                            destination_register,
-                            index_type,
-                            offset_info,
-                        } => self.execute_arm_ldr(
-                            access_size,
-                            base_register,
-                            destination_register,
-                            index_type,
-                            offset_info,
-                        ),
-                        ArmInstructionType::Str {
-                            access_size,
-                            base_register,
-                            index_type,
-                            offset_info,
-                            source_register,
-                        } => self.execute_arm_str(
-                            access_size,
-                            base_register,
-                            index_type,
-                            offset_info,
-                            source_register,
-                        ),
-                        ArmInstructionType::Ldm {
-                            index_type,
-                            offset_modifier,
-                            write_back,
-                            base_register,
-                            register_bit_list,
-                        } => self.execute_arm_ldm(
-                            index_type,
-                            offset_modifier,
-                            write_back,
-                            base_register,
-                            register_bit_list,
-                        ),
-                        ArmInstructionType::Stm {
-                            index_type,
-                            offset_modifier,
-                            write_back,
-                            base_register,
-                            register_bit_list,
-                        } => self.execute_arm_stm(
-                            index_type,
-                            offset_modifier,
-                            write_back,
-                            base_register,
-                            register_bit_list,
-                        ),
-                        _ => todo!("{:#08x?}", arm_instruction),
-                    }
-                } else {
-                    eprintln!("evaluate false");
-                }
+    fn execute_arm(&mut self, instruction: ArmInstruction) {
+        if self.evaluate_instruction_condition(instruction.condition) {
+            match instruction.instruction_type {
+                ArmInstructionType::Alu {
+                    operation,
+                    first_operand,
+                    second_operand,
+                    destination_operand,
+                    set_conditions,
+                } => self.execute_arm_alu(
+                    operation,
+                    first_operand,
+                    second_operand,
+                    destination_operand,
+                    set_conditions,
+                ),
+                ArmInstructionType::B { offset } => self.execute_arm_b(offset),
+                ArmInstructionType::Bl { offset } => self.execute_arm_bl(offset),
+                ArmInstructionType::Bx { operand } => self.execute_arm_bx(operand),
+                ArmInstructionType::Msr {
+                    destination_psr,
+                    source_info,
+                    write_control_field,
+                    write_extension_field,
+                    write_flags_field,
+                    write_status_field,
+                } => self.execute_arm_msr(
+                    destination_psr,
+                    source_info,
+                    write_control_field,
+                    write_extension_field,
+                    write_flags_field,
+                    write_status_field,
+                ),
+                ArmInstructionType::Mrs {
+                    destination_register,
+                    source_psr,
+                } => self.execute_arm_mrs(destination_register, source_psr),
+                ArmInstructionType::Ldr {
+                    access_size,
+                    base_register,
+                    destination_register,
+                    index_type,
+                    offset_info,
+                    sign_extend,
+                } => self.execute_arm_ldr(
+                    access_size,
+                    base_register,
+                    destination_register,
+                    index_type,
+                    offset_info,
+                    sign_extend,
+                ),
+                ArmInstructionType::Str {
+                    access_size,
+                    base_register,
+                    index_type,
+                    offset_info,
+                    source_register,
+                } => self.execute_arm_str(
+                    access_size,
+                    base_register,
+                    index_type,
+                    offset_info,
+                    source_register,
+                ),
+                ArmInstructionType::Ldm {
+                    index_type,
+                    offset_modifier,
+                    write_back,
+                    base_register,
+                    register_bit_list,
+                } => self.execute_arm_ldm(
+                    index_type,
+                    offset_modifier,
+                    write_back,
+                    base_register,
+                    register_bit_list,
+                ),
+                ArmInstructionType::Stm {
+                    index_type,
+                    offset_modifier,
+                    write_back,
+                    base_register,
+                    register_bit_list,
+                } => self.execute_arm_stm(
+                    index_type,
+                    offset_modifier,
+                    write_back,
+                    base_register,
+                    register_bit_list,
+                ),
+                ArmInstructionType::Mul {
+                    operation,
+                    set_conditions,
+                    destination_register,
+                    accumulate_register,
+                    operand_register_rm,
+                    operand_register_rs,
+                } => self.execute_arm_mul(
+                    operation,
+                    set_conditions,
+                    destination_register,
+                    accumulate_register,
+                    operand_register_rm,
+                    operand_register_rs,
+                ),
+                ArmInstructionType::Swi { comment: _ } => self.handle_exception(ExceptionType::Swi),
+                _ => todo!("{:#08x?}", instruction),
             }
-            Instruction::ThumbInstruction(thumb_instruction) => {
-                match thumb_instruction.instruction_type {
-                    ThumbInstructionType::Register {
-                        destination_register,
-                        operation,
-                        second_operand,
-                        source,
-                    } => self.execute_thumb_register_operation(
-                        destination_register,
-                        operation,
-                        second_operand,
-                        source,
-                    ),
-                    ThumbInstructionType::Ldr {
-                        base_register,
-                        offset,
-                        destination_register,
-                        size,
-                        sign_extend,
-                    } => self.execute_thumb_ldr(
-                        base_register,
-                        offset,
-                        destination_register,
-                        size,
-                        sign_extend,
-                    ),
-                    ThumbInstructionType::Str {
-                        base_register,
-                        offset,
-                        source_register,
-                        size,
-                    } => self.execute_thumb_str(base_register, offset, source_register, size),
-                    ThumbInstructionType::B { condition, offset } => {
-                        self.execute_thumb_b(condition, offset)
-                    }
-                    ThumbInstructionType::Bl { offset } => self.execute_thumb_bl(offset),
-                    ThumbInstructionType::Bx { operand } => self.execute_thumb_bx(operand),
-                    ThumbInstructionType::Push {
-                        register_bit_list,
-                        push_lr,
-                    } => self.execute_thumb_push(register_bit_list, push_lr),
-                    ThumbInstructionType::Pop {
-                        register_bit_list,
-                        pop_pc,
-                    } => self.execute_thumb_pop(register_bit_list, pop_pc),
-                    ThumbInstructionType::StmiaWriteBack {
-                        base_register,
-                        register_bit_list,
-                    } => self.execute_thumb_stmia_write_back(base_register, register_bit_list),
-                    ThumbInstructionType::LdmiaWriteBack {
-                        base_register,
-                        register_bit_list,
-                    } => self.execute_thumb_ldmia_write_back(base_register, register_bit_list),
-                    ThumbInstructionType::AddSpecial {
-                        source_register,
-                        dest_register,
-                        sign_bit,
-                        unsigned_offset,
-                    } => self.execute_thumb_add_special(
-                        source_register,
-                        dest_register,
-                        sign_bit,
-                        unsigned_offset,
-                    ),
-                    _ => todo!("{:#016x?}", thumb_instruction),
-                }
+        }
+    }
+
+    fn execute_thumb(&mut self, instruction: ThumbInstruction) {
+        match instruction.instruction_type {
+            ThumbInstructionType::Register {
+                destination_register,
+                operation,
+                second_operand,
+                source,
+            } => self.execute_thumb_register_operation(
+                destination_register,
+                operation,
+                second_operand,
+                source,
+            ),
+            ThumbInstructionType::HighRegister {
+                destination_register,
+                operation,
+                source,
+            } => {
+                self.execute_thumb_high_register_operation(destination_register, operation, source)
             }
+            ThumbInstructionType::Ldr {
+                base_register,
+                offset,
+                destination_register,
+                size,
+                sign_extend,
+            } => self.execute_thumb_ldr(
+                base_register,
+                offset,
+                destination_register,
+                size,
+                sign_extend,
+            ),
+            ThumbInstructionType::Str {
+                base_register,
+                offset,
+                source_register,
+                size,
+            } => self.execute_thumb_str(base_register, offset, source_register, size),
+            ThumbInstructionType::B { condition, offset } => {
+                self.execute_thumb_b(condition, offset)
+            }
+            ThumbInstructionType::BlPartOne { offset } => self.execute_thumb_bl_part_1(offset),
+            ThumbInstructionType::BlPartTwo { offset } => self.execute_thumb_bl_part_2(offset),
+            ThumbInstructionType::Bx { operand } => self.execute_thumb_bx(operand),
+            ThumbInstructionType::Push {
+                register_bit_list,
+                push_lr,
+            } => self.execute_thumb_push(register_bit_list, push_lr),
+            ThumbInstructionType::Pop {
+                register_bit_list,
+                pop_pc,
+            } => self.execute_thumb_pop(register_bit_list, pop_pc),
+            ThumbInstructionType::StmiaWriteBack {
+                base_register,
+                register_bit_list,
+            } => self.execute_thumb_stmia_write_back(base_register, register_bit_list),
+            ThumbInstructionType::LdmiaWriteBack {
+                base_register,
+                register_bit_list,
+            } => self.execute_thumb_ldmia_write_back(base_register, register_bit_list),
+            ThumbInstructionType::AddSpecial {
+                source_register,
+                dest_register,
+                sign_bit,
+                unsigned_offset,
+            } => self.execute_thumb_add_special(
+                source_register,
+                dest_register,
+                sign_bit,
+                unsigned_offset,
+            ),
+            _ => todo!("{:#016x?}", instruction),
         }
     }
 }
@@ -3160,14 +2575,13 @@ impl Cpu {
 
         let first_operand_value = self.read_register(first_operand, pc_operand_calculation);
         let (shift_carry, second_operand_value) = self.evaluate_alu_second_operand(second_operand);
-        eprintln!("shift carry: {}", shift_carry);
 
         let (unsigned_result, carry_flag, signed_result, overflow_flag) = match operation {
             AluOperation::And => {
                 let unsigned_result = first_operand_value & second_operand_value;
                 let signed_result = unsigned_result as i32;
 
-                (unsigned_result, Some(shift_carry), signed_result, None)
+                (unsigned_result, shift_carry, signed_result, None)
             }
             AluOperation::Add => {
                 let (unsigned_result, carry) =
@@ -3201,48 +2615,89 @@ impl Cpu {
                 (unsigned_result, Some(carry), signed_result, Some(overflow))
             }
             AluOperation::Sub => {
-                let (unsigned_result, carry) =
+                let (unsigned_result, borrow) =
                     first_operand_value.overflowing_sub(second_operand_value);
                 let (signed_result, overflow) =
                     (first_operand_value as i32).overflowing_sub(second_operand_value as i32);
 
-                (unsigned_result, Some(carry), signed_result, Some(overflow))
+                (
+                    unsigned_result,
+                    Some(!borrow),
+                    signed_result,
+                    Some(overflow),
+                )
+            }
+            AluOperation::Sbc => {
+                let (unsigned_result, borrow) = if self.get_carry_flag() {
+                    let (result_1, borrow_1) =
+                        first_operand_value.overflowing_sub(second_operand_value);
+                    let (unsigned_result, borrow_2) = result_1.overflowing_sub(1);
+                    (unsigned_result, borrow_1 | borrow_2)
+                } else {
+                    first_operand_value.overflowing_sub(second_operand_value)
+                };
+
+                let (signed_result, overflow) = if self.get_carry_flag() {
+                    let (result_1, overflow_1) =
+                        (first_operand_value as i32).overflowing_sub(second_operand_value as i32);
+                    let (signed_result, overflow_2) = result_1.overflowing_sub(1);
+                    (signed_result, overflow_1 | overflow_2)
+                } else {
+                    (first_operand_value as i32).overflowing_sub(second_operand_value as i32)
+                };
+
+                (
+                    unsigned_result,
+                    Some(!borrow),
+                    signed_result,
+                    Some(overflow),
+                )
             }
             AluOperation::Rsb => {
-                let (unsigned_result, carry) =
+                let (unsigned_result, borrow) =
                     second_operand_value.overflowing_sub(first_operand_value);
                 let (signed_result, overflow) =
                     (second_operand_value as i32).overflowing_sub(first_operand_value as i32);
 
-                (unsigned_result, Some(carry), signed_result, Some(overflow))
+                (
+                    unsigned_result,
+                    Some(!borrow),
+                    signed_result,
+                    Some(overflow),
+                )
             }
             AluOperation::Teq => {
                 let unsigned_result = first_operand_value ^ second_operand_value;
                 let signed_result = unsigned_result as i32;
 
-                (unsigned_result, Some(shift_carry), signed_result, None)
+                (unsigned_result, shift_carry, signed_result, None)
             }
             AluOperation::Cmp => {
-                let (unsigned_result, carry) =
+                let (unsigned_result, borrow) =
                     first_operand_value.overflowing_sub(second_operand_value);
                 let (signed_result, overflow) =
                     (first_operand_value as i32).overflowing_sub(second_operand_value as i32);
 
-                (unsigned_result, Some(carry), signed_result, Some(overflow))
+                (
+                    unsigned_result,
+                    Some(!borrow),
+                    signed_result,
+                    Some(overflow),
+                )
             }
             AluOperation::Mov => (
                 second_operand_value,
-                Some(shift_carry),
+                shift_carry,
                 second_operand_value as i32,
                 None,
             ),
             AluOperation::Bic => {
                 let result = first_operand_value & (!second_operand_value);
-                (result, Some(shift_carry), result as i32, None)
+                (result, shift_carry, result as i32, None)
             }
             AluOperation::Tst => {
                 let result = first_operand_value & second_operand_value;
-                (result, Some(shift_carry), result as i32, None)
+                (result, shift_carry, result as i32, None)
             }
             AluOperation::Orr => {
                 let result = first_operand_value | second_operand_value;
@@ -3250,6 +2705,10 @@ impl Cpu {
             }
             AluOperation::Eor => {
                 let result = first_operand_value ^ second_operand_value;
+                (result, None, result as i32, None)
+            }
+            AluOperation::Mvn => {
+                let result = !second_operand_value;
                 (result, None, result as i32, None)
             }
             _ => todo!("ARM ALU: {:?}", operation),
@@ -3264,6 +2723,16 @@ impl Cpu {
 
             if let Some(overflow_flag) = overflow_flag {
                 self.set_overflow_flag(overflow_flag);
+            }
+
+            // If S=1, Rd=R15; should not be used in user mode:
+            //  CPSR = SPSR_<current mode>
+            //  PC = result
+            //  For example: MOVS PC,R14  ;return from SWI (PC=R14_svc, CPSR=SPSR_svc).
+
+            if matches!(destination_operand, Register::R15) {
+                let saved_cpsr = self.read_register(Register::Spsr, |_| unreachable!());
+                self.cpsr = saved_cpsr;
             }
         }
 
@@ -3289,23 +2758,34 @@ impl Cpu {
     // pc is already at $ + 4 because of decoding step.
     // documentation specifies that branch is to ($ + offset + 8).
     fn execute_arm_b(&mut self, offset: i32) {
-        self.r15 = self.r15.wrapping_add(offset as u32).wrapping_add(4);
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        let new_pc = old_pc.wrapping_add(offset as u32).wrapping_add(4);
+        self.write_register(new_pc, Register::R15);
     }
 
     // PC is already at $ + 4 because of decoding step.
     // documentation specifies that branch is to ($ + offset + 8).
     // save ($ + 4) in lr.
     fn execute_arm_bl(&mut self, offset: i32) {
-        self.r14 = self.r15;
-        self.r15 = self.r15.wrapping_add(offset as u32).wrapping_add(4);
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.write_register(old_pc, Register::R14);
+
+        let new_pc = old_pc.wrapping_add(offset as u32).wrapping_add(4);
+        self.write_register(new_pc, Register::R15);
     }
 
     // PC = operand, T = Rn.0
     fn execute_arm_bx(&mut self, operand: Register) {
-        let operand_value = self.read_register(operand, |_| todo!());
-        println!("new address: 0x{:08x}", operand_value);
+        const NEW_STATE_BIT_INDEX: usize = 0;
 
-        self.write_register(operand_value, Register::R15);
+        let operand_value = self.read_register(operand, |_| todo!());
+
+        let new_state_bit = operand_value.get_bit(NEW_STATE_BIT_INDEX);
+        self.set_cpu_state_bit(new_state_bit);
+
+        let new_pc = operand_value & (!1);
+
+        self.write_register(new_pc, Register::R15);
     }
 
     fn execute_arm_msr(
@@ -3353,6 +2833,15 @@ impl Cpu {
         let new_psr_value = (source_value & write_mask) | (original_psr_value & (!write_mask));
 
         self.write_register(new_psr_value, psr_register);
+    }
+
+    fn execute_arm_mrs(&mut self, destination_register: Register, source_psr: PsrTransferPsr) {
+        let source_psr_value = match source_psr {
+            PsrTransferPsr::Cpsr => self.read_register(Register::Cpsr, |_| unreachable!()),
+            PsrTransferPsr::Spsr => self.read_register(Register::Spsr, |_| unreachable!()),
+        };
+
+        self.write_register(source_psr_value, destination_register);
     }
 
     fn execute_arm_str(
@@ -3413,6 +2902,9 @@ impl Cpu {
                 self.bus.write_byte_address(value as u8, actual_address)
             }
             SingleDataMemoryAccessSize::Word => self.bus.write_word_address(value, actual_address),
+            SingleDataMemoryAccessSize::HalfWord => self
+                .bus
+                .write_halfword_address(value as u16, actual_address),
             _ => todo!("{:?}", access_size),
         };
     }
@@ -3424,6 +2916,7 @@ impl Cpu {
         destination_register: Register,
         index_type: SingleDataTransferIndexType,
         offset_info: SingleDataTransferOffsetInfo,
+        sign_extend: bool,
     ) {
         // "including R15=PC+8"
         let base_address = self.read_register(base_register, |pc| pc + 4);
@@ -3466,15 +2959,24 @@ impl Cpu {
             }
         };
 
-        let value = match access_size {
-            SingleDataMemoryAccessSize::Byte => {
+        let value = match (access_size, sign_extend) {
+            (SingleDataMemoryAccessSize::Byte, false) => {
                 self.bus.read_byte_address(data_read_address) as u32
             }
-            SingleDataMemoryAccessSize::HalfWord => {
+            (SingleDataMemoryAccessSize::Byte, true) => {
+                self.bus.read_byte_address(data_read_address) as i8 as i32 as u32
+            }
+            (SingleDataMemoryAccessSize::HalfWord, false) => {
                 self.bus.read_halfword_address(data_read_address) as u32
             }
-            SingleDataMemoryAccessSize::Word => self.bus.read_word_address(data_read_address),
-            _ => todo!("{:?}", access_size),
+            (SingleDataMemoryAccessSize::HalfWord, true) => {
+                self.bus.read_halfword_address(data_read_address) as i16 as i32 as u32
+            }
+            (SingleDataMemoryAccessSize::Word, false) => {
+                self.bus.read_word_address(data_read_address)
+            }
+            (SingleDataMemoryAccessSize::Word, true) => unreachable!(),
+            _ => todo!("{:?} sign extend: {}", access_size, sign_extend),
         };
 
         self.write_register(value, destination_register);
@@ -3547,7 +3049,6 @@ impl Cpu {
     ) {
         // "not including R15".
         let mut current_address = self.read_register(base_register, |_| unreachable!());
-        println!("storing to base address: 0x{:08x}", current_address);
 
         match offset_modifier {
             OffsetModifierType::AddToBase => {
@@ -3594,6 +3095,58 @@ impl Cpu {
             self.write_register(current_address, base_register);
         }
     }
+
+    fn execute_arm_mul(
+        &mut self,
+        operation: MultiplyOperation,
+        set_conditions: bool,
+        destination_register: Register,
+        accumulate_register: Register,
+        operand_register_rm: Register,
+        operand_register_rs: Register,
+    ) {
+        let accumulate_value = self.read_register(accumulate_register, |_| unreachable!());
+        let destination_register_value = self.read_register(destination_register, |_| todo!());
+        let rm_value = self.read_register(operand_register_rm, |_| unreachable!());
+        let rs_value = self.read_register(operand_register_rs, |_| unreachable!());
+
+        match operation {
+            MultiplyOperation::Mul => {
+                let result = rm_value.wrapping_mul(rs_value);
+                if set_conditions {
+                    self.set_zero_flag(result == 0);
+                    self.set_sign_flag((result as i32) < 0);
+                }
+
+                self.write_register(result, destination_register);
+            }
+            MultiplyOperation::Mla => {
+                let result = rm_value
+                    .wrapping_mul(rs_value)
+                    .wrapping_add(accumulate_value);
+                if set_conditions {
+                    self.set_zero_flag(result == 0);
+                    self.set_sign_flag((result as i32) < 0);
+                }
+
+                self.write_register(result, destination_register);
+            }
+            MultiplyOperation::Umull => {
+                let result = u64::from(rm_value).wrapping_mul(u64::from(rs_value));
+                if set_conditions {
+                    self.set_zero_flag(result == 0);
+                    self.set_sign_flag((result as i64) < 0);
+                }
+
+                let low_word = result.get_data(0);
+                let high_word = result.get_data(1);
+
+                self.write_register(low_word, accumulate_register);
+                self.write_register(high_word, destination_register);
+            }
+            _ => todo!("multiply impl for {:?}", operation),
+        }
+    }
 }
 
 impl Cpu {
@@ -3625,82 +3178,141 @@ impl Cpu {
                 let (signed_result, overflow) =
                     (first_operand_value as i32).overflowing_add(second_operand_value as i32);
 
-                (unsigned_result, carry, signed_result, overflow)
+                (unsigned_result, Some(carry), signed_result, Some(overflow))
             }
             ThumbRegisterOperation::Sub => {
-                let (unsigned_result, carry) =
+                let (unsigned_result, borrow) =
                     first_operand_value.overflowing_sub(second_operand_value);
                 let (signed_result, overflow) =
                     (first_operand_value as i32).overflowing_sub(second_operand_value as i32);
-                (unsigned_result, carry, signed_result, overflow)
+                (
+                    unsigned_result,
+                    Some(!borrow),
+                    signed_result,
+                    Some(overflow),
+                )
+            }
+            ThumbRegisterOperation::Sbc => {
+                let (unsigned_result, borrow) = if self.get_carry_flag() {
+                    let (result_1, borrow_1) =
+                        first_operand_value.overflowing_sub(second_operand_value);
+                    let (unsigned_result, borrow_2) = result_1.overflowing_sub(1);
+                    (unsigned_result, borrow_1 | borrow_2)
+                } else {
+                    first_operand_value.overflowing_sub(second_operand_value)
+                };
+
+                let (signed_result, overflow) = if self.get_carry_flag() {
+                    let (result_1, overflow_1) =
+                        (first_operand_value as i32).overflowing_sub(second_operand_value as i32);
+                    let (signed_result, overflow_2) = result_1.overflowing_sub(1);
+                    (signed_result, overflow_1 | overflow_2)
+                } else {
+                    (first_operand_value as i32).overflowing_sub(second_operand_value as i32)
+                };
+
+                (
+                    unsigned_result,
+                    Some(!borrow),
+                    signed_result,
+                    Some(overflow),
+                )
             }
             ThumbRegisterOperation::Neg => {
-                let (unsigned_result, carry) = 0u32.overflowing_sub(second_operand_value);
+                let (unsigned_result, borrow) = 0u32.overflowing_sub(second_operand_value);
                 let (signed_result, overflow) = 0i32.overflowing_sub(second_operand_value as i32);
-                (unsigned_result, carry, signed_result, overflow)
+                (
+                    unsigned_result,
+                    Some(!borrow),
+                    signed_result,
+                    Some(overflow),
+                )
             }
             ThumbRegisterOperation::Cmp => {
-                let (unsigned_result, carry) =
+                let (unsigned_result, borrow) =
                     first_operand_value.overflowing_sub(second_operand_value);
                 let (signed_result, overflow) =
                     (first_operand_value as i32).overflowing_sub(second_operand_value as i32);
-                (unsigned_result, carry, signed_result, overflow)
+                (
+                    unsigned_result,
+                    Some(!borrow),
+                    signed_result,
+                    Some(overflow),
+                )
+            }
+            ThumbRegisterOperation::Cmn => {
+                let (unsigned_result, carry) =
+                    first_operand_value.overflowing_add(second_operand_value);
+                let (signed_result, overflow) =
+                    (first_operand_value as i32).overflowing_add(second_operand_value as i32);
+
+                (unsigned_result, Some(carry), signed_result, Some(overflow))
             }
             ThumbRegisterOperation::Mov => (
                 second_operand_value,
-                false,
+                None,
                 second_operand_value as i32,
-                false,
+                None,
             ),
             ThumbRegisterOperation::Mvn => {
                 let result = !second_operand_value;
-                (result, false, result as i32, false)
+                (result, None, result as i32, None)
             }
             ThumbRegisterOperation::Lsl => {
-                let result = first_operand_value << second_operand_value;
-                (result, false, result as i32, false)
+                let (carry, result) =
+                    ShiftType::Lsl.calculate(first_operand_value, second_operand_value);
+                (result, carry, result as i32, None)
             }
             ThumbRegisterOperation::Lsr => {
-                let result = first_operand_value >> second_operand_value;
-                (result, false, result as i32, false)
+                let (carry, result) =
+                    ShiftType::Lsr.calculate(first_operand_value, second_operand_value);
+                (result, carry, result as i32, None)
             }
             ThumbRegisterOperation::Asr => {
-                let result = (first_operand_value as i32) >> second_operand_value;
-                (result as u32, false, result, false)
+                let (carry, result) =
+                    ShiftType::Asr.calculate(first_operand_value, second_operand_value);
+                (result, carry, result as i32, None)
             }
             ThumbRegisterOperation::Tst => {
                 let result = first_operand_value & second_operand_value;
-                (result, false, result as i32, false)
+                (result, None, result as i32, None)
             }
             ThumbRegisterOperation::And => {
                 let result = first_operand_value & second_operand_value;
-                (result, false, result as i32, false)
+                (result, None, result as i32, None)
             }
             ThumbRegisterOperation::Orr => {
                 let result = first_operand_value | second_operand_value;
-                (result, false, result as i32, false)
+                (result, None, result as i32, None)
             }
             ThumbRegisterOperation::Eor => {
                 let result = first_operand_value ^ second_operand_value;
-                (result, false, result as i32, false)
+                (result, None, result as i32, None)
             }
             ThumbRegisterOperation::Bic => {
                 let result = first_operand_value & (!second_operand_value);
-                (result, false, result as i32, false)
+                (result, None, result as i32, None)
             }
             ThumbRegisterOperation::Ror => {
-                let result = first_operand_value.rotate_right(second_operand_value);
-                (result, false, result as i32, false)
+                let (carry, result) =
+                    ShiftType::Ror.calculate(first_operand_value, second_operand_value);
+                (result, carry, result as i32, None)
             }
             ThumbRegisterOperation::Mul => {
-                let result = first_operand_value * second_operand_value;
-                (result, false, result as i32, false)
+                let result = first_operand_value.wrapping_mul(second_operand_value);
+                (result, None, result as i32, None)
             }
             _ => todo!("{:?}", operation),
         };
 
-        self.set_carry_flag(carry_flag);
-        self.set_overflow_flag(overflow_flag);
+        if let Some(carry_flag) = carry_flag {
+            self.set_carry_flag(carry_flag);
+        }
+
+        if let Some(overflow_flag) = overflow_flag {
+            self.set_overflow_flag(overflow_flag);
+        }
+
         self.set_sign_flag(signed_result < 0);
         self.set_zero_flag(unsigned_result == 0);
 
@@ -3728,6 +3340,37 @@ impl Cpu {
         }
     }
 
+    fn execute_thumb_high_register_operation(
+        &mut self,
+        destination_register: Register,
+        operation: ThumbHighRegisterOperation,
+        source: Register,
+    ) {
+        let destination_register_value = self.read_register(destination_register, |pc| pc + 2);
+        let source_value = self.read_register(source, |pc| pc + 2);
+        match operation {
+            ThumbHighRegisterOperation::Add => {
+                let result = destination_register_value.wrapping_add(source_value);
+                self.write_register(result, destination_register);
+            }
+            ThumbHighRegisterOperation::Cmp => {
+                // cmp is only high register operation that sets flags, but it doesn't write value out to destination register.
+                let (unsigned_result, borrow) =
+                    destination_register_value.overflowing_sub(source_value);
+                let (signed_result, overflow) =
+                    (destination_register_value as i32).overflowing_sub(source_value as i32);
+
+                self.set_sign_flag(signed_result < 0);
+                self.set_zero_flag(unsigned_result == 0);
+                self.set_carry_flag(!borrow);
+                self.set_overflow_flag(overflow);
+            }
+            ThumbHighRegisterOperation::Mov => {
+                self.write_register(source_value, destination_register)
+            }
+        }
+    }
+
     fn execute_thumb_ldr(
         &mut self,
         base_register: Register,
@@ -3737,17 +3380,14 @@ impl Cpu {
         sign_extend: bool,
     ) {
         let base_address = self.read_register(base_register, |pc| (pc + 2) & (!2));
-        println!("base address: 0x{:08x}", base_address);
         let base_offset = match offset {
             ThumbRegisterOrImmediate::Immediate(immediate) => immediate,
             ThumbRegisterOrImmediate::Register(register) => {
                 self.read_register(register, |_| unreachable!())
             }
         };
-        println!("offset: 0x{:08x}", base_offset);
 
         let real_address = base_address + base_offset;
-        println!("real addr: 0x{:08x}", real_address);
 
         let result_value = match (size, sign_extend) {
             (ThumbLoadStoreDataSize::Byte, false) => {
@@ -3765,7 +3405,6 @@ impl Cpu {
             (ThumbLoadStoreDataSize::Word, false) => self.bus.read_word_address(real_address),
             _ => unreachable!(),
         };
-        println!("thumb ldr with value: 0x{:08x}", result_value);
 
         self.write_register(result_value, destination_register);
     }
@@ -3778,17 +3417,14 @@ impl Cpu {
         size: ThumbLoadStoreDataSize,
     ) {
         let base_address = self.read_register(base_register, |_| unreachable!());
-        println!("base address: 0x{:08x}", base_address);
         let base_offset = match offset {
             ThumbRegisterOrImmediate::Immediate(immediate) => immediate,
             ThumbRegisterOrImmediate::Register(register) => {
                 self.read_register(register, |_| unreachable!())
             }
         };
-        println!("base offset: 0x{:08x}", base_offset);
 
         let real_address = base_address.wrapping_add(base_offset);
-        println!("real address: 0x{:08x}", real_address);
         let source_register_value = self.read_register(source_register, |_| unreachable!());
 
         match size {
@@ -3805,31 +3441,46 @@ impl Cpu {
     }
 
     fn execute_thumb_b(&mut self, condition: InstructionCondition, offset: i16) {
-        println!("thumb branch with condition: {:?}", condition);
         if self.evaluate_instruction_condition(condition) {
-            self.r15 = self.r15.wrapping_add(offset as u32).wrapping_add(2);
-        } else {
-            println!("no thumb branch");
+            let old_pc = self.read_register(Register::R15, |pc| pc);
+            let new_pc = old_pc.wrapping_add(offset as u32).wrapping_add(2);
+            self.write_register(new_pc, Register::R15);
         }
     }
 
-    // PC = $ + 4 + offset
-    // LR = ($ + 4) OR 1
-    // Thumb bl is decoded as two instructions, so PC == $ + 4 at execution time.
-    fn execute_thumb_bl(&mut self, offset: i32) {
-        self.r14 = self.r15 | 1;
-        self.r15 = self.r15.wrapping_add(offset as u32);
-        println!("thumb bl new pc: 0x{:08x}", self.r15);
+    // LR = PC + 4 + offset
+    fn execute_thumb_bl_part_1(&mut self, offset: i32) {
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        let new_lr = old_pc.wrapping_add(offset as u32).wrapping_add(2);
+
+        self.write_register(new_lr, Register::R14);
+    }
+
+    // PC = LR + (nn SHL 1), and LR = PC+2 OR 1
+    fn execute_thumb_bl_part_2(&mut self, offset: u16) {
+        let new_pc = self
+            .read_register(Register::R14, |_| unreachable!())
+            .wrapping_add(u32::from(offset));
+        let new_lr = self.read_register(Register::R15, |pc| pc) | 1;
+
+        self.write_register(new_pc, Register::R15);
+        self.write_register(new_lr, Register::R14);
     }
 
     fn execute_thumb_bx(&mut self, operand: Register) {
+        const NEW_STATE_BIT_INDEX: usize = 0;
+
         // "BX R15: CPU switches to ARM state, and PC is auto-aligned as (($+4) AND NOT 2)."
         //
-        // Also clear low bit to ensure that CPU switches to ARM state.
-        let operand_value = self.read_register(operand, |pc| (pc + 2) & (!3));
-        println!("new address: 0x{:08x}", operand_value);
+        // Ensure bit 0 is also cleared to make sure we switch to ARM state.
+        let operand_value = self.read_register(operand, |pc| (pc + 2) & (!2) & (!1));
 
-        self.write_register(operand_value, Register::R15);
+        let new_state_bit = operand_value.get_bit(NEW_STATE_BIT_INDEX);
+        self.set_cpu_state_bit(new_state_bit);
+
+        let new_pc = operand_value & (!1);
+
+        self.write_register(new_pc, Register::R15);
     }
 
     fn execute_thumb_push(&mut self, register_bit_list: [bool; 8], push_lr: bool) {
@@ -3838,8 +3489,9 @@ impl Cpu {
         if push_lr {
             let lr_value = self.read_register(Register::R14, |_| unreachable!());
 
-            self.r13 -= 4;
-            self.bus.write_word_address(lr_value, self.r13);
+            let new_r13 = self.read_register(Register::R13, |_| unreachable!()) - 4;
+            self.write_register(new_r13, Register::R13);
+            self.bus.write_word_address(lr_value, new_r13);
         }
 
         for (register_idx, register_pushed) in register_bit_list.into_iter().enumerate().rev() {
@@ -3847,8 +3499,9 @@ impl Cpu {
                 let pushed_register = Register::from_index(register_idx as u32);
                 let pushed_register_value = self.read_register(pushed_register, |_| unreachable!());
 
-                self.r13 -= 4;
-                self.bus.write_word_address(pushed_register_value, self.r13);
+                let new_r13 = self.read_register(Register::R13, |_| unreachable!()) - 4;
+                self.write_register(new_r13, Register::R13);
+                self.bus.write_word_address(pushed_register_value, new_r13);
             }
         }
     }
@@ -3857,19 +3510,20 @@ impl Cpu {
         for (register_idx, register_popped) in register_bit_list.into_iter().enumerate() {
             if register_popped {
                 let popped_register = Register::from_index(register_idx as u32);
-                let popped_register_value = self.bus.read_word_address(self.r13);
+                let old_r13 = self.read_register(Register::R13, |_| unreachable!());
+                let popped_register_value = self.bus.read_word_address(old_r13);
 
-                self.r13 += 4;
+                self.write_register(old_r13 + 4, Register::R13);
                 self.write_register(popped_register_value, popped_register);
             }
         }
 
         if pop_pc {
             // POP {PC} ignores the least significant bit of the return address (processor remains in thumb state even if bit0 was cleared).
-            let pc_value = self.bus.read_word_address(self.r13) | 1;
-            println!("new pc value: 0x{:08x}", pc_value);
+            let old_r13 = self.read_register(Register::R13, |_| unreachable!());
+            let pc_value = self.bus.read_word_address(old_r13) & (!1);
 
-            self.r13 += 4;
+            self.write_register(old_r13 + 4, Register::R13);
             self.write_register(pc_value, Register::R15);
         }
     }
@@ -3971,27 +3625,59 @@ impl Cpu {
         }
     }
 
-    fn evaluate_alu_second_operand(&self, info: AluSecondOperandInfo) -> (bool, u32) {
+    fn evaluate_alu_second_operand(&self, info: AluSecondOperandInfo) -> (Option<bool>, u32) {
         match info {
-            AluSecondOperandInfo::Immediate { value } => (false, value),
+            AluSecondOperandInfo::Immediate { base, shift } => (None, base.rotate_right(shift)),
             AluSecondOperandInfo::Register {
                 register,
                 shift_info,
                 shift_type,
             } => {
                 let register_value = self.read_register(register, |pc| pc);
-                let shift_amount = match shift_info {
-                    AluSecondOperandRegisterShiftInfo::Immediate(shift) => shift,
+                match shift_info {
+                    AluSecondOperandRegisterShiftInfo::Immediate(shift) => {
+                        // Zero Shift Amount (Shift Register by Immediate, with Immediate=0)
+                        //  LSL#0: No shift performed, ie. directly Op2=Rm, the C flag is NOT affected.
+                        //  LSR#0: Interpreted as LSR#32, ie. Op2 becomes zero, C becomes Bit 31 of Rm.
+                        //  ASR#0: Interpreted as ASR#32, ie. Op2 and C are filled by Bit 31 of Rm.
+                        //  ROR#0: Interpreted as RRX#1 (RCR), like ROR#1, but Op2 Bit 31 set to old C.
+
+                        if shift == 0 {
+                            match shift_type {
+                                ShiftType::Lsl => (None, register_value),
+                                ShiftType::Lsr => {
+                                    let carry = register_value.get_bit(31);
+                                    (Some(carry), 0)
+                                }
+                                ShiftType::Asr => {
+                                    let carry = register_value.get_bit(31);
+                                    let result = if carry { !0 } else { 0 };
+
+                                    (Some(carry), result)
+                                }
+                                ShiftType::Ror => {
+                                    let old_carry = self.get_carry_flag();
+                                    let new_carry = register_value.get_bit(0);
+                                    let result =
+                                        register_value.rotate_right(1).set_bit(31, old_carry);
+
+                                    (Some(new_carry), result)
+                                }
+                            }
+                        } else {
+                            shift_type.calculate(register_value, shift)
+                        }
+                    }
                     AluSecondOperandRegisterShiftInfo::Register(shift_register) => {
                         // When using R15 as operand (Rm or Rn), the returned value depends on the instruction:
                         //   - PC+12 if I=0,R=1 (shift by register)
                         //   - otherwise, PC+8 (shift by immediate).
                         //
                         // The first case is always present here.
-                        self.read_register(shift_register, |pc| pc + 8)
+                        let shift_amount = self.read_register(shift_register, |pc| pc + 8);
+                        shift_type.calculate(register_value, shift_amount)
                     }
-                };
-                shift_type.calculate(register_value, shift_amount)
+                }
             }
         }
     }
@@ -4064,8 +3750,16 @@ impl Cpu {
         self.cpsr.get_bit(Self::IRQ_DISABLE_BIT_OFFSET)
     }
 
+    fn set_irq_disable(&mut self, set: bool) {
+        self.cpsr = self.cpsr.set_bit(Self::IRQ_DISABLE_BIT_OFFSET, set);
+    }
+
     fn get_fiq_disable(&self) -> bool {
         self.cpsr.get_bit(Self::FIQ_DISABLE_BIT_OFFSET)
+    }
+
+    fn set_fiq_disable(&mut self, set: bool) {
+        self.cpsr = self.cpsr.set_bit(Self::FIQ_DISABLE_BIT_OFFSET, set);
     }
 
     fn get_instruction_mode(&self) -> InstructionSet {

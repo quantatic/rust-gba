@@ -18,10 +18,6 @@ pub trait BitManipulation {
     fn get_bit_range(self, bit_range: RangeInclusive<usize>) -> Self;
 
     fn set_bit_range(self, value: Self, bit_range: RangeInclusive<usize>) -> Self;
-
-    fn get_byte(self, byte_index: u32) -> u8;
-
-    fn set_byte(self, byte_index: u32, value: u8) -> Self;
 }
 
 impl BitManipulation for u32 {
@@ -105,24 +101,6 @@ impl BitManipulation for u32 {
         let mask = 2u32.wrapping_pow(num_ones as u32).wrapping_sub(1) << shift;
         (value & mask) | (self & (!mask))
     }
-
-    fn get_byte(self, byte_index: u32) -> u8 {
-        const BYTE_MASK: u8 = u8::MAX;
-
-        let mask_shift = byte_index * u8::BITS;
-        let this_byte_mask = Self::from(BYTE_MASK) << mask_shift;
-
-        ((self & this_byte_mask) >> mask_shift) as u8
-    }
-
-    fn set_byte(self, byte_index: u32, value: u8) -> Self {
-        const BYTE_MASK: u8 = u8::MAX;
-
-        let mask_shift = byte_index * u8::BITS;
-        let this_byte_mask = Self::from(BYTE_MASK) << mask_shift;
-
-        (self & (!this_byte_mask)) | (Self::from(value) << mask_shift)
-    }
 }
 
 impl BitManipulation for u16 {
@@ -178,23 +156,5 @@ impl BitManipulation for u16 {
         let num_ones = bit_range.end() - bit_range.start() + 1;
         let mask = 2u16.wrapping_pow(num_ones as u32).wrapping_sub(1) << shift;
         (value & mask) | (self & (!mask))
-    }
-
-    fn set_byte(self, byte_index: u32, value: u8) -> Self {
-        const BYTE_MASK: u8 = u8::MAX;
-
-        let mask_shift = byte_index * u8::BITS;
-        let this_byte_mask = Self::from(BYTE_MASK) << mask_shift;
-
-        (self & (!this_byte_mask)) | (Self::from(value) << mask_shift)
-    }
-
-    fn get_byte(self, byte_index: u32) -> u8 {
-        const BYTE_MASK: u8 = u8::MAX;
-
-        let mask_shift = byte_index * u8::BITS;
-        let this_byte_mask = Self::from(BYTE_MASK) << mask_shift;
-
-        ((self & this_byte_mask) >> mask_shift) as u8
     }
 }
