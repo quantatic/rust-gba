@@ -7,6 +7,8 @@ resolver = "2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+pixels = "0.8.0"
+winit = "0.26.0"
 
 [profile.release]
 opt-level = 3

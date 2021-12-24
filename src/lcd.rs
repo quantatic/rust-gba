@@ -2,11 +2,31 @@ use std::ops::RangeInclusive;
 
 use crate::{bit_manipulation::BitManipulation, bus::DataAccess};
 
+pub const LCD_WIDTH: usize = 240;
+pub const LCD_HEIGHT: usize = 160;
+
 #[derive(Debug)]
 enum LcdState {
     Visible,
     HBlank,
     VBlank,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BgMode {
+    Mode0,
+    Mode1,
+    Mode2,
+    Mode3,
+    Mode4,
+    Mode5,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PixelColor {
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
 }
 
 #[derive(Debug)]
@@ -22,6 +42,7 @@ pub struct Lcd {
     vblank_interrupt_waiting: bool,
     hblank_interrupt_waiting: bool,
     vcount_interrupt_waiting: bool,
+    buffer: [[PixelColor; LCD_WIDTH]; LCD_HEIGHT], // access as buffer[y][x]
 }
 
 pub struct LcdInterruptInfo {
@@ -44,6 +65,7 @@ impl Default for Lcd {
             vblank_interrupt_waiting: false,
             hblank_interrupt_waiting: false,
             vcount_interrupt_waiting: false,
+            buffer: [[PixelColor::default(); LCD_WIDTH]; LCD_HEIGHT],
         }
     }
 }
@@ -64,6 +86,34 @@ impl Lcd {
             self.set_vblank_flag(true);
             self.vblank_interrupt_waiting = true;
             self.state = LcdState::VBlank;
+        }
+
+        if matches!(self.state, LcdState::Visible) {
+            match self.get_bg_mode() {
+                BgMode::Mode4 => {
+                    let pixel_x = self.dot;
+                    let pixel_y = self.vcount;
+
+                    let byte_idx = (usize::from(pixel_y) * LCD_WIDTH) + usize::from(pixel_x);
+
+                    let palette_idx = self.vram[byte_idx];
+
+                    self.buffer[usize::from(pixel_y)][usize::from(pixel_x)] = if palette_idx == 0 {
+                        PixelColor {
+                            red: 0,
+                            green: 0,
+                            blue: 0,
+                        }
+                    } else {
+                        PixelColor {
+                            red: 255,
+                            green: 255,
+                            blue: 255,
+                        }
+                    };
+                }
+                _ => {}
+            };
         }
 
         self.dot += 1;
@@ -141,6 +191,20 @@ impl Lcd {
 }
 
 impl Lcd {
+    fn get_bg_mode(&self) -> BgMode {
+        const BG_MODE_FLAG_BIT_RANGE: RangeInclusive<usize> = 0..=2;
+
+        let mode_index = self.lcd_control.get_bit_range(BG_MODE_FLAG_BIT_RANGE);
+        match mode_index {
+            0 => BgMode::Mode0,
+            1 => BgMode::Mode1,
+            2 => BgMode::Mode2,
+            3 => BgMode::Mode3,
+            4 => BgMode::Mode4,
+            5 => BgMode::Mode5,
+            _ => unreachable!("prohibited mode {}", mode_index),
+        }
+    }
     fn set_vblank_flag(&mut self, set: bool) {
         const VBLANK_FLAG_BIT_INDEX: usize = 0;
 
@@ -191,5 +255,9 @@ impl Lcd {
         self.hblank_interrupt_waiting = false;
         self.vblank_interrupt_waiting = false;
         self.vcount_interrupt_waiting = false;
+    }
+
+    pub fn buffer(&self) -> &[[PixelColor; LCD_WIDTH]; LCD_HEIGHT] {
+        &self.buffer
     }
 }

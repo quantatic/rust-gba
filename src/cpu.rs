@@ -6,6 +6,7 @@ use std::{fmt::Debug, ops::RangeInclusive};
 
 use crate::bit_manipulation::BitManipulation;
 use crate::bus::{Bus, DataAccess};
+use crate::DEBUG_AND_PANIC_ON_LOOP;
 
 #[derive(Debug)]
 pub struct Cpu {
@@ -200,7 +201,7 @@ pub enum SingleDataMemoryAccessSize {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum ArmInstructionType {
+enum ArmInstructionType {
     B {
         offset: i32,
     },
@@ -292,8 +293,8 @@ pub enum ThumbInstructionType {
     Register {
         operation: ThumbRegisterOperation,
         destination_register: Register,
-        source: ThumbRegisterOrImmediate,
-        second_operand: Option<ThumbRegisterOrImmediate>,
+        source: Register,
+        second_operand: ThumbRegisterOrImmediate,
     },
     HighRegister {
         operation: ThumbHighRegisterOperation,
@@ -408,28 +409,15 @@ pub enum ShiftType {
 }
 
 impl ShiftType {
-    fn calculate(self, value: u32, shift: u32) -> (Option<bool>, u32) {
+    fn evaluate(self, value: u32, shift: u32) -> u32 {
         assert!(shift < 32);
 
-        let result = match self {
+        match self {
             ShiftType::Lsl => value << shift,
             ShiftType::Lsr => value >> shift,
             ShiftType::Asr => ((value as i32) >> shift) as u32,
             ShiftType::Ror => value.rotate_right(shift),
-        };
-
-        let carry = if shift == 0 {
-            None
-        } else {
-            Some(match self {
-                ShiftType::Lsl => value.get_bit(32 - (shift as usize)),
-                ShiftType::Lsr => value.get_bit((shift as usize) - 1),
-                ShiftType::Asr => value.get_bit((shift as usize) - 1),
-                ShiftType::Ror => value.get_bit((shift as usize) - 1),
-            })
-        };
-
-        (carry, result)
+        }
     }
 }
 
@@ -493,7 +481,7 @@ pub enum SingleDataTransferOffsetValue {
 #[derive(Clone, Copy, Debug)]
 pub enum AluSecondOperandInfo {
     Register {
-        shift_info: AluSecondOperandRegisterShiftInfo,
+        shift_info: ArmRegisterOrImmediate,
         shift_type: ShiftType,
         register: Register,
     },
@@ -504,7 +492,7 @@ pub enum AluSecondOperandInfo {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum AluSecondOperandRegisterShiftInfo {
+pub enum ArmRegisterOrImmediate {
     Immediate(u32),
     Register(Register),
 }
@@ -579,11 +567,16 @@ impl Cpu {
             (CpuMode::Abort, Register::R14) => self.r14_abt = value,
             (CpuMode::Irq, Register::R14) => self.r14_irq = value,
             (CpuMode::Undefined, Register::R14) => self.r14_und = value,
-            (_, Register::R15) => self.r15 = value,
-            (_, Register::Cpsr) => self.cpsr = value,
-            (mode @ (CpuMode::User | CpuMode::System), register @ Register::Spsr) => {
-                unreachable!("{:?}, {:?}", mode, register)
+            (_, Register::R15) => {
+                if self.get_cpu_state_bit() {
+                    self.r15 = value & !1;
+                } else {
+                    self.r15 = value & !3;
+                }
             }
+            (_, Register::Cpsr) => self.cpsr = value,
+            // if current mode has no spsr, value is written to cpsr instead
+            (CpuMode::User | CpuMode::System, Register::Spsr) => self.cpsr = value,
             (CpuMode::Fiq, Register::Spsr) => self.spsr_fiq = value,
             (CpuMode::Supervisor, Register::Spsr) => self.spsr_svc = value,
             (CpuMode::Abort, Register::Spsr) => self.spsr_abt = value,
@@ -650,9 +643,8 @@ impl Cpu {
             (CpuMode::Undefined, Register::R14) => self.r14_und,
             (_, Register::R15) => pc_calculation(self.r15),
             (_, Register::Cpsr) => self.cpsr,
-            (mode @ (CpuMode::User | CpuMode::System), register @ Register::Spsr) => {
-                unreachable!("{:?}, {:?}", mode, register)
-            }
+            // if current mode has no spsr, value read is cpsr
+            (CpuMode::User | CpuMode::System, Register::Spsr) => self.cpsr,
             (CpuMode::Fiq, Register::Spsr) => self.spsr_fiq,
             (CpuMode::Supervisor, Register::Spsr) => self.spsr_svc,
             (CpuMode::Abort, Register::Spsr) => self.spsr_abt,
@@ -1051,14 +1043,14 @@ impl Cpu {
                         return None;
                     }
 
-                    AluSecondOperandRegisterShiftInfo::Register(shift_register)
+                    ArmRegisterOrImmediate::Register(shift_register)
                 } else {
                     // Shift by Immediate
                     const SHIFT_AMOUNT_BIT_RANGE: RangeInclusive<usize> = 7..=11;
 
                     let shift_amount = opcode.get_bit_range(SHIFT_AMOUNT_BIT_RANGE);
 
-                    AluSecondOperandRegisterShiftInfo::Immediate(shift_amount)
+                    ArmRegisterOrImmediate::Immediate(shift_amount)
                 };
                 AluSecondOperandInfo::Register {
                     register: second_operand_register,
@@ -1645,8 +1637,8 @@ impl Cpu {
         Some(ThumbInstructionType::Register {
             operation: operation_type,
             destination_register: dest_register,
-            source: ThumbRegisterOrImmediate::Register(source_register),
-            second_operand: Some(ThumbRegisterOrImmediate::Immediate(offset)),
+            source: source_register,
+            second_operand: ThumbRegisterOrImmediate::Immediate(offset),
         })
     }
 
@@ -1678,8 +1670,8 @@ impl Cpu {
                 ThumbInstructionType::Register {
                     destination_register: dest_register,
                     operation: ThumbRegisterOperation::Add,
-                    source: ThumbRegisterOrImmediate::Register(source_register),
-                    second_operand: Some(second_operand),
+                    source: source_register,
+                    second_operand: second_operand,
                 }
             }
             SUB_REGISTER_OPCODE_VALUE => {
@@ -1688,8 +1680,8 @@ impl Cpu {
                 ThumbInstructionType::Register {
                     destination_register: dest_register,
                     operation: ThumbRegisterOperation::Sub,
-                    source: ThumbRegisterOrImmediate::Register(source_register),
-                    second_operand: Some(second_operand),
+                    source: source_register,
+                    second_operand: second_operand,
                 }
             }
             ADD_IMMEDIATE_OPCODE_VALUE => {
@@ -1699,8 +1691,8 @@ impl Cpu {
                 ThumbInstructionType::Register {
                     destination_register: dest_register,
                     operation: ThumbRegisterOperation::Add,
-                    source: ThumbRegisterOrImmediate::Register(source_register),
-                    second_operand: Some(second_operand),
+                    source: source_register,
+                    second_operand: second_operand,
                 }
             }
             SUB_IMMEDIATE_OPCODE_VALUE => {
@@ -1710,8 +1702,8 @@ impl Cpu {
                 ThumbInstructionType::Register {
                     destination_register: dest_register,
                     operation: ThumbRegisterOperation::Sub,
-                    source: ThumbRegisterOrImmediate::Register(source_register),
-                    second_operand: Some(second_operand),
+                    source: source_register,
+                    second_operand: second_operand,
                 }
             }
             _ => unreachable!(),
@@ -1743,10 +1735,10 @@ impl Cpu {
         };
 
         Some(ThumbInstructionType::Register {
-            destination_register: dest_register,
             operation,
-            second_operand: None,
-            source: ThumbRegisterOrImmediate::Immediate(immediate),
+            destination_register: dest_register,
+            source: dest_register,
+            second_operand: ThumbRegisterOrImmediate::Immediate(immediate),
         })
     }
 
@@ -1785,10 +1777,10 @@ impl Cpu {
         };
 
         Some(ThumbInstructionType::Register {
-            destination_register: dest_register,
             operation: operation_type,
-            second_operand: None,
-            source: ThumbRegisterOrImmediate::Register(source_register),
+            destination_register: dest_register,
+            source: dest_register,
+            second_operand: ThumbRegisterOrImmediate::Register(source_register),
         })
     }
 
@@ -2479,15 +2471,15 @@ impl Cpu {
     fn execute_thumb(&mut self, instruction: ThumbInstruction) {
         match instruction.instruction_type {
             ThumbInstructionType::Register {
-                destination_register,
                 operation,
-                second_operand,
+                destination_register,
                 source,
+                second_operand,
             } => self.execute_thumb_register_operation(
-                destination_register,
                 operation,
-                second_operand,
+                destination_register,
                 source,
+                second_operand,
             ),
             ThumbInstructionType::HighRegister {
                 destination_register,
@@ -2563,25 +2555,34 @@ impl Cpu {
         set_conditions: bool,
     ) {
         // When using R15 as operand (Rm or Rn), the returned value depends on the instruction:
-        //   - PC+12 if I=0,R=1 (shift by register)
-        //   - otherwise, PC+8 (shift by immediate).
+        //   - $+12 if I=0,R=1 (shift by register)
+        //   - otherwise, $+8 (shift by immediate).
+        //
+        // Note that that pc = $ + 4 due to decoding step.
         let pc_operand_calculation = match second_operand {
             AluSecondOperandInfo::Register {
-                shift_info: AluSecondOperandRegisterShiftInfo::Register(_),
+                shift_info: ArmRegisterOrImmediate::Register(_),
                 ..
             } => |pc| pc + 8,
             _ => |pc| pc + 4,
         };
 
         let first_operand_value = self.read_register(first_operand, pc_operand_calculation);
-        let (shift_carry, second_operand_value) = self.evaluate_alu_second_operand(second_operand);
+        let (second_operand_value, shifter_carry_out) =
+            self.evaluate_alu_second_operand(second_operand);
+        let old_overflow = self.get_overflow_flag();
 
         let (unsigned_result, carry_flag, signed_result, overflow_flag) = match operation {
             AluOperation::And => {
                 let unsigned_result = first_operand_value & second_operand_value;
                 let signed_result = unsigned_result as i32;
 
-                (unsigned_result, shift_carry, signed_result, None)
+                (
+                    unsigned_result,
+                    shifter_carry_out,
+                    signed_result,
+                    old_overflow,
+                )
             }
             AluOperation::Add => {
                 let (unsigned_result, carry) =
@@ -2589,7 +2590,7 @@ impl Cpu {
                 let (signed_result, overflow) =
                     (first_operand_value as i32).overflowing_add(second_operand_value as i32);
 
-                (unsigned_result, Some(carry), signed_result, Some(overflow))
+                (unsigned_result, carry, signed_result, overflow)
             }
             AluOperation::Adc => {
                 let (unsigned_result, carry) = if self.get_carry_flag() {
@@ -2612,7 +2613,7 @@ impl Cpu {
                     (first_operand_value as i32).overflowing_add(second_operand_value as i32)
                 };
 
-                (unsigned_result, Some(carry), signed_result, Some(overflow))
+                (unsigned_result, carry, signed_result, overflow)
             }
             AluOperation::Sub => {
                 let (unsigned_result, borrow) =
@@ -2620,15 +2621,12 @@ impl Cpu {
                 let (signed_result, overflow) =
                     (first_operand_value as i32).overflowing_sub(second_operand_value as i32);
 
-                (
-                    unsigned_result,
-                    Some(!borrow),
-                    signed_result,
-                    Some(overflow),
-                )
+                (unsigned_result, !borrow, signed_result, overflow)
             }
             AluOperation::Sbc => {
-                let (unsigned_result, borrow) = if self.get_carry_flag() {
+                let borrow_in = !self.get_carry_flag();
+
+                let (unsigned_result, borrow) = if borrow_in {
                     let (result_1, borrow_1) =
                         first_operand_value.overflowing_sub(second_operand_value);
                     let (unsigned_result, borrow_2) = result_1.overflowing_sub(1);
@@ -2637,7 +2635,7 @@ impl Cpu {
                     first_operand_value.overflowing_sub(second_operand_value)
                 };
 
-                let (signed_result, overflow) = if self.get_carry_flag() {
+                let (signed_result, overflow) = if borrow_in {
                     let (result_1, overflow_1) =
                         (first_operand_value as i32).overflowing_sub(second_operand_value as i32);
                     let (signed_result, overflow_2) = result_1.overflowing_sub(1);
@@ -2646,12 +2644,30 @@ impl Cpu {
                     (first_operand_value as i32).overflowing_sub(second_operand_value as i32)
                 };
 
-                (
-                    unsigned_result,
-                    Some(!borrow),
-                    signed_result,
-                    Some(overflow),
-                )
+                (unsigned_result, !borrow, signed_result, overflow)
+            }
+            AluOperation::Rsc => {
+                let borrow_in = !self.get_carry_flag();
+
+                let (unsigned_result, borrow) = if borrow_in {
+                    let (result_1, borrow_1) =
+                        second_operand_value.overflowing_sub(first_operand_value);
+                    let (unsigned_result, borrow_2) = result_1.overflowing_sub(1);
+                    (unsigned_result, borrow_1 | borrow_2)
+                } else {
+                    second_operand_value.overflowing_sub(first_operand_value)
+                };
+
+                let (signed_result, overflow) = if borrow_in {
+                    let (result_1, overflow_1) =
+                        (second_operand_value as i32).overflowing_sub(first_operand_value as i32);
+                    let (signed_result, overflow_2) = result_1.overflowing_sub(1);
+                    (signed_result, overflow_1 | overflow_2)
+                } else {
+                    (second_operand_value as i32).overflowing_sub(first_operand_value as i32)
+                };
+
+                (unsigned_result, !borrow, signed_result, overflow)
             }
             AluOperation::Rsb => {
                 let (unsigned_result, borrow) =
@@ -2659,18 +2675,18 @@ impl Cpu {
                 let (signed_result, overflow) =
                     (second_operand_value as i32).overflowing_sub(first_operand_value as i32);
 
-                (
-                    unsigned_result,
-                    Some(!borrow),
-                    signed_result,
-                    Some(overflow),
-                )
+                (unsigned_result, !borrow, signed_result, overflow)
             }
             AluOperation::Teq => {
                 let unsigned_result = first_operand_value ^ second_operand_value;
                 let signed_result = unsigned_result as i32;
 
-                (unsigned_result, shift_carry, signed_result, None)
+                (
+                    unsigned_result,
+                    shifter_carry_out,
+                    signed_result,
+                    old_overflow,
+                )
             }
             AluOperation::Cmp => {
                 let (unsigned_result, borrow) =
@@ -2678,38 +2694,41 @@ impl Cpu {
                 let (signed_result, overflow) =
                     (first_operand_value as i32).overflowing_sub(second_operand_value as i32);
 
-                (
-                    unsigned_result,
-                    Some(!borrow),
-                    signed_result,
-                    Some(overflow),
-                )
+                (unsigned_result, !borrow, signed_result, overflow)
+            }
+            AluOperation::Cmn => {
+                let (unsigned_result, borrow) =
+                    first_operand_value.overflowing_add(second_operand_value);
+                let (signed_result, overflow) =
+                    (first_operand_value as i32).overflowing_add(second_operand_value as i32);
+
+                (unsigned_result, !borrow, signed_result, overflow)
             }
             AluOperation::Mov => (
                 second_operand_value,
-                shift_carry,
+                shifter_carry_out,
                 second_operand_value as i32,
-                None,
+                old_overflow,
             ),
             AluOperation::Bic => {
                 let result = first_operand_value & (!second_operand_value);
-                (result, shift_carry, result as i32, None)
+                (result, shifter_carry_out, result as i32, old_overflow)
             }
             AluOperation::Tst => {
                 let result = first_operand_value & second_operand_value;
-                (result, shift_carry, result as i32, None)
+                (result, shifter_carry_out, result as i32, old_overflow)
             }
             AluOperation::Orr => {
                 let result = first_operand_value | second_operand_value;
-                (result, None, result as i32, None)
+                (result, shifter_carry_out, result as i32, old_overflow)
             }
             AluOperation::Eor => {
                 let result = first_operand_value ^ second_operand_value;
-                (result, None, result as i32, None)
+                (result, shifter_carry_out, result as i32, old_overflow)
             }
             AluOperation::Mvn => {
                 let result = !second_operand_value;
-                (result, None, result as i32, None)
+                (result, shifter_carry_out, result as i32, old_overflow)
             }
             _ => todo!("ARM ALU: {:?}", operation),
         };
@@ -2717,13 +2736,8 @@ impl Cpu {
         if set_conditions {
             self.set_sign_flag(signed_result < 0);
             self.set_zero_flag(unsigned_result == 0);
-            if let Some(carry_flag) = carry_flag {
-                self.set_carry_flag(carry_flag);
-            }
-
-            if let Some(overflow_flag) = overflow_flag {
-                self.set_overflow_flag(overflow_flag);
-            }
+            self.set_carry_flag(carry_flag);
+            self.set_overflow_flag(overflow_flag);
 
             // If S=1, Rd=R15; should not be used in user mode:
             //  CPSR = SPSR_<current mode>
@@ -2760,6 +2774,9 @@ impl Cpu {
     fn execute_arm_b(&mut self, offset: i32) {
         let old_pc = self.read_register(Register::R15, |pc| pc);
         let new_pc = old_pc.wrapping_add(offset as u32).wrapping_add(4);
+        if DEBUG_AND_PANIC_ON_LOOP && (old_pc - 4) == new_pc {
+            panic!("infinite loop");
+        }
         self.write_register(new_pc, Register::R15);
     }
 
@@ -2797,6 +2814,7 @@ impl Cpu {
         write_flags_field: bool,
         write_status_field: bool,
     ) {
+        let original_mode = self.get_cpu_mode();
         const FLAGS_FIELD_MASK: u32 = 0b11111111_00000000_00000000_00000000;
         const STATUS_FIELD_MASK: u32 = 0b00000000_11111111_00000000_00000000;
         const EXTENSION_FIELD_MASK: u32 = 0b00000000_00000000_11111111_00000000;
@@ -2868,9 +2886,7 @@ impl Cpu {
                 assert!(!matches!(offset_register, Register::R15));
 
                 let offset_register_value = self.read_register(offset_register, |pc| pc);
-                let (_shift_carry, result) =
-                    shift_type.calculate(offset_register_value, shift_amount);
-                result
+                shift_type.evaluate(offset_register_value, shift_amount)
             }
         };
 
@@ -2932,9 +2948,7 @@ impl Cpu {
                 shift_type,
             } => {
                 let offset_register_value = self.read_register(offset_register, |_| unreachable!());
-                let (_shift_carry, result) =
-                    shift_type.calculate(offset_register_value, shift_amount);
-                result
+                shift_type.evaluate(offset_register_value, shift_amount)
             }
         };
 
@@ -3100,13 +3114,14 @@ impl Cpu {
         &mut self,
         operation: MultiplyOperation,
         set_conditions: bool,
-        destination_register: Register,
-        accumulate_register: Register,
+        destination_register_rdhi: Register,
+        accumulate_register_rdlo: Register,
         operand_register_rm: Register,
         operand_register_rs: Register,
     ) {
-        let accumulate_value = self.read_register(accumulate_register, |_| unreachable!());
-        let destination_register_value = self.read_register(destination_register, |_| todo!());
+        let accumulate_rdlo_value =
+            self.read_register(accumulate_register_rdlo, |_| unreachable!());
+        let destination_rdhi_value = self.read_register(destination_register_rdhi, |_| todo!());
         let rm_value = self.read_register(operand_register_rm, |_| unreachable!());
         let rs_value = self.read_register(operand_register_rs, |_| unreachable!());
 
@@ -3118,18 +3133,18 @@ impl Cpu {
                     self.set_sign_flag((result as i32) < 0);
                 }
 
-                self.write_register(result, destination_register);
+                self.write_register(result, destination_register_rdhi);
             }
             MultiplyOperation::Mla => {
                 let result = rm_value
                     .wrapping_mul(rs_value)
-                    .wrapping_add(accumulate_value);
+                    .wrapping_add(accumulate_rdlo_value);
                 if set_conditions {
                     self.set_zero_flag(result == 0);
                     self.set_sign_flag((result as i32) < 0);
                 }
 
-                self.write_register(result, destination_register);
+                self.write_register(result, destination_register_rdhi);
             }
             MultiplyOperation::Umull => {
                 let result = u64::from(rm_value).wrapping_mul(u64::from(rs_value));
@@ -3141,8 +3156,62 @@ impl Cpu {
                 let low_word = result.get_data(0);
                 let high_word = result.get_data(1);
 
-                self.write_register(low_word, accumulate_register);
-                self.write_register(high_word, destination_register);
+                self.write_register(low_word, accumulate_register_rdlo);
+                self.write_register(high_word, destination_register_rdhi);
+            }
+            MultiplyOperation::Umlal => {
+                let accumulate_value =
+                    u64::from(accumulate_rdlo_value) | (u64::from(destination_rdhi_value) << 32);
+                let result = u64::from(rm_value)
+                    .wrapping_mul(u64::from(rs_value))
+                    .wrapping_add(accumulate_value);
+                if set_conditions {
+                    self.set_zero_flag(result == 0);
+                    self.set_sign_flag((result as i64) < 0);
+                }
+
+                let low_word = result.get_data(0);
+                let high_word = result.get_data(1);
+
+                self.write_register(low_word, accumulate_register_rdlo);
+                self.write_register(high_word, destination_register_rdhi);
+            }
+            MultiplyOperation::Smull => {
+                let signed_result =
+                    i64::from(rm_value as i32).wrapping_mul(i64::from(rs_value as i32));
+                let result = signed_result as u64;
+
+                if set_conditions {
+                    self.set_zero_flag(result == 0);
+                    self.set_sign_flag((result as i64) < 0);
+                }
+
+                let low_word = result.get_data(0);
+                let high_word = result.get_data(1);
+
+                self.write_register(low_word, accumulate_register_rdlo);
+                self.write_register(high_word, destination_register_rdhi);
+            }
+            MultiplyOperation::Smlal => {
+                let accumulate_value = (u64::from(accumulate_rdlo_value)
+                    | (u64::from(destination_rdhi_value) << 32))
+                    as i64;
+
+                let signed_result = i64::from(rm_value as i32)
+                    .wrapping_mul(i64::from(rs_value as i32))
+                    .wrapping_add(accumulate_value);
+                let result = signed_result as u64;
+
+                if set_conditions {
+                    self.set_zero_flag(result == 0);
+                    self.set_sign_flag((result as i64) < 0);
+                }
+
+                let low_word = result.get_data(0);
+                let high_word = result.get_data(1);
+
+                self.write_register(low_word, accumulate_register_rdlo);
+                self.write_register(high_word, destination_register_rdhi);
             }
             _ => todo!("multiply impl for {:?}", operation),
         }
@@ -3152,24 +3221,14 @@ impl Cpu {
 impl Cpu {
     fn execute_thumb_register_operation(
         &mut self,
-        destination_register: Register,
         operation: ThumbRegisterOperation,
-        second_operand: Option<ThumbRegisterOrImmediate>,
-        source: ThumbRegisterOrImmediate,
+        destination_register: Register,
+        source: Register,
+        second_operand: ThumbRegisterOrImmediate,
     ) {
-        let destination_value = self.read_register(destination_register, |pc| pc + 2);
-        let source_value = self.evaluate_thumb_register_or_immedate(source, |pc| pc + 2);
-
-        let (first_operand_value, second_operand_value) =
-            if let Some(second_operand) = second_operand {
-                // if explicit second operand, first operand is source, second operand is given second operand
-                let second_value =
-                    self.evaluate_thumb_register_or_immedate(second_operand, |_| unreachable!());
-                (source_value, second_value)
-            } else {
-                // if no second operand, first operand is destination value and second operand is source
-                (destination_value, source_value)
-            };
+        let first_operand_value = self.read_register(source, |pc| pc + 2);
+        let second_operand_value =
+            self.evaluate_thumb_register_or_immedate(second_operand, |_| unreachable!());
 
         let (unsigned_result, carry_flag, signed_result, overflow_flag) = match operation {
             ThumbRegisterOperation::Add => {
@@ -3177,6 +3236,27 @@ impl Cpu {
                     first_operand_value.overflowing_add(second_operand_value);
                 let (signed_result, overflow) =
                     (first_operand_value as i32).overflowing_add(second_operand_value as i32);
+
+                (unsigned_result, Some(carry), signed_result, Some(overflow))
+            }
+            ThumbRegisterOperation::Adc => {
+                let (unsigned_result, carry) = if self.get_carry_flag() {
+                    let (first_result, carry_1) =
+                        first_operand_value.overflowing_add(second_operand_value);
+                    let (final_result, carry_2) = first_result.overflowing_add(1);
+                    (final_result, carry_1 | carry_2)
+                } else {
+                    first_operand_value.overflowing_add(second_operand_value)
+                };
+
+                let (signed_result, overflow) = if self.get_carry_flag() {
+                    let (first_result, carry_1) =
+                        (first_operand_value as i32).overflowing_add(second_operand_value as i32);
+                    let (final_result, carry_2) = first_result.overflowing_add(1);
+                    (final_result, carry_1 | carry_2)
+                } else {
+                    (first_operand_value as i32).overflowing_add(second_operand_value as i32)
+                };
 
                 (unsigned_result, Some(carry), signed_result, Some(overflow))
             }
@@ -3193,7 +3273,9 @@ impl Cpu {
                 )
             }
             ThumbRegisterOperation::Sbc => {
-                let (unsigned_result, borrow) = if self.get_carry_flag() {
+                let borrow_in = !self.get_carry_flag();
+
+                let (unsigned_result, borrow) = if borrow_in {
                     let (result_1, borrow_1) =
                         first_operand_value.overflowing_sub(second_operand_value);
                     let (unsigned_result, borrow_2) = result_1.overflowing_sub(1);
@@ -3202,7 +3284,7 @@ impl Cpu {
                     first_operand_value.overflowing_sub(second_operand_value)
                 };
 
-                let (signed_result, overflow) = if self.get_carry_flag() {
+                let (signed_result, overflow) = if borrow_in {
                     let (result_1, overflow_1) =
                         (first_operand_value as i32).overflowing_sub(second_operand_value as i32);
                     let (signed_result, overflow_2) = result_1.overflowing_sub(1);
@@ -3259,19 +3341,140 @@ impl Cpu {
                 (result, None, result as i32, None)
             }
             ThumbRegisterOperation::Lsl => {
-                let (carry, result) =
-                    ShiftType::Lsl.calculate(first_operand_value, second_operand_value);
-                (result, carry, result as i32, None)
+                let (result, carry_out) = match second_operand {
+                    ThumbRegisterOrImmediate::Immediate(shift) => {
+                        if second_operand_value == 0 {
+                            (first_operand_value, self.get_carry_flag())
+                        } else {
+                            let result = ShiftType::Lsl.evaluate(first_operand_value, shift);
+                            let carry = first_operand_value.get_bit((32 - shift) as usize);
+                            (result, carry)
+                        }
+                    }
+                    ThumbRegisterOrImmediate::Register(_) => {
+                        let shift = second_operand_value;
+
+                        if shift == 0 {
+                            (first_operand_value, self.get_carry_flag())
+                        } else if shift < 32 {
+                            let result = ShiftType::Lsl.evaluate(first_operand_value, shift);
+                            let carry = first_operand_value.get_bit((32 - shift) as usize);
+
+                            (result, carry)
+                        } else if shift == 32 {
+                            let carry = first_operand_value.get_bit(0);
+                            (0, carry)
+                        } else {
+                            (0, false)
+                        }
+                    }
+                };
+
+                (result, Some(carry_out), result as i32, None)
             }
             ThumbRegisterOperation::Lsr => {
-                let (carry, result) =
-                    ShiftType::Lsr.calculate(first_operand_value, second_operand_value);
-                (result, carry, result as i32, None)
+                let (result, carry_out) = match second_operand {
+                    ThumbRegisterOrImmediate::Immediate(shift) => {
+                        if second_operand_value == 0 {
+                            (0, first_operand_value.get_bit(31))
+                        } else {
+                            let result = ShiftType::Lsr.evaluate(first_operand_value, shift);
+                            let carry = first_operand_value.get_bit((shift - 1) as usize);
+                            (result, carry)
+                        }
+                    }
+                    ThumbRegisterOrImmediate::Register(_) => {
+                        let shift = second_operand_value;
+
+                        if shift == 0 {
+                            (first_operand_value, self.get_carry_flag())
+                        } else if shift < 32 {
+                            let result = ShiftType::Lsr.evaluate(first_operand_value, shift);
+                            let carry = first_operand_value.get_bit((shift - 1) as usize);
+
+                            (result, carry)
+                        } else if shift == 32 {
+                            let carry = first_operand_value.get_bit(31);
+                            (0, carry)
+                        } else {
+                            (0, false)
+                        }
+                    }
+                };
+
+                (result, Some(carry_out), result as i32, None)
             }
             ThumbRegisterOperation::Asr => {
-                let (carry, result) =
-                    ShiftType::Asr.calculate(first_operand_value, second_operand_value);
-                (result, carry, result as i32, None)
+                let (result, carry_out) = match second_operand {
+                    ThumbRegisterOrImmediate::Immediate(shift) => {
+                        if second_operand_value == 0 {
+                            let carry = first_operand_value.get_bit(31);
+                            let result = if carry { !0 } else { 0 };
+
+                            (result, carry)
+                        } else {
+                            let result = ShiftType::Asr.evaluate(first_operand_value, shift);
+                            let carry = first_operand_value.get_bit((shift - 1) as usize);
+                            (result, carry)
+                        }
+                    }
+                    ThumbRegisterOrImmediate::Register(_) => {
+                        let shift = second_operand_value;
+
+                        if shift == 0 {
+                            (first_operand_value, self.get_carry_flag())
+                        } else if shift < 32 {
+                            let result = ShiftType::Asr.evaluate(first_operand_value, shift);
+                            let carry = first_operand_value.get_bit((shift - 1) as usize);
+
+                            (result, carry)
+                        } else {
+                            let carry = first_operand_value.get_bit(31);
+                            let result = if carry { !0 } else { 0 };
+
+                            (result, carry)
+                        }
+                    }
+                };
+
+                (result, Some(carry_out), result as i32, None)
+            }
+            ThumbRegisterOperation::Ror => {
+                let (result, carry_out) = match second_operand {
+                    ThumbRegisterOrImmediate::Immediate(shift) => {
+                        if second_operand_value == 0 {
+                            let old_carry = self.get_carry_flag();
+                            let new_carry = first_operand_value.get_bit(0);
+                            let result = first_operand_value.rotate_right(1).set_bit(31, old_carry);
+
+                            (result, new_carry)
+                        } else {
+                            let result = ShiftType::Ror.evaluate(first_operand_value, shift);
+                            let carry = first_operand_value.get_bit((shift - 1) as usize);
+                            (result, carry)
+                        }
+                    }
+                    ThumbRegisterOrImmediate::Register(_) => {
+                        let shift = second_operand_value;
+                        let effective_shift = shift % 32;
+
+                        if shift == 0 {
+                            (first_operand_value, self.get_carry_flag())
+                        } else if effective_shift == 0 {
+                            let carry = first_operand_value.get_bit(31);
+
+                            (first_operand_value, carry)
+                        } else {
+                            let result =
+                                ShiftType::Ror.evaluate(first_operand_value, effective_shift);
+                            let carry = first_operand_value.get_bit((effective_shift - 1) as usize);
+
+                            (result, carry)
+                        }
+                    }
+                };
+
+                (result, Some(carry_out), result as i32, None)
             }
             ThumbRegisterOperation::Tst => {
                 let result = first_operand_value & second_operand_value;
@@ -3292,11 +3495,6 @@ impl Cpu {
             ThumbRegisterOperation::Bic => {
                 let result = first_operand_value & (!second_operand_value);
                 (result, None, result as i32, None)
-            }
-            ThumbRegisterOperation::Ror => {
-                let (carry, result) =
-                    ShiftType::Ror.calculate(first_operand_value, second_operand_value);
-                (result, carry, result as i32, None)
             }
             ThumbRegisterOperation::Mul => {
                 let result = first_operand_value.wrapping_mul(second_operand_value);
@@ -3625,35 +3823,43 @@ impl Cpu {
         }
     }
 
-    fn evaluate_alu_second_operand(&self, info: AluSecondOperandInfo) -> (Option<bool>, u32) {
+    fn evaluate_alu_second_operand(&self, info: AluSecondOperandInfo) -> (u32, bool) {
         match info {
-            AluSecondOperandInfo::Immediate { base, shift } => (None, base.rotate_right(shift)),
+            AluSecondOperandInfo::Immediate { base, shift } => {
+                let result = base.rotate_right(shift);
+                let shift_out = if shift == 0 {
+                    self.get_carry_flag()
+                } else {
+                    result.get_bit(31)
+                };
+
+                (result, shift_out)
+            }
             AluSecondOperandInfo::Register {
                 register,
                 shift_info,
                 shift_type,
             } => {
-                let register_value = self.read_register(register, |pc| pc);
                 match shift_info {
-                    AluSecondOperandRegisterShiftInfo::Immediate(shift) => {
-                        // Zero Shift Amount (Shift Register by Immediate, with Immediate=0)
-                        //  LSL#0: No shift performed, ie. directly Op2=Rm, the C flag is NOT affected.
-                        //  LSR#0: Interpreted as LSR#32, ie. Op2 becomes zero, C becomes Bit 31 of Rm.
-                        //  ASR#0: Interpreted as ASR#32, ie. Op2 and C are filled by Bit 31 of Rm.
-                        //  ROR#0: Interpreted as RRX#1 (RCR), like ROR#1, but Op2 Bit 31 set to old C.
+                    ArmRegisterOrImmediate::Immediate(shift) => {
+                        // When using R15 as operand (Rm or Rn), the returned value depends on the instruction:
+                        //   - PC+12 if I=0,R=1 (shift by register)
+                        //   - otherwise, PC+8 (shift by immediate).
+                        //
+                        // The first case is always present here.
+                        //
+                        // When shifting by register, only lower 8bit 0-255 used.
+                        let register_value = self.read_register(register, |pc| pc + 4);
 
                         if shift == 0 {
                             match shift_type {
-                                ShiftType::Lsl => (None, register_value),
-                                ShiftType::Lsr => {
-                                    let carry = register_value.get_bit(31);
-                                    (Some(carry), 0)
-                                }
+                                ShiftType::Lsl => (register_value, self.get_carry_flag()),
+                                ShiftType::Lsr => (0, register_value.get_bit(31)),
                                 ShiftType::Asr => {
                                     let carry = register_value.get_bit(31);
                                     let result = if carry { !0 } else { 0 };
 
-                                    (Some(carry), result)
+                                    (result, carry)
                                 }
                                 ShiftType::Ror => {
                                     let old_carry = self.get_carry_flag();
@@ -3661,21 +3867,95 @@ impl Cpu {
                                     let result =
                                         register_value.rotate_right(1).set_bit(31, old_carry);
 
-                                    (Some(new_carry), result)
+                                    (result, new_carry)
                                 }
                             }
                         } else {
-                            shift_type.calculate(register_value, shift)
+                            let result = shift_type.evaluate(register_value, shift);
+                            let carry = match shift_type {
+                                ShiftType::Lsl => register_value.get_bit((32 - shift) as usize),
+                                ShiftType::Lsr => register_value.get_bit((shift - 1) as usize),
+                                ShiftType::Asr => register_value.get_bit((shift - 1) as usize),
+                                ShiftType::Ror => register_value.get_bit((shift - 1) as usize),
+                            };
+
+                            (result, carry)
                         }
                     }
-                    AluSecondOperandRegisterShiftInfo::Register(shift_register) => {
+                    ArmRegisterOrImmediate::Register(shift_register) => {
                         // When using R15 as operand (Rm or Rn), the returned value depends on the instruction:
                         //   - PC+12 if I=0,R=1 (shift by register)
                         //   - otherwise, PC+8 (shift by immediate).
                         //
                         // The first case is always present here.
-                        let shift_amount = self.read_register(shift_register, |pc| pc + 8);
-                        shift_type.calculate(register_value, shift_amount)
+                        //
+                        // When shifting by register, only lower 8bit 0-255 used.
+                        let register_value = self.read_register(register, |pc| pc + 8);
+                        let shift_amount = self.read_register(shift_register, |pc| pc) & 0xFF;
+
+                        match shift_type {
+                            ShiftType::Lsl => {
+                                if shift_amount == 0 {
+                                    (register_value, self.get_carry_flag())
+                                } else if shift_amount < 32 {
+                                    let result =
+                                        ShiftType::Lsl.evaluate(register_value, shift_amount);
+                                    let carry =
+                                        register_value.get_bit((32 - shift_amount) as usize);
+                                    (result, carry)
+                                } else if shift_amount == 32 {
+                                    let carry = register_value.get_bit(0);
+                                    (0, carry)
+                                } else {
+                                    (0, false)
+                                }
+                            }
+                            ShiftType::Lsr => {
+                                if shift_amount == 0 {
+                                    (register_value, self.get_carry_flag())
+                                } else if shift_amount < 32 {
+                                    let result =
+                                        ShiftType::Lsr.evaluate(register_value, shift_amount);
+                                    let carry = register_value.get_bit((shift_amount - 1) as usize);
+
+                                    (result, carry)
+                                } else if shift_amount == 32 {
+                                    let carry = register_value.get_bit(31);
+                                    (0, carry)
+                                } else {
+                                    (0, false)
+                                }
+                            }
+                            ShiftType::Asr => {
+                                if shift_amount == 0 {
+                                    (register_value, self.get_carry_flag())
+                                } else if shift_amount < 32 {
+                                    let result =
+                                        ShiftType::Asr.evaluate(register_value, shift_amount);
+                                    let carry = register_value.get_bit((shift_amount - 1) as usize);
+                                    (result, carry)
+                                } else {
+                                    let carry = register_value.get_bit(31);
+                                    let result = if carry { !0 } else { 0 };
+                                    (result, carry)
+                                }
+                            }
+                            ShiftType::Ror => {
+                                let effective_shift = shift_amount % 32;
+                                if shift_amount == 0 {
+                                    (register_value, self.get_carry_flag())
+                                } else if effective_shift == 0 {
+                                    let carry = register_value.get_bit(31);
+                                    (register_value, carry)
+                                } else {
+                                    let result =
+                                        ShiftType::Ror.evaluate(register_value, effective_shift);
+                                    let carry =
+                                        register_value.get_bit((effective_shift - 1) as usize);
+                                    (result, carry)
+                                }
+                            }
+                        }
                     }
                 }
             }

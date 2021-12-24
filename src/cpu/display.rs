@@ -1,10 +1,10 @@
 use super::{
-    AluOperation, AluSecondOperandInfo, AluSecondOperandRegisterShiftInfo, ArmInstruction,
-    ArmInstructionType, BlockDataTransferIndexType, Cpu, InstructionCondition, MsrSourceInfo,
-    MultiplyOperation, OffsetModifierType, PsrTransferPsr, Register, ShiftType,
-    SingleDataMemoryAccessSize, SingleDataTransferIndexType, SingleDataTransferOffsetInfo,
-    SingleDataTransferOffsetValue, ThumbHighRegisterOperation, ThumbInstruction,
-    ThumbInstructionType, ThumbLoadStoreDataSize, ThumbRegisterOrImmediate,
+    AluOperation, AluSecondOperandInfo, ArmInstruction, ArmInstructionType, ArmRegisterOrImmediate,
+    BlockDataTransferIndexType, Cpu, InstructionCondition, MsrSourceInfo, MultiplyOperation,
+    OffsetModifierType, PsrTransferPsr, Register, ShiftType, SingleDataMemoryAccessSize,
+    SingleDataTransferIndexType, SingleDataTransferOffsetInfo, SingleDataTransferOffsetValue,
+    ThumbHighRegisterOperation, ThumbInstruction, ThumbInstructionType, ThumbLoadStoreDataSize,
+    ThumbRegisterOrImmediate,
 };
 
 use std::fmt::Display;
@@ -498,6 +498,33 @@ impl Display for ArmInstruction {
                     operand_register_rm,
                     operand_register_rs
                 ),
+                MultiplyOperation::Umlal => write!(
+                    f,
+                    "umlal{} {}, {}, {}, {}",
+                    self.condition,
+                    accumulate_register,
+                    destination_register,
+                    operand_register_rm,
+                    operand_register_rs
+                ),
+                MultiplyOperation::Smull => write!(
+                    f,
+                    "smull{} {}, {}, {}, {}",
+                    self.condition,
+                    accumulate_register,
+                    destination_register,
+                    operand_register_rm,
+                    operand_register_rs
+                ),
+                MultiplyOperation::Smlal => write!(
+                    f,
+                    "smlal{} {}, {}, {}, {}",
+                    self.condition,
+                    accumulate_register,
+                    destination_register,
+                    operand_register_rm,
+                    operand_register_rs
+                ),
                 _ => todo!("{:?}", operation),
             },
             ArmInstructionType::Swi { comment } => write!(f, "swi #{}", comment),
@@ -515,11 +542,11 @@ impl Display for ThumbInstruction {
                 source,
                 second_operand,
             } => {
-                write!(f, "{} {}, {}", operation, destination_register, source)?;
-                if let Some(second_operand) = second_operand {
-                    write!(f, ", {}", second_operand)?;
-                }
-                Ok(())
+                write!(
+                    f,
+                    "{} {}, {}, {}",
+                    operation, destination_register, source, second_operand
+                )
             }
             ThumbInstructionType::HighRegister {
                 destination_register,
@@ -888,11 +915,11 @@ impl Display for AluSecondOperandInfo {
     }
 }
 
-impl Display for AluSecondOperandRegisterShiftInfo {
+impl Display for ArmRegisterOrImmediate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AluSecondOperandRegisterShiftInfo::Immediate(value) => write!(f, "#{}", value),
-            AluSecondOperandRegisterShiftInfo::Register(register) => write!(f, "{}", register),
+            ArmRegisterOrImmediate::Immediate(value) => write!(f, "#{}", value),
+            ArmRegisterOrImmediate::Register(register) => write!(f, "{}", register),
         }
     }
 }

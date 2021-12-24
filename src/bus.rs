@@ -97,8 +97,8 @@ pub struct Bus {
     interrupt_master_enable: u16,
     interrupt_enable: u16,
     interrupt_request: u16,
-    lcd: Lcd,
-    apu: Apu,
+    pub lcd: Lcd,
+    pub apu: Apu,
 }
 
 impl Default for Bus {
