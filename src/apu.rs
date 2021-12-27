@@ -1,4 +1,4 @@
-use crate::bus::DataAccess;
+use crate::DataAccess;
 
 // stub for APU registers for now
 
@@ -8,16 +8,16 @@ pub struct Apu {
 }
 
 impl Apu {
-    pub fn read_sound_bias<DataAccessType>(&self, index: u32) -> DataAccessType
+    pub fn read_sound_bias<T>(&self, index: u32) -> T
     where
-        u16: DataAccess<DataAccessType>,
+        u16: DataAccess<T>,
     {
         self.sound_bias.get_data(index)
     }
 
-    pub fn write_sound_bias<DataAccessType>(&mut self, value: DataAccessType, index: u32)
+    pub fn write_sound_bias<T>(&mut self, value: T, index: u32)
     where
-        u16: DataAccess<DataAccessType>,
+        u16: DataAccess<T>,
     {
         self.sound_bias = self.sound_bias.set_data(value, index);
     }

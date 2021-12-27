@@ -1,6 +1,11 @@
-use std::ops::RangeInclusive;
+mod layer_0;
+mod layer_2;
 
-use crate::{bit_manipulation::BitManipulation, bus::DataAccess};
+use crate::{BitManipulation, DataAccess};
+use layer_0::Layer0;
+use layer_2::Layer2;
+
+use std::ops::RangeInclusive;
 
 pub const LCD_WIDTH: usize = 240;
 pub const LCD_HEIGHT: usize = 160;
@@ -22,11 +27,51 @@ enum BgMode {
     Mode5,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum DisplayFrame {
+    Frame0,
+    Frame1,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PaletteDepth {
+    FourBit,
+    EightBit,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TextScreenSize {
+    Size32x32,
+    Size64x32,
+    Size32x64,
+    Size64x64,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
-pub struct PixelColor {
+pub struct Rgb555 {
     pub red: u8,
     pub green: u8,
     pub blue: u8,
+}
+
+impl Rgb555 {
+    const RED_INTENSITY_BIT_RANGE: RangeInclusive<usize> = 0..=4;
+    const GREEN_INTENSITY_BIT_RANGE: RangeInclusive<usize> = 5..=9;
+    const BLUE_INTENSITY_BIT_RANGE: RangeInclusive<usize> = 10..=14;
+
+    fn to_int(self) -> u16 {
+        0.set_bit_range(u16::from(self.red), Self::RED_INTENSITY_BIT_RANGE)
+            .set_bit_range(u16::from(self.green), Self::GREEN_INTENSITY_BIT_RANGE)
+            .set_bit_range(u16::from(self.blue), Self::BLUE_INTENSITY_BIT_RANGE)
+    }
+
+    fn from_int(val: u16) -> Self {
+        let red = val.get_bit_range(Rgb555::RED_INTENSITY_BIT_RANGE) as u8;
+        let green = val.get_bit_range(Rgb555::GREEN_INTENSITY_BIT_RANGE) as u8;
+        let blue = val.get_bit_range(Rgb555::BLUE_INTENSITY_BIT_RANGE) as u8;
+
+        Self { red, green, blue }
+    }
 }
 
 #[derive(Debug)]
@@ -36,13 +81,17 @@ pub struct Lcd {
     lcd_control: u16,
     lcd_status: u16,
     state: LcdState,
-    palette_ram: Box<[u8; 0x400]>,
+    bg_palette_ram: Box<[Rgb555; 0x100]>,
+    obj_palette_ram: Box<[Rgb555; 0x100]>,
     vram: Box<[u8; 0x18000]>,
     oam: Box<[u8; 0x400]>,
     vblank_interrupt_waiting: bool,
     hblank_interrupt_waiting: bool,
     vcount_interrupt_waiting: bool,
-    buffer: [[PixelColor; LCD_WIDTH]; LCD_HEIGHT], // access as buffer[y][x]
+    buffer: Box<[[Rgb555; LCD_WIDTH]; LCD_HEIGHT]>, // access as buffer[y][x]
+    back_buffer: Box<[[Rgb555; LCD_WIDTH]; LCD_HEIGHT]>,
+    layer_0: Layer0,
+    layer_2: Layer2,
 }
 
 pub struct LcdInterruptInfo {
@@ -59,13 +108,17 @@ impl Default for Lcd {
             lcd_control: 0,
             lcd_status: 0,
             state: LcdState::Visible,
-            palette_ram: Box::new([0; 0x400]),
+            bg_palette_ram: Box::new([Rgb555::default(); 0x100]),
+            obj_palette_ram: Box::new([Rgb555::default(); 0x100]),
             vram: Box::new([0; 0x18000]),
             oam: Box::new([0; 0x400]),
             vblank_interrupt_waiting: false,
             hblank_interrupt_waiting: false,
             vcount_interrupt_waiting: false,
-            buffer: [[PixelColor::default(); LCD_WIDTH]; LCD_HEIGHT],
+            buffer: Box::new([[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT]),
+            back_buffer: Box::new([[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT]),
+            layer_0: Layer0::default(),
+            layer_2: Layer2::default(),
         }
     }
 }
@@ -86,34 +139,46 @@ impl Lcd {
             self.set_vblank_flag(true);
             self.vblank_interrupt_waiting = true;
             self.state = LcdState::VBlank;
+            std::mem::swap(&mut self.buffer, &mut self.back_buffer);
         }
 
         if matches!(self.state, LcdState::Visible) {
-            match self.get_bg_mode() {
-                BgMode::Mode4 => {
-                    let pixel_x = self.dot;
-                    let pixel_y = self.vcount;
+            let pixel_x = self.dot;
+            let pixel_y = self.vcount;
 
-                    let byte_idx = (usize::from(pixel_y) * LCD_WIDTH) + usize::from(pixel_x);
+            let current_mode = self.get_bg_mode();
+            let display_frame = self.get_display_frame();
 
-                    let palette_idx = self.vram[byte_idx];
-
-                    self.buffer[usize::from(pixel_y)][usize::from(pixel_x)] = if palette_idx == 0 {
-                        PixelColor {
-                            red: 0,
-                            green: 0,
-                            blue: 0,
-                        }
-                    } else {
-                        PixelColor {
-                            red: 255,
-                            green: 255,
-                            blue: 255,
-                        }
-                    };
-                }
-                _ => {}
+            let layer_0_pixel = if self.get_screen_display_bg_0() {
+                self.layer_0.get_pixel(
+                    pixel_x,
+                    pixel_y,
+                    current_mode,
+                    self.vram.as_slice(),
+                    self.bg_palette_ram.as_slice(),
+                )
+            } else {
+                None
             };
+
+            let layer_2_pixel = if self.get_screen_display_bg_2() {
+                self.layer_2.get_pixel(
+                    pixel_x,
+                    pixel_y,
+                    current_mode,
+                    display_frame,
+                    self.vram.as_slice(),
+                    self.bg_palette_ram.as_slice(),
+                )
+            } else {
+                None
+            };
+
+            let final_pixel = None.or(layer_0_pixel).or(layer_2_pixel);
+
+            if let Some(pixel) = final_pixel {
+                self.back_buffer[usize::from(pixel_y)][usize::from(pixel_x)] = pixel;
+            }
         }
 
         self.dot += 1;
@@ -130,47 +195,88 @@ impl Lcd {
 }
 
 impl Lcd {
-    pub fn read_vcount<DataAccessType>(&self, index: u32) -> DataAccessType
+    pub fn read_vcount<T>(&self, index: u32) -> T
     where
-        u16: DataAccess<DataAccessType>,
+        u16: DataAccess<T>,
     {
         self.vcount.get_data(index)
     }
 
-    pub fn read_lcd_control<DataAccessType>(&self, index: u32) -> DataAccessType
+    pub fn read_lcd_control<T>(&self, index: u32) -> T
     where
-        u16: DataAccess<DataAccessType>,
+        u16: DataAccess<T>,
     {
         self.lcd_control.get_data(index)
     }
 
-    pub fn write_lcd_control<DataAccessType>(&mut self, value: DataAccessType, index: u32)
+    pub fn write_lcd_control<T>(&mut self, value: T, index: u32)
     where
-        u16: DataAccess<DataAccessType>,
+        u16: DataAccess<T>,
     {
         self.lcd_control = self.lcd_control.set_data(value, index);
     }
 
-    pub fn read_lcd_status<DataAccessType>(&self, index: u32) -> DataAccessType
+    pub fn read_lcd_status<T>(&self, index: u32) -> T
     where
-        u16: DataAccess<DataAccessType>,
+        u16: DataAccess<T>,
     {
         self.lcd_status.get_data(index)
     }
 
-    pub fn write_lcd_status<DataAccessType>(&mut self, value: DataAccessType, index: u32)
+    pub fn write_lcd_status<T>(&mut self, value: T, index: u32)
     where
-        u16: DataAccess<DataAccessType>,
+        u16: DataAccess<T>,
     {
         self.lcd_status = self.lcd_status.set_data(value, index);
     }
 
+    const BG_PALETTE_RAM_OFFSET_START: u32 = 0x000;
+    const BG_PALETTE_RAM_OFFSET_END: u32 = 0x1FF;
+    const OBJ_PALETTE_RAM_OFFSET_START: u32 = 0x200;
+    const OBJ_PALETTE_RAM_OFFSET_END: u32 = 0x3FF;
+
     pub fn read_palette_ram(&self, offset: u32) -> u8 {
-        self.palette_ram[offset as usize]
+        let color = match offset {
+            Self::BG_PALETTE_RAM_OFFSET_START..=Self::BG_PALETTE_RAM_OFFSET_END => {
+                let color_idx = (offset - Self::BG_PALETTE_RAM_OFFSET_START) / 2;
+                self.bg_palette_ram[color_idx as usize]
+            }
+            Self::OBJ_PALETTE_RAM_OFFSET_START..=Self::OBJ_PALETTE_RAM_OFFSET_END => {
+                let color_idx = (offset - Self::OBJ_PALETTE_RAM_OFFSET_START) / 2;
+                self.obj_palette_ram[color_idx as usize]
+            }
+            _ => unreachable!(),
+        };
+
+        color.to_int().get_data(offset & 0b1)
     }
 
     pub fn write_palette_ram(&mut self, value: u8, offset: u32) {
-        self.palette_ram[offset as usize] = value;
+        let color = match offset {
+            Self::BG_PALETTE_RAM_OFFSET_START..=Self::BG_PALETTE_RAM_OFFSET_END => {
+                let color_idx = (offset - Self::BG_PALETTE_RAM_OFFSET_START) / 2;
+                &mut self.bg_palette_ram[color_idx as usize]
+            }
+            Self::OBJ_PALETTE_RAM_OFFSET_START..=Self::OBJ_PALETTE_RAM_OFFSET_END => {
+                let color_idx = (offset - Self::OBJ_PALETTE_RAM_OFFSET_START) / 2;
+                &mut self.obj_palette_ram[color_idx as usize]
+            }
+            _ => unreachable!(),
+        };
+
+        let modified_range = match offset & 0b1 {
+            0 => 0..=7,
+            1 => 8..=15,
+            _ => unreachable!(),
+        };
+
+        let new_color = Rgb555::from_int(
+            color
+                .to_int()
+                .set_bit_range(u16::from(value), modified_range),
+        );
+
+        *color = new_color;
     }
 
     pub fn read_vram(&self, offset: u32) -> u8 {
@@ -187,6 +293,90 @@ impl Lcd {
 
     pub fn write_oam(&mut self, value: u8, offset: u32) {
         self.oam[offset as usize] = value;
+    }
+
+    pub fn read_layer0_bg_control<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_0.read_bg_control(index)
+    }
+
+    pub fn write_layer0_bg_control<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_0.write_bg_control(value, index);
+    }
+
+    pub fn read_layer0_x_offset<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_0.read_x_offset(index)
+    }
+
+    pub fn write_layer0_x_offset<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_0.write_x_offset(value, index);
+    }
+
+    pub fn read_layer0_y_offset<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_0.read_y_offset(index)
+    }
+
+    pub fn write_layer0_y_offset<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_0.write_y_offset(value, index);
+    }
+
+    pub fn read_layer2_bg_control<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_2.read_bg_control(index)
+    }
+
+    pub fn write_layer2_bg_control<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_2.write_bg_control(value, index);
+    }
+
+    pub fn read_layer2_text_x_offset<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_2.read_text_x_offset(index)
+    }
+
+    pub fn write_layer2_text_x_offset<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_2.write_text_x_offset(value, index);
+    }
+
+    pub fn read_layer2_text_y_offset<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_2.read_text_y_offset(index)
+    }
+
+    pub fn write_layer2_text_y_offset<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_2.write_text_y_offset(value, index);
     }
 }
 
@@ -205,6 +395,41 @@ impl Lcd {
             _ => unreachable!("prohibited mode {}", mode_index),
         }
     }
+
+    fn get_display_frame(&self) -> DisplayFrame {
+        const DISPLAY_FRAME_SELECT_BIT_INDEX: usize = 4;
+
+        if self.lcd_control.get_bit(DISPLAY_FRAME_SELECT_BIT_INDEX) {
+            DisplayFrame::Frame1
+        } else {
+            DisplayFrame::Frame0
+        }
+    }
+
+    fn get_screen_display_bg_0(&self) -> bool {
+        const SCREEN_DISPLAY_BG_0_BIT_INDEX: usize = 8;
+
+        self.lcd_control.get_bit(SCREEN_DISPLAY_BG_0_BIT_INDEX)
+    }
+
+    fn get_screen_display_bg_1(&self) -> bool {
+        const SCREEN_DISPLAY_BG_1_BIT_INDEX: usize = 9;
+
+        self.lcd_control.get_bit(SCREEN_DISPLAY_BG_1_BIT_INDEX)
+    }
+
+    fn get_screen_display_bg_2(&self) -> bool {
+        const SCREEN_DISPLAY_BG_2_BIT_INDEX: usize = 10;
+
+        self.lcd_control.get_bit(SCREEN_DISPLAY_BG_2_BIT_INDEX)
+    }
+
+    fn get_screen_display_bg_3(&self) -> bool {
+        const SCREEN_DISPLAY_BG_3_BIT_INDEX: usize = 11;
+
+        self.lcd_control.get_bit(SCREEN_DISPLAY_BG_3_BIT_INDEX)
+    }
+
     fn set_vblank_flag(&mut self, set: bool) {
         const VBLANK_FLAG_BIT_INDEX: usize = 0;
 
@@ -244,20 +469,22 @@ impl Lcd {
 
 impl Lcd {
     pub fn poll_pending_interrupts(&mut self) -> LcdInterruptInfo {
-        LcdInterruptInfo {
-            hblank: self.get_hblank_irq_enable() && self.hblank_interrupt_waiting,
-            vblank: self.get_vblank_irq_enable() && self.vblank_interrupt_waiting,
-            vcount: self.get_vcount_irq_enable() && self.vcount_interrupt_waiting,
-        }
-    }
+        let hblank = self.get_hblank_irq_enable() && self.hblank_interrupt_waiting;
+        let vblank = self.get_vblank_irq_enable() && self.vblank_interrupt_waiting;
+        let vcount = self.get_vcount_irq_enable() && self.vcount_interrupt_waiting;
 
-    pub fn clear_pending_interrupts(&mut self) {
         self.hblank_interrupt_waiting = false;
         self.vblank_interrupt_waiting = false;
         self.vcount_interrupt_waiting = false;
+
+        LcdInterruptInfo {
+            hblank,
+            vblank,
+            vcount,
+        }
     }
 
-    pub fn buffer(&self) -> &[[PixelColor; LCD_WIDTH]; LCD_HEIGHT] {
+    pub fn buffer(&self) -> &[[Rgb555; LCD_WIDTH]; LCD_HEIGHT] {
         &self.buffer
     }
 }
