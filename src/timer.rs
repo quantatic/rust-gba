@@ -83,7 +83,6 @@ impl Timer {
         u16: DataAccess<T>,
     {
         self.control = self.control.set_data(value, index);
-        println!("new control: 0b{:016b}", self.control);
     }
 }
 

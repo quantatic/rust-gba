@@ -8,7 +8,7 @@ use crate::BitManipulation;
 use crate::DataAccess;
 
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
-const ROM: &[u8] = include_bytes!("../obj_aff.gba");
+const ROM: &[u8] = include_bytes!("../kirby_dream_land.gba");
 
 #[derive(Debug)]
 pub struct Bus {
@@ -370,6 +370,9 @@ impl Bus {
     const BG3_AFFINE_Y_OFFSET_BASE: u32 = 0x0400003C;
     const BG3_AFFINE_Y_OFFSET_END: u32 = Self::BG3_AFFINE_Y_OFFSET_BASE + 3;
 
+    const SOUND_BASE: u32 = 0x04000060;
+    const SOUND_END: u32 = 0x040000A8;
+
     const SOUND_PWM_CONTROL_BASE: u32 = 0x04000088;
     const SOUND_PWM_CONTROL_END: u32 = Self::SOUND_PWM_CONTROL_BASE + 1;
 
@@ -444,6 +447,9 @@ impl Bus {
 
     const TIMER_3_CONTROL_BASE: u32 = 0x0400010E;
     const TIMER_3_CONTROL_END: u32 = Self::TIMER_3_CONTROL_BASE + 1;
+
+    const SERIAL_BASE: u32 = 0x04000120;
+    const SERIAL_END: u32 = 0x0400015B;
 
     const SIO_CONTROL_BASE: u32 = 0x04000128;
     const SIO_CONTROL_END: u32 = Self::SIO_CONTROL_BASE + 1;
@@ -599,6 +605,8 @@ impl Bus {
                 self.apu.read_sound_bias(address & 0b1)
             }
 
+            Self::SOUND_BASE..=Self::SOUND_END => 0,
+
             Self::DMA_0_SOURCE_BASE..=Self::DMA_0_SOURCE_END => {
                 self.dma_infos[0].read_source_addr(address & 0b11)
             }
@@ -731,6 +739,10 @@ impl Bus {
                 let actual_offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
                 self.game_pak_sram[actual_offset as usize]
             }
+            Self::SERIAL_BASE..=Self::SERIAL_END => {
+                println!("read from stubbed serial {:08X}", address);
+                0
+            }
             _ => todo!("byte read 0x{:08x}", address),
         }
     }
@@ -857,6 +869,9 @@ impl Bus {
             Self::SOUND_PWM_CONTROL_BASE..=Self::SOUND_PWM_CONTROL_END => {
                 self.apu.write_sound_bias(value, address & 0b1)
             }
+            Self::SOUND_BASE..=Self::SOUND_END => {
+                println!("stubbed sound write {:02X} -> [{:08X}]", value, address)
+            }
 
             Self::DMA_0_SOURCE_BASE..=Self::DMA_0_SOURCE_END => {
                 self.dma_infos[0].write_source_addr(value, address & 0b11)
@@ -964,7 +979,7 @@ impl Bus {
             }
             Self::OAM_BASE..=Self::OAM_END => self.lcd.write_oam(value, address - Self::OAM_BASE),
             0x04000008..=0x40001FF => {
-                // println!("stubbed write 0x{:02x} -> 0x{:08x}", value, address)
+                println!("stubbed write 0x{:02x} -> 0x{:08x}", value, address)
             }
             0x04000206..=0x04000207 | 0x0400020A..=0x040002FF | 0x04000410..=0x04000411 => {
                 println!(
@@ -984,6 +999,9 @@ impl Bus {
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
                 let actual_offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
                 self.game_pak_sram[actual_offset as usize] = value;
+            }
+            Self::SERIAL_BASE..=Self::SERIAL_END => {
+                println!("stubbed serial write {:02X} -> [{:08X}]", value, address);
             }
             _ => todo!("0x{:02x} -> 0x{:08x}", value, address),
         }

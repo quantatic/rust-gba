@@ -262,8 +262,10 @@ impl ObjectAttributeInfo {
         self.attribute_2.get_bit_range(TILE_NUMBER_BIT_RANGE)
     }
 
-    fn get_priority(&self) -> () {
-        todo!()
+    fn get_bg_priority(&self) -> u16 {
+        const BG_PRIORITY_BIT_RANGE: RangeInclusive<usize> = 10..=11;
+
+        self.attribute_2.get_bit_range(BG_PRIORITY_BIT_RANGE)
     }
 
     fn get_palette_number(&self) -> u8 {
@@ -391,16 +393,16 @@ impl Lcd {
             let current_mode = self.get_bg_mode();
             let display_frame = self.get_display_frame();
 
-            if pixel_x == 0 && pixel_y == 0 {
-                println!("{:?}", current_mode);
-                println!(
-                    "{}, {}, {}, {}",
-                    self.get_screen_display_bg_0(),
-                    self.get_screen_display_bg_1(),
-                    self.get_screen_display_bg_2(),
-                    self.get_screen_display_bg_3()
-                );
-            }
+            // if pixel_x == 0 && pixel_y == 0 {
+            //     println!("{:?}", current_mode);
+            //     println!(
+            //         "{}, {}, {}, {}",
+            //         self.get_screen_display_bg_0(),
+            //         self.get_screen_display_bg_1(),
+            //         self.get_screen_display_bg_2(),
+            //         self.get_screen_display_bg_3()
+            //     );
+            // }
 
             let layer_0_pixel = if self.get_screen_display_bg_0() {
                 self.layer_0
@@ -444,7 +446,6 @@ impl Lcd {
             } else {
                 None
             };
-
             let layer_3_pixel = if self.get_screen_display_bg_3() {
                 self.layer_3
                     .get_pixel(
@@ -459,16 +460,27 @@ impl Lcd {
                 None
             };
 
-            let sprite_pixel = self
-                .get_sprite_pixel(pixel_x, pixel_y)
-                .map(|pixel| (pixel, 0));
+            let sprite_pixel = self.get_sprite_pixel(pixel_x, pixel_y);
 
-            let final_pixel = None
-                .or(sprite_pixel)
-                .or(layer_0_pixel)
-                .or(layer_1_pixel)
-                .or(layer_2_pixel)
-                .or(layer_3_pixel);
+            let mut final_pixel = None;
+            for pixel in [
+                sprite_pixel,
+                layer_0_pixel,
+                layer_1_pixel,
+                layer_2_pixel,
+                layer_3_pixel,
+            ] {
+                final_pixel =
+                    final_pixel.map_or(pixel, |(final_pixel_color, final_pixel_priority)| {
+                        if let Some((current_pixel_color, current_pixel_priority)) = pixel {
+                            if current_pixel_priority < final_pixel_priority {
+                                return Some((current_pixel_color, current_pixel_priority));
+                            }
+                        }
+
+                        Some((final_pixel_color, final_pixel_priority))
+                    });
+            }
 
             let drawn_pixel = match final_pixel {
                 Some((pixel, _)) => pixel,
@@ -500,7 +512,7 @@ impl Lcd {
         }
     }
 
-    fn get_sprite_pixel(&self, pixel_x: u16, pixel_y: u16) -> Option<Rgb555> {
+    fn get_sprite_pixel(&self, pixel_x: u16, pixel_y: u16) -> Option<(Rgb555, u16)> {
         const OBJ_TILE_DATA_VRAM_BASE: usize = 0x10000;
         const TILE_SIZE: u16 = 8;
         const WORLD_WIDTH: u16 = 512;
@@ -689,7 +701,10 @@ impl Lcd {
                 }
             };
 
-            return Some(self.obj_palette_ram[usize::from(palette_idx)]);
+            return Some((
+                self.obj_palette_ram[usize::from(palette_idx)],
+                obj.get_bg_priority(),
+            ));
         }
 
         None

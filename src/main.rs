@@ -9,7 +9,6 @@ mod timer;
 
 use std::error::Error;
 
-use lazy_static::lazy_static;
 use pixels::{wgpu::TextureFormat, PixelsBuilder, SurfaceTexture};
 use winit::{
     event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},

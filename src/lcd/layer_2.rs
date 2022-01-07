@@ -32,6 +32,7 @@ impl Layer2 {
     ) -> Option<Rgb555> {
         match mode {
             BgMode::Mode0 => {
+                let map_base = self.bg_map_data_base() as usize;
                 // text mode
 
                 let x = pixel_x + self.get_text_x_offset();
@@ -80,20 +81,29 @@ impl Layer2 {
                 let vertical_flip = map_data.get_bit(11);
                 let palette_number = map_data.get_bit_range(12..=15) as u8;
 
-                let tile_data_x = if vertical_flip {
+                let tile_data_x = if horizontal_flip {
                     7 - usize::from(x % 8)
                 } else {
                     usize::from(x % 8)
                 };
 
-                let tile_data_y = if horizontal_flip {
+                let tile_data_y = if vertical_flip {
                     7 - usize::from(y % 8)
                 } else {
                     usize::from(y % 8)
                 };
 
                 let palette_idx = match self.get_palette_depth() {
-                    PaletteDepth::EightBit => todo!(),
+                    PaletteDepth::EightBit => {
+                        let tile_idx = tile_data_base
+                            + (64 * usize::from(tile_number))
+                            + (tile_data_y * 8)
+                            + tile_data_x;
+
+                        let palette_idx = vram[tile_idx];
+
+                        palette_idx
+                    }
                     PaletteDepth::FourBit => {
                         let tile_idx = tile_data_base
                             + (32 * usize::from(tile_number))
@@ -138,8 +148,10 @@ impl Layer2 {
                 let map_data_y = actual_y / 8.0;
 
                 let map_tiles: u16 = match self.get_affine_screen_size() {
+                    AffineScreenSize::Size16x16 => 16,
+                    AffineScreenSize::Size32x32 => 32,
                     AffineScreenSize::Size64x64 => 64,
-                    _ => todo!(),
+                    AffineScreenSize::Size128x128 => 128,
                 };
 
                 let (actual_map_data_x, actual_map_data_y) =

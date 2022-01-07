@@ -68,20 +68,33 @@ impl Layer1 {
                 let vertical_flip = map_data.get_bit(11);
                 let palette_number = map_data.get_bit_range(12..=15) as u8;
 
-                let tile_data_x = if vertical_flip {
+                let tile_data_x = if horizontal_flip {
                     7 - usize::from(x % 8)
                 } else {
                     usize::from(x % 8)
                 };
 
-                let tile_data_y = if horizontal_flip {
+                let tile_data_y = if vertical_flip {
                     7 - usize::from(y % 8)
                 } else {
                     usize::from(y % 8)
                 };
 
                 let palette_idx = match self.get_palette_depth() {
-                    PaletteDepth::EightBit => todo!(),
+                    PaletteDepth::EightBit => {
+                        let tile_idx = tile_data_base
+                            + (64 * usize::from(tile_number))
+                            + (tile_data_y * 8)
+                            + tile_data_x;
+
+                        let palette_idx = vram[tile_idx];
+
+                        if palette_idx == 0 {
+                            return None;
+                        }
+
+                        palette_idx
+                    }
                     PaletteDepth::FourBit => {
                         let tile_idx = tile_data_base
                             + (32 * usize::from(tile_number))
