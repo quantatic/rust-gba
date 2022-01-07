@@ -1674,12 +1674,12 @@ impl Cpu {
             SingleDataMemoryAccessSize::Byte => {
                 self.bus.write_byte_address(value as u8, actual_address)
             }
-            SingleDataMemoryAccessSize::Word => {
-                self.bus.write_word_address(value, actual_address & (!0b11))
-            }
             SingleDataMemoryAccessSize::HalfWord => self
                 .bus
                 .write_halfword_address(value as u16, actual_address & (!0b1)),
+            SingleDataMemoryAccessSize::Word => {
+                self.bus.write_word_address(value, actual_address & (!0b11))
+            }
             _ => todo!("{:?}", access_size),
         };
     }

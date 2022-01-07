@@ -580,6 +580,8 @@ impl Cpu {
 
             if pc == 0x08000000 || pc == 0x0A000000 || pc == 0x0C000000 {
                 self.bios_finished = true;
+            } else if pc == 0x00000000 {
+                self.bios_finished = false;
             }
         }
 

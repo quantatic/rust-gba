@@ -5,6 +5,7 @@ mod cpu;
 mod data_access;
 mod keypad;
 mod lcd;
+mod timer;
 
 use std::{error::Error, panic::PanicInfo, sync::Mutex};
 
@@ -76,7 +77,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
 
                 let draw_buffer = pixels.get_frame();
-                let lcd_buffer = cpu.bus.lcd.buffer();
+                let lcd_buffer = cpu.bus.lcd.get_buffer();
                 for (index, pixel) in lcd_buffer.iter().flatten().enumerate() {
                     draw_buffer[(index * 4)..][0] = (pixel.red << 3) | (pixel.red >> 2);
                     draw_buffer[(index * 4)..][1] = (pixel.green << 3) | (pixel.green >> 2);

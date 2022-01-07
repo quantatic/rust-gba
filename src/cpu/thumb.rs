@@ -1425,10 +1425,10 @@ impl Cpu {
                 .write_byte_address(source_register_value as u8, real_address),
             ThumbLoadStoreDataSize::HalfWord => self
                 .bus
-                .write_halfword_address(source_register_value as u16, real_address),
+                .write_halfword_address(source_register_value as u16, real_address & (!0b1)),
             ThumbLoadStoreDataSize::Word => self
                 .bus
-                .write_word_address(source_register_value, real_address),
+                .write_word_address(source_register_value, real_address & (!0b11)),
         }
     }
 

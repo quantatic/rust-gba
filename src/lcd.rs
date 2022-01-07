@@ -23,6 +23,13 @@ enum LcdState {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct LcdStateChangeInfo {
+    pub vblank_entered: bool,
+    pub hblank_entered: bool,
+    pub vcount_matched: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
 enum BgMode {
     Mode0,
     Mode1,
@@ -306,9 +313,6 @@ pub struct Lcd {
     vram: Box<[u8; 0x18000]>,
     obj_attributes: Box<[ObjectAttributeInfo; 0x100]>,
     obj_rotations: Box<[ObjectRotationScalingInfo; 0x40]>,
-    vblank_interrupt_waiting: bool,
-    hblank_interrupt_waiting: bool,
-    vcount_interrupt_waiting: bool,
     buffer: Box<[[Rgb555; LCD_WIDTH]; LCD_HEIGHT]>, // access as buffer[y][x]
     back_buffer: Box<[[Rgb555; LCD_WIDTH]; LCD_HEIGHT]>,
     layer_0: Layer0,
@@ -353,9 +357,6 @@ impl Default for Lcd {
             vram: Box::new([0; 0x18000]),
             obj_attributes: Box::new([ObjectAttributeInfo::default(); 0x100]),
             obj_rotations: Box::new([ObjectRotationScalingInfo::default(); 0x40]),
-            vblank_interrupt_waiting: false,
-            hblank_interrupt_waiting: false,
-            vcount_interrupt_waiting: false,
             buffer: Box::new([[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT]),
             back_buffer: Box::new([[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT]),
             layer_0: Layer0::default(),
@@ -367,7 +368,11 @@ impl Default for Lcd {
 }
 
 impl Lcd {
-    pub fn step(&mut self) {
+    pub fn step(&mut self) -> LcdStateChangeInfo {
+        let mut vblank_entered = false;
+        let mut hblank_entered = false;
+        let mut vcount_matched = false;
+
         if self.vcount < 160 {
             if self.dot == 0 {
                 self.set_vblank_flag(false);
@@ -375,12 +380,11 @@ impl Lcd {
                 self.state = LcdState::Visible;
             } else if self.dot == 240 {
                 self.set_hblank_flag(true);
-                self.hblank_interrupt_waiting = true;
+                hblank_entered = true;
                 self.state = LcdState::HBlank;
             }
         } else if self.vcount == 160 && self.dot == 0 {
-            self.set_vblank_flag(true);
-            self.vblank_interrupt_waiting = true;
+            vblank_entered = true;
             self.state = LcdState::VBlank;
             std::mem::swap(&mut self.buffer, &mut self.back_buffer);
         }
@@ -392,16 +396,16 @@ impl Lcd {
             let current_mode = self.get_bg_mode();
             let display_frame = self.get_display_frame();
 
-            // if pixel_x == 0 && pixel_y == 0 {
-            //     println!("{:?}", current_mode);
-            //     println!(
-            //         "{}, {}, {}, {}",
-            //         self.get_screen_display_bg_0(),
-            //         self.get_screen_display_bg_1(),
-            //         self.get_screen_display_bg_2(),
-            //         self.get_screen_display_bg_3()
-            //     );
-            // }
+            if pixel_x == 0 && pixel_y == 0 {
+                println!("{:?}", current_mode);
+                println!(
+                    "{}, {}, {}, {}",
+                    self.get_screen_display_bg_0(),
+                    self.get_screen_display_bg_1(),
+                    self.get_screen_display_bg_2(),
+                    self.get_screen_display_bg_3()
+                );
+            }
 
             let layer_0_pixel = if self.get_screen_display_bg_0() {
                 self.layer_0.get_pixel(
@@ -480,8 +484,14 @@ impl Lcd {
             }
 
             if self.vcount == self.get_vcount_setting() {
-                self.vcount_interrupt_waiting = true;
+                vcount_matched = true;
             }
+        }
+
+        LcdStateChangeInfo {
+            hblank_entered,
+            vblank_entered,
+            vcount_matched,
         }
     }
 
@@ -680,7 +690,6 @@ impl Lcd {
         u16: DataAccess<T>,
     {
         self.lcd_control = self.lcd_control.set_data(value, index);
-        println!("new lcd control: 0b{:016b}", self.lcd_control);
     }
 
     pub fn read_lcd_status<T>(&self, index: u32) -> T
@@ -1233,23 +1242,7 @@ impl Lcd {
 }
 
 impl Lcd {
-    pub fn poll_pending_interrupts(&mut self) -> LcdInterruptInfo {
-        let hblank = self.hblank_interrupt_waiting;
-        let vblank = self.vblank_interrupt_waiting;
-        let vcount = self.vcount_interrupt_waiting;
-
-        self.hblank_interrupt_waiting = false;
-        self.vblank_interrupt_waiting = false;
-        self.vcount_interrupt_waiting = false;
-
-        LcdInterruptInfo {
-            hblank,
-            vblank,
-            vcount,
-        }
-    }
-
-    pub fn buffer(&self) -> &[[Rgb555; LCD_WIDTH]; LCD_HEIGHT] {
+    pub fn get_buffer(&self) -> &[[Rgb555; LCD_WIDTH]; LCD_HEIGHT] {
         &self.buffer
     }
 }

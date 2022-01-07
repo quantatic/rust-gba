@@ -2,22 +2,25 @@ use std::ops::RangeInclusive;
 
 use crate::apu::Apu;
 use crate::keypad::Keypad;
-use crate::lcd::{Lcd, LcdInterruptInfo};
+use crate::lcd::{Lcd, LcdInterruptInfo, LcdStateChangeInfo};
+use crate::timer::Timer;
 use crate::BitManipulation;
 use crate::DataAccess;
 
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
-const ROM: &[u8] = include_bytes!("../sbb_aff.gba");
+const ROM: &[u8] = include_bytes!("../minish_cap.gba");
 
 #[derive(Debug)]
 pub struct Bus {
     chip_wram: Box<[u8; 0x8000]>,
-    pub board_wram: Box<[u8; 0x40000]>,
+    board_wram: Box<[u8; 0x40000]>,
+    game_pak_sram: Box<[u8; 0x10000]>,
     cycle_count: usize,
     interrupt_master_enable: u16,
     interrupt_enable: u16,
     interrupt_request: u16,
     dma_infos: [DmaInfo; 4],
+    timers: [Timer; 4],
     pub lcd: Lcd,
     pub apu: Apu,
     pub keypad: Keypad,
@@ -28,11 +31,23 @@ impl Default for Bus {
         Self {
             chip_wram: Box::new([0; 0x8000]),
             board_wram: Box::new([0; 0x40000]),
+            game_pak_sram: Box::new([0; 0x10000]),
             cycle_count: 0,
             interrupt_master_enable: 0,
             interrupt_enable: 0,
             interrupt_request: 0,
-            dma_infos: [DmaInfo::default(); 4],
+            dma_infos: [
+                DmaInfo::default(),
+                DmaInfo::default(),
+                DmaInfo::default(),
+                DmaInfo::default(),
+            ],
+            timers: [
+                Timer::default(),
+                Timer::default(),
+                Timer::default(),
+                Timer::default(),
+            ],
             lcd: Lcd::default(),
             apu: Apu::default(),
             keypad: Keypad::default(),
@@ -68,6 +83,24 @@ struct DmaInfo {
     dest_addr: u32,
     word_count: u16,
     dma_control: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum InterruptType {
+    VBlank,
+    HBlank,
+    VCount,
+    Timer0,
+    Timer1,
+    Timer2,
+    Timer3,
+    Serial,
+    Dma0,
+    Dma1,
+    Dma2,
+    Dma3,
+    Keypad,
+    Gamepak,
 }
 
 impl DmaInfo {
@@ -125,13 +158,6 @@ impl DmaInfo {
         u16: DataAccess<T>,
     {
         self.dma_control = self.dma_control.set_data(value, index);
-        // println!(
-        //     "new start timing: {:?}, enabled: {}, repeat: {}",
-        //     self.get_dma_start_timing(),
-        //     self.get_dma_enable(),
-        //     self.get_dma_repeat()
-        // );
-        // println!("---------");
     }
 }
 
@@ -154,9 +180,12 @@ impl DmaInfo {
     }
 
     fn get_source_addr_control(&self) -> DmaAddrControl {
-        const DEST_ADDR_CONTROL_BIT_RANGE: RangeInclusive<usize> = 5..=6;
+        const SOURCE_ADDR_CONTROL_BIT_RANGE: RangeInclusive<usize> = 7..=8;
 
-        match self.dma_control.get_bit_range(DEST_ADDR_CONTROL_BIT_RANGE) {
+        match self
+            .dma_control
+            .get_bit_range(SOURCE_ADDR_CONTROL_BIT_RANGE)
+        {
             Self::INCREMENT_ADDR_CONTROL => DmaAddrControl::Increment,
             Self::DECREMENT_ADDR_CONTROL => DmaAddrControl::Decrement,
             Self::FIXED_ADDR_CONTROL => DmaAddrControl::Fixed,
@@ -172,7 +201,7 @@ impl DmaInfo {
     }
 
     fn get_dma_transfer_type(&self) -> DmaTransferType {
-        const DMA_TRANSFER_TYPE_BIT_INDEX: usize = 8;
+        const DMA_TRANSFER_TYPE_BIT_INDEX: usize = 10;
 
         if self.dma_control.get_bit(DMA_TRANSFER_TYPE_BIT_INDEX) {
             DmaTransferType::Bit32
@@ -217,36 +246,28 @@ impl DmaInfo {
 
 impl Bus {
     pub fn step(&mut self) {
-        let lcd_interrupts = self.lcd.poll_pending_interrupts();
-
-        if lcd_interrupts.vblank && self.lcd.get_vblank_irq_enable() {
-            self.interrupt_request = self
-                .interrupt_request
-                .set_bit(Self::LCD_VBLANK_INTERRUPT_BIT_INDEX, true);
-        }
-
-        if lcd_interrupts.hblank && self.lcd.get_hblank_irq_enable() {
-            self.interrupt_request = self
-                .interrupt_request
-                .set_bit(Self::LCD_HBLANK_INTERRUPT_BIT_INDEX, true);
-        }
-
-        if lcd_interrupts.vcount && self.lcd.get_vcount_irq_enable() {
-            self.interrupt_request = self
-                .interrupt_request
-                .set_bit(Self::LCD_VCOUNT_INTERRUPT_BIT_INDEX, true);
-        }
-
-        self.step_dma(lcd_interrupts);
-
         if self.keypad.poll_pending_interrupts() {
-            self.interrupt_request = self
-                .interrupt_request
-                .set_bit(Self::KEYPAD_INTERRUPT_BIT_INDEX, true);
+            self.request_interrupt(InterruptType::Keypad);
         }
+
+        self.step_timers();
 
         if self.cycle_count % 4 == 0 {
-            self.lcd.step();
+            let state_changes = self.lcd.step();
+
+            self.step_dma(state_changes);
+
+            if state_changes.vblank_entered && self.lcd.get_vblank_irq_enable() {
+                self.request_interrupt(InterruptType::VBlank);
+            }
+
+            if state_changes.hblank_entered && self.lcd.get_hblank_irq_enable() {
+                self.request_interrupt(InterruptType::HBlank);
+            }
+
+            if state_changes.vcount_matched && self.lcd.get_vcount_irq_enable() {
+                self.request_interrupt(InterruptType::VCount);
+            }
         }
 
         self.cycle_count += 1;
@@ -391,6 +412,33 @@ impl Bus {
     const DMA_3_CONTROL_BASE: u32 = 0x040000DE;
     const DMA_3_CONTROL_END: u32 = Self::DMA_3_CONTROL_BASE + 1;
 
+    const TIMER_0_COUNTER_RELOAD_BASE: u32 = 0x04000100;
+    const TIMER_0_COUNTER_RELOAD_END: u32 = Self::TIMER_0_COUNTER_RELOAD_BASE + 1;
+
+    const TIMER_0_CONTROL_BASE: u32 = 0x04000102;
+    const TIMER_0_CONTROL_END: u32 = Self::TIMER_0_CONTROL_BASE + 1;
+
+    const TIMER_1_COUNTER_RELOAD_BASE: u32 = 0x04000104;
+    const TIMER_1_COUNTER_RELOAD_END: u32 = Self::TIMER_1_COUNTER_RELOAD_BASE + 1;
+
+    const TIMER_1_CONTROL_BASE: u32 = 0x04000106;
+    const TIMER_1_CONTROL_END: u32 = Self::TIMER_1_CONTROL_BASE + 1;
+
+    const TIMER_2_COUNTER_RELOAD_BASE: u32 = 0x04000108;
+    const TIMER_2_COUNTER_RELOAD_END: u32 = Self::TIMER_2_COUNTER_RELOAD_BASE + 1;
+
+    const TIMER_2_CONTROL_BASE: u32 = 0x0400010A;
+    const TIMER_2_CONTROL_END: u32 = Self::TIMER_2_CONTROL_BASE + 1;
+
+    const TIMER_3_COUNTER_RELOAD_BASE: u32 = 0x0400010C;
+    const TIMER_3_COUNTER_RELOAD_END: u32 = Self::TIMER_3_COUNTER_RELOAD_BASE + 1;
+
+    const TIMER_3_CONTROL_BASE: u32 = 0x0400010E;
+    const TIMER_3_CONTROL_END: u32 = Self::TIMER_3_CONTROL_BASE + 1;
+
+    const SIO_CONTROL_BASE: u32 = 0x04000128;
+    const SIO_CONTROL_END: u32 = Self::SIO_CONTROL_BASE + 1;
+
     const KEY_STATUS_BASE: u32 = 0x04000130;
     const KEY_STATUS_END: u32 = Self::KEY_STATUS_BASE + 1;
 
@@ -432,6 +480,10 @@ impl Bus {
 
     const WAIT_STATE_3_ROM_BASE: u32 = 0x0C000000;
     const WAIT_STATE_3_ROM_END: u32 = 0x0DFFFFFF;
+
+    const GAME_PAK_SRAM_BASE: u32 = 0x0E000000;
+    const GAME_PAK_SRAM_END: u32 = 0x0E00FFFF;
+    const GAME_PAK_SRAM_SIZE: u32 = 0x10000;
 
     const MEMORY_SIZE: u32 = 0x10000000;
 
@@ -580,6 +632,39 @@ impl Bus {
                 self.dma_infos[3].read_dma_control(address & 0b1)
             }
 
+            Self::TIMER_0_CONTROL_BASE..=Self::TIMER_0_CONTROL_END => {
+                self.timers[0].read_timer_control(address & 0b1)
+            }
+            Self::TIMER_0_COUNTER_RELOAD_BASE..=Self::TIMER_0_COUNTER_RELOAD_END => {
+                self.timers[0].read_timer_counter_reload(address & 0b1)
+            }
+
+            Self::TIMER_1_CONTROL_BASE..=Self::TIMER_1_CONTROL_END => {
+                self.timers[1].read_timer_control(address & 0b1)
+            }
+            Self::TIMER_1_COUNTER_RELOAD_BASE..=Self::TIMER_1_COUNTER_RELOAD_END => {
+                self.timers[1].read_timer_counter_reload(address & 0b1)
+            }
+
+            Self::TIMER_2_CONTROL_BASE..=Self::TIMER_2_CONTROL_END => {
+                self.timers[2].read_timer_control(address & 0b1)
+            }
+            Self::TIMER_2_COUNTER_RELOAD_BASE..=Self::TIMER_2_COUNTER_RELOAD_END => {
+                self.timers[2].read_timer_counter_reload(address & 0b1)
+            }
+
+            Self::TIMER_3_CONTROL_BASE..=Self::TIMER_3_CONTROL_END => {
+                self.timers[3].read_timer_control(address & 0b1)
+            }
+            Self::TIMER_3_COUNTER_RELOAD_BASE..=Self::TIMER_3_COUNTER_RELOAD_END => {
+                self.timers[3].read_timer_counter_reload(address & 0b1)
+            }
+
+            Self::SIO_CONTROL_BASE..=Self::SIO_CONTROL_END => {
+                println!("read from stubbed SIOCNT");
+                0
+            }
+
             Self::KEY_STATUS_BASE..=Self::KEY_STATUS_END => {
                 self.keypad.read_key_status(address & 0b1)
             }
@@ -608,6 +693,9 @@ impl Bus {
                 println!("UNIMPLEMENTED POSTFLG");
                 0
             }
+            Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
+                self.lcd.read_palette_ram(address - Self::PALETTE_RAM_BASE)
+            }
             Self::VRAM_BASE..=Self::VRAM_END => self.lcd.read_vram(address - Self::VRAM_BASE),
             Self::OAM_BASE..=Self::OAM_END => self.lcd.read_oam(address - Self::OAM_BASE),
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
@@ -620,6 +708,10 @@ impl Bus {
                 self.read_gamepak(address - Self::WAIT_STATE_3_ROM_BASE)
             }
             0x0400020a..=0x0400020b => 0,
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
+                let actual_offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
+                self.game_pak_sram[actual_offset as usize]
+            }
             _ => todo!("byte read 0x{:08x}", address),
         }
     }
@@ -643,7 +735,7 @@ impl Bus {
 
     pub fn write_byte_address(&mut self, value: u8, address: u32) {
         match address % Self::MEMORY_SIZE {
-            0x00000000..=0x00003FFF => {} // println!("{:02X} -> ignored BIOS write", value),
+            Self::BIOS_BASE..=Self::BIOS_END => {} // println!("{:02X} -> ignored BIOS write", value),
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
                 let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
                 self.board_wram[actual_offset as usize] = value;
@@ -789,6 +881,34 @@ impl Bus {
                 self.dma_infos[3].write_dma_control(value, address & 0b1)
             }
 
+            Self::TIMER_0_CONTROL_BASE..=Self::TIMER_0_CONTROL_END => {
+                self.timers[0].write_timer_control(value, address & 0b1)
+            }
+            Self::TIMER_0_COUNTER_RELOAD_BASE..=Self::TIMER_0_COUNTER_RELOAD_END => {
+                self.timers[0].write_timer_counter_reload(value, address & 0b1)
+            }
+
+            Self::TIMER_1_CONTROL_BASE..=Self::TIMER_1_CONTROL_END => {
+                self.timers[1].write_timer_control(value, address & 0b1)
+            }
+            Self::TIMER_1_COUNTER_RELOAD_BASE..=Self::TIMER_1_COUNTER_RELOAD_END => {
+                self.timers[1].write_timer_counter_reload(value, address & 0b1)
+            }
+
+            Self::TIMER_2_CONTROL_BASE..=Self::TIMER_2_CONTROL_END => {
+                self.timers[2].write_timer_control(value, address & 0b1)
+            }
+            Self::TIMER_2_COUNTER_RELOAD_BASE..=Self::TIMER_2_COUNTER_RELOAD_END => {
+                self.timers[2].write_timer_counter_reload(value, address & 0b1)
+            }
+
+            Self::TIMER_3_CONTROL_BASE..=Self::TIMER_3_CONTROL_END => {
+                self.timers[3].write_timer_control(value, address & 0b1)
+            }
+            Self::TIMER_3_COUNTER_RELOAD_BASE..=Self::TIMER_3_COUNTER_RELOAD_END => {
+                self.timers[3].write_timer_counter_reload(value, address & 0b1)
+            }
+
             Self::KEY_CONTROL_BASE..=Self::KEY_CONTROL_END => self
                 .keypad
                 .write_key_interrupt_control(value, address & 0b1),
@@ -822,6 +942,19 @@ impl Bus {
                     "ignoring unused byte write of 0x{:02x} to 0x{:08x}",
                     value, address
                 )
+            }
+            Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
+                println!("ignoring write of {:02X} to wait state 1 rom", value);
+            }
+            Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
+                println!("ignoring write of {:02X} to wait state 2 rom", value);
+            }
+            Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => {
+                println!("ignoring write of {:02X} to wait state 3 rom", value);
+            }
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
+                let actual_offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
+                self.game_pak_sram[actual_offset as usize] = value;
             }
             _ => todo!("0x{:02x} -> 0x{:08x}", value, address),
         }
@@ -908,6 +1041,10 @@ impl Bus {
     const LCD_VBLANK_INTERRUPT_BIT_INDEX: usize = 0;
     const LCD_HBLANK_INTERRUPT_BIT_INDEX: usize = 1;
     const LCD_VCOUNT_INTERRUPT_BIT_INDEX: usize = 2;
+    const TIMER_0_OVERFLOW_INTERRUPT_BIT_INDEX: usize = 3;
+    const TIMER_1_OVERFLOW_INTERRUPT_BIT_INDEX: usize = 4;
+    const TIMER_2_OVERFLOW_INTERRUPT_BIT_INDEX: usize = 5;
+    const TIMER_3_OVERFLOW_INTERRUPT_BIT_INDEX: usize = 6;
     const DMA_0_INTERRUPT_BIT_INDEX: usize = 8;
     const DMA_1_INTERRUPT_BIT_INDEX: usize = 9;
     const DMA_2_INTERRUPT_BIT_INDEX: usize = 10;
@@ -920,13 +1057,13 @@ impl Bus {
             .get_bit(INTERRUPT_MASTER_ENABLE_BIT_INDEX)
     }
 
-    fn step_dma(&mut self, interrupts: LcdInterruptInfo) {
+    fn step_dma(&mut self, state_changes: LcdStateChangeInfo) {
         for (dma_idx, dma) in self.dma_infos.into_iter().enumerate() {
             let dma_triggered = if dma.get_dma_enable() {
                 match dma.get_dma_start_timing() {
                     DmaStartTiming::Immediately => true,
-                    DmaStartTiming::VBlank => interrupts.vblank,
-                    DmaStartTiming::HBlank => interrupts.hblank,
+                    DmaStartTiming::VBlank => state_changes.vblank_entered,
+                    DmaStartTiming::HBlank => state_changes.hblank_entered,
                     DmaStartTiming::Special => false,
                 }
             } else {
@@ -954,10 +1091,12 @@ impl Bus {
                         DmaTransferType::Bit16 => {
                             let source_data = self.read_halfword_address(dma_source);
                             self.write_halfword_address(source_data, dma_dest);
+                            println!("u16 {:04X} -> [{:08X}]", source_data, dma_dest)
                         }
                         DmaTransferType::Bit32 => {
                             let source_data = self.read_word_address(dma_source);
                             self.write_word_address(source_data, dma_dest);
+                            println!("u32 {:08X} -> [{:08X}]", source_data, dma_dest)
                         }
                     }
 
@@ -991,19 +1130,67 @@ impl Bus {
                 }
 
                 if dma.get_irq_at_end() {
-                    let irq_bit_index = match dma_idx {
-                        0 => Self::DMA_0_INTERRUPT_BIT_INDEX,
-                        1 => Self::DMA_1_INTERRUPT_BIT_INDEX,
-                        2 => Self::DMA_2_INTERRUPT_BIT_INDEX,
-                        3 => Self::DMA_3_INTERRUPT_BIT_INDEX,
+                    let interrupt_type = match dma_idx {
+                        0 => InterruptType::Dma0,
+                        1 => InterruptType::Dma1,
+                        2 => InterruptType::Dma2,
+                        3 => InterruptType::Dma3,
                         _ => unreachable!(),
                     };
 
-                    self.interrupt_request = self.interrupt_request.set_bit(irq_bit_index, true);
+                    self.request_interrupt(interrupt_type);
                 }
                 return;
             }
         }
+    }
+
+    fn step_timers(&mut self) {
+        let mut timer_overflow = false;
+        let mut interrupt_requests = Vec::new();
+        for (i, timer) in self.timers.iter_mut().enumerate() {
+            timer_overflow = timer.step(timer_overflow);
+
+            if timer_overflow && timer.get_timer_irq_enable() {
+                interrupt_requests.push(i);
+            }
+        }
+
+        if !interrupt_requests.is_empty() {
+            println!("timer interrupt requests: {:?}", interrupt_requests);
+        }
+
+        for i in interrupt_requests {
+            let interrupt_type = match i {
+                0 => InterruptType::Timer0,
+                1 => InterruptType::Timer1,
+                2 => InterruptType::Timer2,
+                3 => InterruptType::Timer3,
+                _ => unreachable!(),
+            };
+
+            self.request_interrupt(interrupt_type);
+        }
+    }
+
+    fn request_interrupt(&mut self, interrupt: InterruptType) {
+        let bit_index = match interrupt {
+            InterruptType::VBlank => Self::LCD_VBLANK_INTERRUPT_BIT_INDEX,
+            InterruptType::HBlank => Self::LCD_HBLANK_INTERRUPT_BIT_INDEX,
+            InterruptType::VCount => Self::LCD_VCOUNT_INTERRUPT_BIT_INDEX,
+            InterruptType::Timer0 => Self::TIMER_0_OVERFLOW_INTERRUPT_BIT_INDEX,
+            InterruptType::Timer1 => Self::TIMER_1_OVERFLOW_INTERRUPT_BIT_INDEX,
+            InterruptType::Timer2 => Self::TIMER_2_OVERFLOW_INTERRUPT_BIT_INDEX,
+            InterruptType::Timer3 => Self::TIMER_3_OVERFLOW_INTERRUPT_BIT_INDEX,
+            InterruptType::Dma0 => Self::DMA_0_INTERRUPT_BIT_INDEX,
+            InterruptType::Dma1 => Self::DMA_1_INTERRUPT_BIT_INDEX,
+            InterruptType::Dma2 => Self::DMA_2_INTERRUPT_BIT_INDEX,
+            InterruptType::Dma3 => Self::DMA_3_INTERRUPT_BIT_INDEX,
+            InterruptType::Keypad => Self::KEYPAD_INTERRUPT_BIT_INDEX,
+            _ => todo!(),
+        };
+
+        self.interrupt_request = self.interrupt_request.set_bit(bit_index, true);
     }
 
     pub fn get_irq_pending(&mut self) -> bool {
