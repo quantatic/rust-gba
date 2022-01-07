@@ -89,7 +89,7 @@ impl Keypad {
         u16: DataAccess<T>,
     {
         self.interrupt_control = self.interrupt_control.set_data(value, index);
-        println!("interrupt control: 0b{:016b}", self.interrupt_control);
+        println!("key interrupt control: 0b{:016b}", self.interrupt_control);
     }
 
     pub fn poll_pending_interrupts(&mut self) -> bool {

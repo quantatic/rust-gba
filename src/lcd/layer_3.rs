@@ -8,7 +8,7 @@ use super::{
 };
 
 #[derive(Debug, Default)]
-pub(super) struct Layer2 {
+pub(super) struct Layer3 {
     bg_control: u16,
     text_x_offset: u16,
     text_y_offset: u16,
@@ -20,13 +20,12 @@ pub(super) struct Layer2 {
     affine_d: u16,
 }
 
-impl Layer2 {
+impl Layer3 {
     pub fn get_pixel(
         &self,
         pixel_x: u16,
         pixel_y: u16,
         mode: BgMode,
-        frame: DisplayFrame,
         vram: &[u8],
         bg_palette: &[Rgb555],
     ) -> Option<Rgb555> {
@@ -117,7 +116,7 @@ impl Layer2 {
 
                 Some(bg_palette[usize::from(palette_idx)])
             }
-            BgMode::Mode1 | BgMode::Mode2 => {
+            BgMode::Mode2 => {
                 // affine mode
 
                 let x = f64::from(pixel_x);
@@ -138,8 +137,10 @@ impl Layer2 {
                 let map_data_y = actual_y / 8.0;
 
                 let map_tiles: u16 = match self.get_affine_screen_size() {
+                    AffineScreenSize::Size16x16 => 16,
+                    AffineScreenSize::Size32x32 => 32,
                     AffineScreenSize::Size64x64 => 64,
-                    _ => todo!(),
+                    AffineScreenSize::Size128x128 => 128,
                 };
 
                 let (actual_map_data_x, actual_map_data_y) =
@@ -181,59 +182,14 @@ impl Layer2 {
 
                 let palette_idx = vram[tile_idx];
 
-                if palette_idx == 0 {
-                    None
-                } else {
-                    Some(bg_palette[usize::from(palette_idx)])
-                }
-            }
-            BgMode::Mode3 => {
-                let pixel_idx = (usize::from(pixel_y) * super::LCD_WIDTH) + usize::from(pixel_x);
-                let pixel_offset = pixel_idx * 2;
-
-                let pixel_low = vram[pixel_offset];
-                let pixel_high = vram[pixel_offset + 1];
-                let pixel_int = u16::from_le_bytes([pixel_low, pixel_high]);
-
-                Some(Rgb555::from_int(pixel_int))
-            }
-            BgMode::Mode4 => {
-                const FRAME_SIZE: u32 = 0xA000;
-
-                let pixel_idx = (usize::from(pixel_y) * super::LCD_WIDTH) + usize::from(pixel_x);
-                let pixel_offset = match frame {
-                    DisplayFrame::Frame0 => pixel_idx,
-                    DisplayFrame::Frame1 => pixel_idx + (FRAME_SIZE as usize),
-                };
-
-                let pixel_palette_idx = vram[pixel_offset];
-
-                Some(bg_palette[usize::from(pixel_palette_idx)])
-            }
-            BgMode::Mode5 => {
-                const MODE_WIDTH: u16 = 160;
-                const MODE_HEIGHT: u16 = 128;
-
-                if pixel_x >= MODE_WIDTH || pixel_y >= MODE_HEIGHT {
-                    return Some(Rgb555::default());
-                }
-
-                let pixel_idx =
-                    (usize::from(pixel_y) * usize::from(MODE_WIDTH)) + usize::from(pixel_x);
-                let pixel_offset = pixel_idx * 2;
-
-                let pixel_low = vram[pixel_offset];
-                let pixel_high = vram[pixel_offset + 1];
-                let pixel_int = u16::from_le_bytes([pixel_low, pixel_high]);
-
-                Some(Rgb555::from_int(pixel_int))
+                Some(bg_palette[usize::from(palette_idx)])
             }
             _ => None,
         }
     }
 }
 
-impl Layer2 {
+impl Layer3 {
     pub fn read_bg_control<T>(&self, index: u32) -> T
     where
         u16: DataAccess<T>,
@@ -361,7 +317,7 @@ impl Layer2 {
     }
 }
 
-impl Layer2 {
+impl Layer3 {
     pub fn get_priority(&self) -> u16 {
         const BG_PRIORITY_BIT_RANGE: RangeInclusive<usize> = 0..=1;
 

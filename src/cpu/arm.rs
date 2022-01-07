@@ -1451,12 +1451,12 @@ impl Cpu {
                 (unsigned_result, !borrow, signed_result, overflow)
             }
             AluOperation::Cmn => {
-                let (unsigned_result, borrow) =
+                let (unsigned_result, carry) =
                     first_operand_value.overflowing_add(second_operand_value);
                 let (signed_result, overflow) =
                     (first_operand_value as i32).overflowing_add(second_operand_value as i32);
 
-                (unsigned_result, !borrow, signed_result, overflow)
+                (unsigned_result, carry, signed_result, overflow)
             }
             AluOperation::Mov => (
                 second_operand_value,
@@ -1484,7 +1484,6 @@ impl Cpu {
                 let result = !second_operand_value;
                 (result, shifter_carry_out, result as i32, old_overflow)
             }
-            _ => todo!("ARM ALU: {:?}", operation),
         };
 
         if set_conditions {
@@ -1750,9 +1749,9 @@ impl Cpu {
         };
 
         let offset_address = if offset_info.sign {
-            base_address - offset_amount
+            base_address.wrapping_sub(offset_amount)
         } else {
-            base_address + offset_amount
+            base_address.wrapping_add(offset_amount)
         };
 
         let data_read_address = match index_type {
@@ -1816,6 +1815,13 @@ impl Cpu {
         register_bit_list: [bool; 16],
         force_user_mode: bool,
     ) {
+        fn write_register_user_mode(cpu: &mut Cpu, value: u32, register: Register) {
+            let old_mode = cpu.get_cpu_mode();
+            cpu.set_cpu_mode(super::CpuMode::User);
+            cpu.write_register(value, register);
+            cpu.set_cpu_mode(old_mode);
+        }
+
         let empty_rlist = register_bit_list.into_iter().all(|val| !val);
 
         // "not including R15".
@@ -1833,10 +1839,7 @@ impl Cpu {
                         let register = Register::from_index(register_idx as u32);
 
                         if force_user_mode {
-                            let old_mode = self.get_cpu_mode();
-                            self.set_cpu_mode(super::CpuMode::User);
-                            self.write_register(value, register);
-                            self.set_cpu_mode(old_mode);
+                            write_register_user_mode(self, value, register);
                         } else {
                             self.write_register(value, register);
                         };
@@ -1862,10 +1865,7 @@ impl Cpu {
                         let register = Register::from_index(register_idx as u32);
 
                         if force_user_mode {
-                            let old_mode = self.get_cpu_mode();
-                            self.set_cpu_mode(super::CpuMode::User);
-                            self.write_register(value, register);
-                            self.set_cpu_mode(old_mode);
+                            write_register_user_mode(self, value, register);
                         } else {
                             self.write_register(value, register);
                         };
@@ -1890,10 +1890,7 @@ impl Cpu {
             let register = Register::R15;
 
             if force_user_mode {
-                let old_mode = self.get_cpu_mode();
-                self.set_cpu_mode(super::CpuMode::User);
-                self.write_register(value, register);
-                self.set_cpu_mode(old_mode);
+                write_register_user_mode(self, value, register);
             } else {
                 self.write_register(value, register);
             };
@@ -1906,7 +1903,18 @@ impl Cpu {
             }
         }
 
-        if write_back {
+        let base_in_rlist = register_bit_list
+            .into_iter()
+            .enumerate()
+            .filter_map(|(register_idx, register_loaded)| {
+                register_loaded.then(|| Register::from_index(register_idx as u32))
+            })
+            .any(|loaded_register| {
+                std::mem::discriminant(&loaded_register) == std::mem::discriminant(&base_register)
+            });
+
+        // Writeback with Rb included in Rlist: no writeback (LDM/ARMv4).
+        if !base_in_rlist && write_back {
             self.write_register(current_address, base_register);
         }
     }

@@ -12,6 +12,24 @@ use crate::{BitManipulation, DataAccess};
 
 use crate::DEBUG_AND_PANIC_ON_LOOP;
 
+use self::arm::ArmInstruction;
+use self::thumb::ThumbInstruction;
+
+#[derive(Debug)]
+pub enum Instruction {
+    ArmInstruction(ArmInstruction),
+    ThumbInstruction(ThumbInstruction),
+}
+
+impl Display for Instruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Instruction::ArmInstruction(instruction) => write!(f, "{}", instruction),
+            Instruction::ThumbInstruction(instruction) => write!(f, "{}", instruction),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Cpu {
     r0: u32,
@@ -53,6 +71,7 @@ pub struct Cpu {
     spsr_und: u32,
     cycle_count: u64,
     pub bus: Bus,
+    pub bios_finished: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -109,6 +128,7 @@ impl Default for Cpu {
             spsr_und: 0,
             cycle_count: 0,
             bus: Bus::default(),
+            bios_finished: false,
         }
     }
 }
@@ -491,7 +511,7 @@ impl Cpu {
             |pc| pc + 4
         };
 
-        if debug {
+        if self.bios_finished && debug {
             print!("{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} cpsr: {:08X} | ",
                 self.read_register(Register::R0, |_| unreachable!()),
                 self.read_register(Register::R1, |_| unreachable!()),
@@ -516,7 +536,7 @@ impl Cpu {
 
         if !self.get_irq_disable() && self.bus.get_irq_pending() {
             self.handle_exception(ExceptionType::InterruptRequest);
-            if debug {
+            if self.bios_finished && debug {
                 println!("{:?}", ExceptionType::InterruptRequest);
             }
         } else {
@@ -527,12 +547,12 @@ impl Cpu {
                         unreachable!("unaligned ARM pc");
                     }
                     let opcode = self.bus.read_word_address(pc);
-                    if debug {
+                    if self.bios_finished && debug {
                         print!("{:08X}: ", opcode);
                     }
 
                     let instruction = decode_arm(opcode, pc);
-                    if debug {
+                    if self.bios_finished && debug {
                         println!("{}", instruction);
                     }
 
@@ -545,17 +565,21 @@ impl Cpu {
                     }
 
                     let opcode = self.bus.read_halfword_address(pc);
-                    if debug {
+                    if self.bios_finished && debug {
                         print!("    {:04X}: ", opcode);
                     }
 
                     let instruction = decode_thumb(opcode, pc);
-                    if debug {
+                    if self.bios_finished && debug {
                         println!("{}", instruction);
                     }
                     self.write_register(pc + 2, Register::R15);
                     self.execute_thumb(instruction);
                 }
+            }
+
+            if pc == 0x08000000 || pc == 0x0A000000 || pc == 0x0C000000 {
+                self.bios_finished = true;
             }
         }
 

@@ -5,13 +5,13 @@ use crate::{BitManipulation, DataAccess};
 use super::{BgMode, PaletteDepth, Rgb555, TextScreenSize};
 
 #[derive(Debug, Default)]
-pub(super) struct Layer0 {
+pub(super) struct Layer1 {
     bg_control: u16,
     x_offset: u16,
     y_offset: u16,
 }
 
-impl Layer0 {
+impl Layer1 {
     pub fn get_pixel(
         &self,
         pixel_x: u16,
@@ -110,7 +110,7 @@ impl Layer0 {
     }
 }
 
-impl Layer0 {
+impl Layer1 {
     pub fn read_bg_control<T>(&self, index: u32) -> T
     where
         u16: DataAccess<T>,
@@ -154,7 +154,7 @@ impl Layer0 {
     }
 }
 
-impl Layer0 {
+impl Layer1 {
     pub fn get_priority(&self) -> u16 {
         const BG_PRIORITY_BIT_RANGE: RangeInclusive<usize> = 0..=1;
 

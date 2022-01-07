@@ -1306,7 +1306,6 @@ impl Cpu {
                 | ThumbRegisterOperation::Adc
                 | ThumbRegisterOperation::Sbc
                 | ThumbRegisterOperation::Ror
-                | ThumbRegisterOperation::Tst
                 | ThumbRegisterOperation::Neg
                 | ThumbRegisterOperation::Orr
                 | ThumbRegisterOperation::Mul

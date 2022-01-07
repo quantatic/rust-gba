@@ -1,9 +1,14 @@
 mod layer_0;
+mod layer_1;
 mod layer_2;
+mod layer_3;
+
+use layer_0::Layer0;
+use layer_1::Layer1;
+use layer_2::Layer2;
+use layer_3::Layer3;
 
 use crate::{BitManipulation, DataAccess};
-use layer_0::Layer0;
-use layer_2::Layer2;
 
 use std::ops::RangeInclusive;
 
@@ -47,11 +52,226 @@ enum TextScreenSize {
     Size64x64,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum AffineScreenSize {
+    Size16x16,
+    Size32x32,
+    Size64x64,
+    Size128x128,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AffineDisplayOverflow {
+    Transparent,
+    Wraparound,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ObjectShape {
+    Square,
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ObjectSize {
+    Size8x8,
+    Size16x16,
+    Size32x32,
+    Size64x64,
+    Size16x8,
+    Size32x8,
+    Size32x16,
+    Size64x32,
+    Size8x16,
+    Size8x32,
+    Size16x32,
+    Size32x64,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ObjectTileMapping {
+    OneDimensional,
+    TwoDimensional,
+}
+
+impl ObjectSize {
+    fn get_dimensions(self) -> (u16, u16) {
+        match self {
+            ObjectSize::Size8x8 => (1, 1),
+            ObjectSize::Size16x16 => (2, 2),
+            ObjectSize::Size32x32 => (4, 4),
+            ObjectSize::Size64x64 => (8, 8),
+            ObjectSize::Size16x8 => (2, 1),
+            ObjectSize::Size32x8 => (4, 1),
+            ObjectSize::Size32x16 => (4, 2),
+            ObjectSize::Size64x32 => (8, 4),
+            ObjectSize::Size8x16 => (1, 2),
+            ObjectSize::Size8x32 => (1, 4),
+            ObjectSize::Size16x32 => (2, 4),
+            ObjectSize::Size32x64 => (4, 8),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Rgb555 {
     pub red: u8,
     pub green: u8,
     pub blue: u8,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ObjectAttributeInfo {
+    pub attribute_0: u16,
+    pub attribute_1: u16,
+    pub attribute_2: u16,
+}
+
+// attribute 0
+impl ObjectAttributeInfo {
+    fn get_y_coordinate(&self) -> u16 {
+        const Y_COORDINATE_BIT_RANGE: RangeInclusive<usize> = 0..=7;
+
+        self.attribute_0.get_bit_range(Y_COORDINATE_BIT_RANGE)
+    }
+
+    fn get_rotation_scaling_flag(&self) -> bool {
+        const ROTATION_SCALING_FLAG_BIT_INDEX: usize = 8;
+
+        self.attribute_0.get_bit(ROTATION_SCALING_FLAG_BIT_INDEX)
+    }
+
+    const DOUBLE_SIZE_OBJ_DISABLE_BIT_INDEX: usize = 9;
+
+    fn get_double_size_flag(&self) -> bool {
+        assert!(self.get_rotation_scaling_flag());
+
+        self.attribute_0
+            .get_bit(Self::DOUBLE_SIZE_OBJ_DISABLE_BIT_INDEX)
+    }
+
+    fn get_obj_disable_flag(&self) -> bool {
+        assert!(!self.get_rotation_scaling_flag());
+
+        self.attribute_0
+            .get_bit(Self::DOUBLE_SIZE_OBJ_DISABLE_BIT_INDEX)
+    }
+
+    fn get_obj_mode(&self) -> () {
+        todo!()
+    }
+
+    fn get_obj_mosaic(&self) -> bool {
+        const OBJ_MOSIAIC_BIT_INDEX: usize = 12;
+
+        self.attribute_0.get_bit(OBJ_MOSIAIC_BIT_INDEX)
+    }
+
+    fn get_palette_depth(&self) -> PaletteDepth {
+        const PALETTE_DEPTH_BIT_INDEX: usize = 13;
+
+        if self.attribute_0.get_bit(PALETTE_DEPTH_BIT_INDEX) {
+            PaletteDepth::EightBit
+        } else {
+            PaletteDepth::FourBit
+        }
+    }
+
+    fn get_obj_shape(&self) -> ObjectShape {
+        const OBJ_SHAPE_BIT_RANGE: RangeInclusive<usize> = 14..=15;
+
+        match self.attribute_0.get_bit_range(OBJ_SHAPE_BIT_RANGE) {
+            0 => ObjectShape::Square,
+            1 => ObjectShape::Horizontal,
+            2 => ObjectShape::Vertical,
+            _ => unreachable!(),
+        }
+    }
+}
+
+// attribute 1
+impl ObjectAttributeInfo {
+    fn get_x_coordinate(&self) -> u16 {
+        const X_COORDINATE_BIT_RANGE: RangeInclusive<usize> = 0..=8;
+
+        self.attribute_1.get_bit_range(X_COORDINATE_BIT_RANGE)
+    }
+
+    fn get_rotation_scaling_index(&self) -> u16 {
+        assert!(self.get_rotation_scaling_flag());
+
+        const ROTATION_SCALING_INDEX_BIT_RANGE: RangeInclusive<usize> = 9..=13;
+
+        self.attribute_1
+            .get_bit_range(ROTATION_SCALING_INDEX_BIT_RANGE)
+    }
+
+    fn get_horizontal_flip(&self) -> bool {
+        assert!(!self.get_rotation_scaling_flag());
+
+        const HORIZONTAL_FLIP_BIT_INDEX: usize = 12;
+
+        self.attribute_1.get_bit(HORIZONTAL_FLIP_BIT_INDEX)
+    }
+
+    fn get_vertical_flip(&self) -> bool {
+        assert!(!self.get_rotation_scaling_flag());
+
+        const VERTICAL_FLIP_BIT_INDEX: usize = 13;
+
+        self.attribute_1.get_bit(VERTICAL_FLIP_BIT_INDEX)
+    }
+
+    fn get_obj_size(&self) -> ObjectSize {
+        const OBJ_SIZE_BIT_RANGE: RangeInclusive<usize> = 14..=15;
+
+        match (
+            self.get_obj_shape(),
+            self.attribute_1.get_bit_range(OBJ_SIZE_BIT_RANGE),
+        ) {
+            (ObjectShape::Square, 0) => ObjectSize::Size8x8,
+            (ObjectShape::Square, 1) => ObjectSize::Size16x16,
+            (ObjectShape::Square, 2) => ObjectSize::Size32x32,
+            (ObjectShape::Square, 3) => ObjectSize::Size64x64,
+            (ObjectShape::Horizontal, 0) => ObjectSize::Size16x8,
+            (ObjectShape::Horizontal, 1) => ObjectSize::Size32x8,
+            (ObjectShape::Horizontal, 2) => ObjectSize::Size32x16,
+            (ObjectShape::Horizontal, 3) => ObjectSize::Size64x32,
+            (ObjectShape::Vertical, 0) => ObjectSize::Size8x16,
+            (ObjectShape::Vertical, 1) => ObjectSize::Size8x32,
+            (ObjectShape::Vertical, 2) => ObjectSize::Size16x32,
+            (ObjectShape::Vertical, 3) => ObjectSize::Size32x64,
+            _ => unreachable!(),
+        }
+    }
+}
+
+//attribute 2
+impl ObjectAttributeInfo {
+    fn get_tile_number(&self) -> u16 {
+        const TILE_NUMBER_BIT_RANGE: RangeInclusive<usize> = 0..=9;
+
+        self.attribute_2.get_bit_range(TILE_NUMBER_BIT_RANGE)
+    }
+
+    fn get_priority(&self) -> () {
+        todo!()
+    }
+
+    fn get_palette_number(&self) -> u8 {
+        const PALETTE_NUMBER_BIT_RANGE: RangeInclusive<usize> = 12..=15;
+
+        self.attribute_2.get_bit_range(PALETTE_NUMBER_BIT_RANGE) as u8
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ObjectRotationScalingInfo {
+    pub a: u16,
+    pub b: u16,
+    pub c: u16,
+    pub d: u16,
 }
 
 impl Rgb555 {
@@ -84,14 +304,34 @@ pub struct Lcd {
     bg_palette_ram: Box<[Rgb555; 0x100]>,
     obj_palette_ram: Box<[Rgb555; 0x100]>,
     vram: Box<[u8; 0x18000]>,
-    oam: Box<[u8; 0x400]>,
+    obj_attributes: Box<[ObjectAttributeInfo; 0x100]>,
+    obj_rotations: Box<[ObjectRotationScalingInfo; 0x40]>,
     vblank_interrupt_waiting: bool,
     hblank_interrupt_waiting: bool,
     vcount_interrupt_waiting: bool,
     buffer: Box<[[Rgb555; LCD_WIDTH]; LCD_HEIGHT]>, // access as buffer[y][x]
     back_buffer: Box<[[Rgb555; LCD_WIDTH]; LCD_HEIGHT]>,
     layer_0: Layer0,
+    layer_1: Layer1,
     layer_2: Layer2,
+    layer_3: Layer3,
+}
+
+fn half_word_fixed_point_to_float(val: u16) -> f64 {
+    const VALUE_DIVIDED: f64 = 256.0;
+
+    ((val as i16) as f64) / VALUE_DIVIDED
+}
+
+fn word_fixed_point_to_float(val: u32) -> f64 {
+    const VALUE_BIT_RANGE: RangeInclusive<usize> = 0..=27;
+    const VALUE_DIVIDED: f64 = 256.0;
+
+    let raw_value = val.get_bit_range(VALUE_BIT_RANGE);
+    // sign extend MSB by LSL sign bit to MSB, then ASR back to where we were before
+    let signed_value = ((raw_value as i32) << 4) >> 4;
+
+    (signed_value as f64) / VALUE_DIVIDED
 }
 
 pub struct LcdInterruptInfo {
@@ -111,14 +351,17 @@ impl Default for Lcd {
             bg_palette_ram: Box::new([Rgb555::default(); 0x100]),
             obj_palette_ram: Box::new([Rgb555::default(); 0x100]),
             vram: Box::new([0; 0x18000]),
-            oam: Box::new([0; 0x400]),
+            obj_attributes: Box::new([ObjectAttributeInfo::default(); 0x100]),
+            obj_rotations: Box::new([ObjectRotationScalingInfo::default(); 0x40]),
             vblank_interrupt_waiting: false,
             hblank_interrupt_waiting: false,
             vcount_interrupt_waiting: false,
             buffer: Box::new([[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT]),
             back_buffer: Box::new([[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT]),
             layer_0: Layer0::default(),
+            layer_1: Layer1::default(),
             layer_2: Layer2::default(),
+            layer_3: Layer3::default(),
         }
     }
 }
@@ -149,8 +392,31 @@ impl Lcd {
             let current_mode = self.get_bg_mode();
             let display_frame = self.get_display_frame();
 
+            // if pixel_x == 0 && pixel_y == 0 {
+            //     println!("{:?}", current_mode);
+            //     println!(
+            //         "{}, {}, {}, {}",
+            //         self.get_screen_display_bg_0(),
+            //         self.get_screen_display_bg_1(),
+            //         self.get_screen_display_bg_2(),
+            //         self.get_screen_display_bg_3()
+            //     );
+            // }
+
             let layer_0_pixel = if self.get_screen_display_bg_0() {
                 self.layer_0.get_pixel(
+                    pixel_x,
+                    pixel_y,
+                    current_mode,
+                    self.vram.as_slice(),
+                    self.bg_palette_ram.as_slice(),
+                )
+            } else {
+                None
+            };
+
+            let layer_1_pixel = if self.get_screen_display_bg_1() {
+                self.layer_1.get_pixel(
                     pixel_x,
                     pixel_y,
                     current_mode,
@@ -174,11 +440,33 @@ impl Lcd {
                 None
             };
 
-            let final_pixel = None.or(layer_0_pixel).or(layer_2_pixel);
+            let layer_3_pixel = if self.get_screen_display_bg_3() {
+                self.layer_3.get_pixel(
+                    pixel_x,
+                    pixel_y,
+                    current_mode,
+                    self.vram.as_slice(),
+                    self.bg_palette_ram.as_slice(),
+                )
+            } else {
+                None
+            };
 
-            if let Some(pixel) = final_pixel {
-                self.back_buffer[usize::from(pixel_y)][usize::from(pixel_x)] = pixel;
-            }
+            let sprite_pixel = self.get_sprite_pixel(pixel_x, pixel_y);
+
+            let final_pixel = None
+                .or(sprite_pixel)
+                .or(layer_0_pixel)
+                .or(layer_1_pixel)
+                .or(layer_2_pixel)
+                .or(layer_3_pixel);
+
+            let drawn_pixel = match final_pixel {
+                Some(pixel) => pixel,
+                None => self.bg_palette_ram[0],
+            };
+
+            self.back_buffer[usize::from(pixel_y)][usize::from(pixel_x)] = drawn_pixel;
         }
 
         self.dot += 1;
@@ -190,7 +478,185 @@ impl Lcd {
             if self.vcount >= 228 {
                 self.vcount = 0;
             }
+
+            if self.vcount == self.get_vcount_setting() {
+                self.vcount_interrupt_waiting = true;
+            }
         }
+    }
+
+    fn get_sprite_pixel(&self, pixel_x: u16, pixel_y: u16) -> Option<Rgb555> {
+        const OBJ_TILE_DATA_VRAM_BASE: usize = 0x10000;
+        const TILE_SIZE: u16 = 8;
+        const WORLD_WIDTH: u16 = 512;
+        const WORLD_HEIGHT: u16 = 256;
+
+        for obj in self.obj_attributes.into_iter() {
+            let (sprite_tile_width, sprite_tile_height) = obj.get_obj_size().get_dimensions();
+            let sprite_width = sprite_tile_width * TILE_SIZE;
+            let sprite_height = sprite_tile_height * TILE_SIZE;
+
+            let sprite_x = obj.get_x_coordinate();
+            let sprite_y = obj.get_y_coordinate();
+
+            let (sprite_offset_x, sprite_offset_y) = if obj.get_rotation_scaling_flag() {
+                let rotation_info_idx = obj.get_rotation_scaling_index();
+                let rotation_info = self.obj_rotations[usize::from(rotation_info_idx)];
+
+                let a = half_word_fixed_point_to_float(rotation_info.a);
+                let b = half_word_fixed_point_to_float(rotation_info.b);
+                let c = half_word_fixed_point_to_float(rotation_info.c);
+                let d = half_word_fixed_point_to_float(rotation_info.d);
+
+                let center_offset_adjustment_x = sprite_width / 2;
+                let center_offset_adjustment_y = sprite_height / 2;
+
+                let mut base_corner_offset_x = f64::from(pixel_x) - f64::from(sprite_x);
+                if base_corner_offset_x < -f64::from(WORLD_WIDTH / 2) {
+                    base_corner_offset_x += f64::from(WORLD_WIDTH);
+                }
+                let base_corner_offset_x = base_corner_offset_x;
+
+                let mut base_corner_offset_y = f64::from(pixel_y) - f64::from(sprite_y);
+                if base_corner_offset_y < -f64::from(WORLD_HEIGHT / 2) {
+                    base_corner_offset_y += f64::from(WORLD_HEIGHT);
+                }
+                let base_corner_offset_y = base_corner_offset_y;
+
+                if obj.get_double_size_flag() {
+                    if base_corner_offset_x < (f64::from(sprite_width) * -0.5)
+                        || base_corner_offset_x >= (f64::from(sprite_width) * 1.5)
+                        || base_corner_offset_y < (f64::from(sprite_height) * -0.5)
+                        || base_corner_offset_y >= (f64::from(sprite_height) * 1.5)
+                    {
+                        continue;
+                    }
+                } else {
+                    if base_corner_offset_x < 0.0
+                        || base_corner_offset_x >= f64::from(sprite_width)
+                        || base_corner_offset_y < 0.0
+                        || base_corner_offset_y >= f64::from(sprite_height)
+                    {
+                        continue;
+                    }
+                }
+
+                let base_center_offset_x =
+                    f64::from(base_corner_offset_x) - f64::from(center_offset_adjustment_x);
+                let base_center_offset_y =
+                    f64::from(base_corner_offset_y) - f64::from(center_offset_adjustment_y);
+
+                let center_offset_x = (base_center_offset_x * a) + (base_center_offset_y * b);
+                let center_offset_y = (base_center_offset_x * c) + (base_center_offset_y * d);
+
+                let corner_offset_x = center_offset_x + f64::from(center_offset_adjustment_x);
+                let corner_offset_y = center_offset_y + f64::from(center_offset_adjustment_y);
+
+                if corner_offset_x < 0.0
+                    || corner_offset_x >= f64::from(sprite_width)
+                    || corner_offset_y < 0.0
+                    || corner_offset_y >= f64::from(sprite_height)
+                {
+                    continue;
+                }
+
+                (corner_offset_x as u16, corner_offset_y as u16)
+            } else {
+                let base_corner_offset_x = f64::from(pixel_x) - f64::from(sprite_x);
+                let base_corner_offset_y = f64::from(pixel_y) - f64::from(sprite_y);
+
+                if base_corner_offset_x < 0.0
+                    || base_corner_offset_x >= f64::from(sprite_width)
+                    || base_corner_offset_y < 0.0
+                    || base_corner_offset_y >= f64::from(sprite_height)
+                {
+                    continue;
+                }
+
+                let offset_x = if obj.get_horizontal_flip() {
+                    f64::from(sprite_width) - 1.0 - base_corner_offset_x
+                } else {
+                    base_corner_offset_x
+                };
+
+                let offset_y = if obj.get_vertical_flip() {
+                    f64::from(sprite_height) - 1.0 - base_corner_offset_y
+                } else {
+                    base_corner_offset_y
+                };
+
+                (offset_x as u16, offset_y as u16)
+            };
+
+            assert!(sprite_offset_x < sprite_width);
+            assert!(sprite_offset_y < sprite_height);
+
+            let palette_depth = obj.get_palette_depth();
+
+            let sprite_tile_x = sprite_offset_x / 8;
+            let sprite_tile_y = sprite_offset_y / 8;
+
+            let tile_offset_x = sprite_offset_x % 8;
+            let tile_offset_y = sprite_offset_y % 8;
+
+            let base_tile_number = obj.get_tile_number();
+
+            let tile_number = match (self.get_obj_tile_mapping(), palette_depth) {
+                (ObjectTileMapping::OneDimensional, PaletteDepth::FourBit) => {
+                    base_tile_number + (sprite_tile_y * sprite_tile_width) + sprite_tile_x
+                }
+                (ObjectTileMapping::OneDimensional, PaletteDepth::EightBit) => {
+                    base_tile_number + (sprite_tile_y * sprite_tile_width) + (sprite_tile_x * 2)
+                }
+                (ObjectTileMapping::TwoDimensional, PaletteDepth::FourBit) => {
+                    base_tile_number + (sprite_tile_y * 32) + sprite_tile_x
+                }
+                (ObjectTileMapping::TwoDimensional, PaletteDepth::EightBit) => {
+                    base_tile_number + (sprite_tile_y * 32) + (sprite_tile_x * 2)
+                }
+            };
+
+            let palette_idx = match obj.get_palette_depth() {
+                PaletteDepth::EightBit => {
+                    let tile_idx = OBJ_TILE_DATA_VRAM_BASE
+                        + (usize::from(tile_number) * 32)
+                        + (usize::from(tile_offset_y) * 8)
+                        + usize::from(tile_offset_x);
+
+                    let palette_idx = self.vram[tile_idx];
+
+                    if palette_idx == 0 {
+                        continue;
+                    }
+
+                    palette_idx
+                }
+                PaletteDepth::FourBit => {
+                    let tile_idx = OBJ_TILE_DATA_VRAM_BASE
+                        + (usize::from(tile_number) * 32)
+                        + (usize::from(tile_offset_y) * 4)
+                        + (usize::from(tile_offset_x) / 2);
+
+                    let tile_data = self.vram[tile_idx];
+
+                    let palette_idx_low = if sprite_tile_x % 2 == 0 {
+                        tile_data.get_bit_range(0..=3)
+                    } else {
+                        tile_data.get_bit_range(4..=7)
+                    };
+
+                    if palette_idx_low == 0 {
+                        continue;
+                    }
+
+                    palette_idx_low.set_bit_range(obj.get_palette_number(), 4..=7)
+                }
+            };
+
+            return Some(self.obj_palette_ram[usize::from(palette_idx)]);
+        }
+
+        None
     }
 }
 
@@ -214,6 +680,7 @@ impl Lcd {
         u16: DataAccess<T>,
     {
         self.lcd_control = self.lcd_control.set_data(value, index);
+        println!("new lcd control: 0b{:016b}", self.lcd_control);
     }
 
     pub fn read_lcd_status<T>(&self, index: u32) -> T
@@ -228,6 +695,7 @@ impl Lcd {
         u16: DataAccess<T>,
     {
         self.lcd_status = self.lcd_status.set_data(value, index);
+        println!("new lcd status: 0b{:016b}", self.lcd_status)
     }
 
     const BG_PALETTE_RAM_OFFSET_START: u32 = 0x000;
@@ -288,11 +756,88 @@ impl Lcd {
     }
 
     pub fn read_oam(&self, offset: u32) -> u8 {
-        self.oam[offset as usize]
+        let hword_offset = offset / 2;
+
+        let oam_index = (hword_offset / 4) as usize;
+        let oam_offset = hword_offset % 4;
+
+        let rotation_group_index = (hword_offset / 16) as usize;
+        let rotation_group_offset = (hword_offset / 4) % 4;
+
+        let hword_result = match oam_offset {
+            0 => self.obj_attributes[oam_index].attribute_0,
+            1 => self.obj_attributes[oam_index].attribute_1,
+            2 => self.obj_attributes[oam_index].attribute_2,
+            3 => match rotation_group_offset {
+                0 => self.obj_rotations[rotation_group_index].a,
+                1 => self.obj_rotations[rotation_group_index].b,
+                2 => self.obj_rotations[rotation_group_index].c,
+                3 => self.obj_rotations[rotation_group_index].d,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+
+        let hword_index = offset % 2;
+        hword_result.get_data(hword_index)
     }
 
     pub fn write_oam(&mut self, value: u8, offset: u32) {
-        self.oam[offset as usize] = value;
+        let hword_offset = offset / 2;
+
+        let oam_index = (hword_offset / 4) as usize;
+        let oam_offset = hword_offset % 4;
+
+        let rotation_group_index = (hword_offset / 16) as usize;
+        let rotation_group_offset = (hword_offset / 4) % 4;
+
+        let hword_index = offset % 2;
+
+        match oam_offset {
+            0 => {
+                self.obj_attributes[oam_index].attribute_0 = self.obj_attributes[oam_index]
+                    .attribute_0
+                    .set_data(value, hword_index)
+            }
+            1 => {
+                self.obj_attributes[oam_index].attribute_1 = self.obj_attributes[oam_index]
+                    .attribute_1
+                    .set_data(value, hword_index)
+            }
+            2 => {
+                self.obj_attributes[oam_index].attribute_2 = self.obj_attributes[oam_index]
+                    .attribute_2
+                    .set_data(value, hword_index)
+            }
+            3 => match rotation_group_offset {
+                0 => {
+                    self.obj_rotations[rotation_group_index].a = self.obj_rotations
+                        [rotation_group_index]
+                        .a
+                        .set_data(value, hword_index)
+                }
+                1 => {
+                    self.obj_rotations[rotation_group_index].b = self.obj_rotations
+                        [rotation_group_index]
+                        .b
+                        .set_data(value, hword_index)
+                }
+                2 => {
+                    self.obj_rotations[rotation_group_index].c = self.obj_rotations
+                        [rotation_group_index]
+                        .c
+                        .set_data(value, hword_index)
+                }
+                3 => {
+                    self.obj_rotations[rotation_group_index].d = self.obj_rotations
+                        [rotation_group_index]
+                        .d
+                        .set_data(value, hword_index)
+                }
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
     }
 
     pub fn read_layer0_bg_control<T>(&self, index: u32) -> T
@@ -378,6 +923,216 @@ impl Lcd {
     {
         self.layer_2.write_text_y_offset(value, index);
     }
+
+    pub fn read_layer2_affine_x_offset<T>(&self, index: u32) -> T
+    where
+        u32: DataAccess<T>,
+    {
+        self.layer_2.read_affine_x_offset(index)
+    }
+
+    pub fn write_layer2_affine_x_offset<T>(&mut self, value: T, index: u32)
+    where
+        u32: DataAccess<T>,
+    {
+        self.layer_2.write_affine_x_offset(value, index)
+    }
+
+    pub fn read_layer2_affine_y_offset<T>(&self, index: u32) -> T
+    where
+        u32: DataAccess<T>,
+    {
+        self.layer_2.read_affine_y_offset(index)
+    }
+
+    pub fn write_layer2_affine_y_offset<T>(&mut self, value: T, index: u32)
+    where
+        u32: DataAccess<T>,
+    {
+        self.layer_2.write_affine_y_offset(value, index)
+    }
+
+    pub fn read_layer2_affine_param_a<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_2.read_affine_param_a(index)
+    }
+
+    pub fn write_layer2_affine_param_a<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_2.write_affine_param_a(value, index)
+    }
+
+    pub fn read_layer2_affine_param_b<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_2.read_affine_param_b(index)
+    }
+
+    pub fn write_layer2_affine_param_b<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_2.write_affine_param_b(value, index)
+    }
+
+    pub fn read_layer2_affine_param_c<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_2.read_affine_param_c(index)
+    }
+
+    pub fn write_layer2_affine_param_c<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_2.write_affine_param_c(value, index)
+    }
+
+    pub fn read_layer2_affine_param_d<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_2.read_affine_param_d(index)
+    }
+
+    pub fn write_layer2_affine_param_d<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_2.write_affine_param_d(value, index)
+    }
+
+    pub fn read_layer3_bg_control<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_3.read_bg_control(index)
+    }
+
+    pub fn write_layer3_bg_control<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_3.write_bg_control(value, index);
+    }
+
+    pub fn read_layer3_text_x_offset<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_3.read_text_x_offset(index)
+    }
+
+    pub fn write_layer3_text_x_offset<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_3.write_text_x_offset(value, index);
+    }
+
+    pub fn read_layer3_text_y_offset<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_3.read_text_y_offset(index)
+    }
+
+    pub fn write_layer3_text_y_offset<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_3.write_text_y_offset(value, index);
+    }
+
+    pub fn read_layer3_affine_x_offset<T>(&self, index: u32) -> T
+    where
+        u32: DataAccess<T>,
+    {
+        self.layer_3.read_affine_x_offset(index)
+    }
+
+    pub fn write_layer3_affine_x_offset<T>(&mut self, value: T, index: u32)
+    where
+        u32: DataAccess<T>,
+    {
+        self.layer_3.write_affine_x_offset(value, index)
+    }
+
+    pub fn read_layer3_affine_y_offset<T>(&self, index: u32) -> T
+    where
+        u32: DataAccess<T>,
+    {
+        self.layer_3.read_affine_y_offset(index)
+    }
+
+    pub fn write_layer3_affine_y_offset<T>(&mut self, value: T, index: u32)
+    where
+        u32: DataAccess<T>,
+    {
+        self.layer_3.write_affine_y_offset(value, index)
+    }
+
+    pub fn read_layer3_affine_param_a<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_3.read_affine_param_a(index)
+    }
+
+    pub fn write_layer3_affine_param_a<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_3.write_affine_param_a(value, index)
+    }
+
+    pub fn read_layer3_affine_param_b<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_3.read_affine_param_b(index)
+    }
+
+    pub fn write_layer3_affine_param_b<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_3.write_affine_param_b(value, index)
+    }
+
+    pub fn read_layer3_affine_param_c<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_3.read_affine_param_c(index)
+    }
+
+    pub fn write_layer3_affine_param_c<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_3.write_affine_param_c(value, index)
+    }
+
+    pub fn read_layer3_affine_param_d<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_3.read_affine_param_d(index)
+    }
+
+    pub fn write_layer3_affine_param_d<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_3.write_affine_param_d(value, index)
+    }
 }
 
 impl Lcd {
@@ -403,6 +1158,16 @@ impl Lcd {
             DisplayFrame::Frame1
         } else {
             DisplayFrame::Frame0
+        }
+    }
+
+    fn get_obj_tile_mapping(&self) -> ObjectTileMapping {
+        const TILE_MAPPING_BIT_INDEX: usize = 6;
+
+        if self.lcd_control.get_bit(TILE_MAPPING_BIT_INDEX) {
+            ObjectTileMapping::OneDimensional
+        } else {
+            ObjectTileMapping::TwoDimensional
         }
     }
 
@@ -442,19 +1207,19 @@ impl Lcd {
         self.lcd_status = self.lcd_status.set_bit(HBLANK_FLAG_BIT_INDEX, set);
     }
 
-    fn get_vblank_irq_enable(&self) -> bool {
+    pub fn get_vblank_irq_enable(&self) -> bool {
         const VBLANK_IRQ_ENABLE_BIT_INDEX: usize = 3;
 
         self.lcd_status.get_bit(VBLANK_IRQ_ENABLE_BIT_INDEX)
     }
 
-    fn get_hblank_irq_enable(&self) -> bool {
+    pub fn get_hblank_irq_enable(&self) -> bool {
         const HBLANK_IRQ_ENABLE_BIT_INDEX: usize = 4;
 
         self.lcd_status.get_bit(HBLANK_IRQ_ENABLE_BIT_INDEX)
     }
 
-    fn get_vcount_irq_enable(&self) -> bool {
+    pub fn get_vcount_irq_enable(&self) -> bool {
         const VCOUNT_IRQ_ENABLE_BIT_INDEX: usize = 5;
 
         self.lcd_status.get_bit(VCOUNT_IRQ_ENABLE_BIT_INDEX)
@@ -469,9 +1234,9 @@ impl Lcd {
 
 impl Lcd {
     pub fn poll_pending_interrupts(&mut self) -> LcdInterruptInfo {
-        let hblank = self.get_hblank_irq_enable() && self.hblank_interrupt_waiting;
-        let vblank = self.get_vblank_irq_enable() && self.vblank_interrupt_waiting;
-        let vcount = self.get_vcount_irq_enable() && self.vcount_interrupt_waiting;
+        let hblank = self.hblank_interrupt_waiting;
+        let vblank = self.vblank_interrupt_waiting;
+        let vcount = self.vcount_interrupt_waiting;
 
         self.hblank_interrupt_waiting = false;
         self.vblank_interrupt_waiting = false;

@@ -68,10 +68,6 @@ struct DmaInfo {
     dest_addr: u32,
     word_count: u16,
     dma_control: u16,
-    dma_ongoing: bool,
-    source_pointer: u32,
-    dest_pointer: u32,
-    words_left: u16,
 }
 
 impl DmaInfo {
@@ -128,17 +124,14 @@ impl DmaInfo {
     where
         u16: DataAccess<T>,
     {
-        let old_enabled = self.get_dma_enable();
         self.dma_control = self.dma_control.set_data(value, index);
-        let new_enabled = self.get_dma_enable();
-
-        if !old_enabled && new_enabled {
-            self.dest_pointer = self.dest_addr;
-            self.source_pointer = self.source_addr;
-            self.words_left = self.word_count;
-        }
-
-        println!("new control: 0x{:04X}", self.dma_control);
+        // println!(
+        //     "new start timing: {:?}, enabled: {}, repeat: {}",
+        //     self.get_dma_start_timing(),
+        //     self.get_dma_enable(),
+        //     self.get_dma_repeat()
+        // );
+        // println!("---------");
     }
 }
 
@@ -211,10 +204,14 @@ impl DmaInfo {
         self.dma_control.get_bit(IRQ_AT_END_BIT_INDEX)
     }
 
-    fn get_dma_enable(&self) -> bool {
-        const DMA_ENABLE_BIT_INDEX: usize = 15;
+    const DMA_ENABLE_BIT_INDEX: usize = 15;
 
-        self.dma_control.get_bit(DMA_ENABLE_BIT_INDEX)
+    fn get_dma_enable(&self) -> bool {
+        self.dma_control.get_bit(Self::DMA_ENABLE_BIT_INDEX)
+    }
+
+    fn set_dma_enable(&mut self, set: bool) {
+        self.dma_control = self.dma_control.set_bit(Self::DMA_ENABLE_BIT_INDEX, set);
     }
 }
 
@@ -222,23 +219,25 @@ impl Bus {
     pub fn step(&mut self) {
         let lcd_interrupts = self.lcd.poll_pending_interrupts();
 
-        if lcd_interrupts.vblank {
+        if lcd_interrupts.vblank && self.lcd.get_vblank_irq_enable() {
             self.interrupt_request = self
                 .interrupt_request
                 .set_bit(Self::LCD_VBLANK_INTERRUPT_BIT_INDEX, true);
         }
 
-        if lcd_interrupts.hblank {
+        if lcd_interrupts.hblank && self.lcd.get_hblank_irq_enable() {
             self.interrupt_request = self
                 .interrupt_request
                 .set_bit(Self::LCD_HBLANK_INTERRUPT_BIT_INDEX, true);
         }
 
-        if lcd_interrupts.vcount {
+        if lcd_interrupts.vcount && self.lcd.get_vcount_irq_enable() {
             self.interrupt_request = self
                 .interrupt_request
                 .set_bit(Self::LCD_VCOUNT_INTERRUPT_BIT_INDEX, true);
         }
+
+        self.step_dma(lcd_interrupts);
 
         if self.keypad.poll_pending_interrupts() {
             self.interrupt_request = self
@@ -281,14 +280,17 @@ impl Bus {
     const BG0_CONTROL_BASE: u32 = 0x04000008;
     const BG0_CONTROL_END: u32 = Self::BG0_CONTROL_BASE + 1;
 
+    const BG2_CONTROL_BASE: u32 = 0x0400000C;
+    const BG2_CONTROL_END: u32 = Self::BG2_CONTROL_BASE + 1;
+
+    const BG3_CONTROL_BASE: u32 = 0x0400000E;
+    const BG3_CONTROL_END: u32 = Self::BG3_CONTROL_BASE + 1;
+
     const BG0_X_OFFSET_BASE: u32 = 0x04000010;
     const BG0_X_OFFSET_END: u32 = Self::BG0_X_OFFSET_BASE + 1;
 
     const BG0_Y_OFFSET_BASE: u32 = 0x04000012;
     const BG0_Y_OFFSET_END: u32 = Self::BG0_Y_OFFSET_BASE + 1;
-
-    const BG2_CONTROL_BASE: u32 = 0x0400000C;
-    const BG2_CONTROL_END: u32 = Self::BG2_CONTROL_BASE + 1;
 
     const BG2_TEXT_X_OFFSET_BASE: u32 = 0x04000018;
     const BG2_TEXT_X_OFFSET_END: u32 = Self::BG2_TEXT_X_OFFSET_BASE + 1;
@@ -296,23 +298,47 @@ impl Bus {
     const BG2_TEXT_Y_OFFSET_BASE: u32 = 0x0400001A;
     const BG2_TEXT_Y_OFFSET_END: u32 = Self::BG2_TEXT_Y_OFFSET_BASE + 1;
 
+    const BG3_TEXT_X_OFFSET_BASE: u32 = 0x0400001C;
+    const BG3_TEXT_X_OFFSET_END: u32 = Self::BG3_TEXT_X_OFFSET_BASE + 1;
+
+    const BG3_TEXT_Y_OFFSET_BASE: u32 = 0x0400001E;
+    const BG3_TEXT_Y_OFFSET_END: u32 = Self::BG3_TEXT_Y_OFFSET_BASE + 1;
+
     const BG2_AFFINE_PARAM_A_BASE: u32 = 0x04000020;
-    const BG2_AFFINE_PARAM_A_END: u32 = Self::BG2_AFFINE_PARAM_A_BASE;
+    const BG2_AFFINE_PARAM_A_END: u32 = Self::BG2_AFFINE_PARAM_A_BASE + 1;
 
     const BG2_AFFINE_PARAM_B_BASE: u32 = 0x04000022;
-    const BG2_AFFINE_PARAM_B_END: u32 = Self::BG2_AFFINE_PARAM_A_BASE;
+    const BG2_AFFINE_PARAM_B_END: u32 = Self::BG2_AFFINE_PARAM_B_BASE + 1;
 
     const BG2_AFFINE_PARAM_C_BASE: u32 = 0x04000024;
-    const BG2_AFFINE_PARAM_C_END: u32 = Self::BG2_AFFINE_PARAM_A_BASE;
+    const BG2_AFFINE_PARAM_C_END: u32 = Self::BG2_AFFINE_PARAM_C_BASE + 1;
 
     const BG2_AFFINE_PARAM_D_BASE: u32 = 0x04000026;
-    const BG2_AFFINE_PARAM_D_END: u32 = Self::BG2_AFFINE_PARAM_A_BASE;
+    const BG2_AFFINE_PARAM_D_END: u32 = Self::BG2_AFFINE_PARAM_D_BASE + 1;
 
     const BG2_AFFINE_X_OFFSET_BASE: u32 = 0x04000028;
     const BG2_AFFINE_X_OFFSET_END: u32 = Self::BG2_AFFINE_X_OFFSET_BASE + 3;
 
     const BG2_AFFINE_Y_OFFSET_BASE: u32 = 0x0400002C;
     const BG2_AFFINE_Y_OFFSET_END: u32 = Self::BG2_AFFINE_Y_OFFSET_BASE + 3;
+
+    const BG3_AFFINE_PARAM_A_BASE: u32 = 0x04000030;
+    const BG3_AFFINE_PARAM_A_END: u32 = Self::BG3_AFFINE_PARAM_A_BASE + 1;
+
+    const BG3_AFFINE_PARAM_B_BASE: u32 = 0x04000032;
+    const BG3_AFFINE_PARAM_B_END: u32 = Self::BG3_AFFINE_PARAM_B_BASE + 1;
+
+    const BG3_AFFINE_PARAM_C_BASE: u32 = 0x04000034;
+    const BG3_AFFINE_PARAM_C_END: u32 = Self::BG3_AFFINE_PARAM_C_BASE + 1;
+
+    const BG3_AFFINE_PARAM_D_BASE: u32 = 0x04000036;
+    const BG3_AFFINE_PARAM_D_END: u32 = Self::BG3_AFFINE_PARAM_D_BASE + 1;
+
+    const BG3_AFFINE_X_OFFSET_BASE: u32 = 0x04000038;
+    const BG3_AFFINE_X_OFFSET_END: u32 = Self::BG3_AFFINE_X_OFFSET_BASE + 3;
+
+    const BG3_AFFINE_Y_OFFSET_BASE: u32 = 0x0400003C;
+    const BG3_AFFINE_Y_OFFSET_END: u32 = Self::BG3_AFFINE_Y_OFFSET_BASE + 3;
 
     const SOUND_PWM_CONTROL_BASE: u32 = 0x04000088;
     const SOUND_PWM_CONTROL_END: u32 = Self::SOUND_PWM_CONTROL_BASE + 1;
@@ -324,10 +350,10 @@ impl Bus {
     const DMA_0_DEST_END: u32 = Self::DMA_0_DEST_BASE + 3;
 
     const DMA_0_WORD_COUNT_BASE: u32 = 0x040000B8;
-    const DMA_0_WORD_COUNT_END: u32 = Self::DMA_0_WORD_COUNT_BASE + 3;
+    const DMA_0_WORD_COUNT_END: u32 = Self::DMA_0_WORD_COUNT_BASE + 1;
 
     const DMA_0_CONTROL_BASE: u32 = 0x040000BA;
-    const DMA_0_CONTROL_END: u32 = Self::DMA_0_CONTROL_BASE + 3;
+    const DMA_0_CONTROL_END: u32 = Self::DMA_0_CONTROL_BASE + 1;
 
     const DMA_1_SOURCE_BASE: u32 = 0x040000BC;
     const DMA_1_SOURCE_END: u32 = Self::DMA_1_SOURCE_BASE + 3;
@@ -336,10 +362,10 @@ impl Bus {
     const DMA_1_DEST_END: u32 = Self::DMA_1_DEST_BASE + 3;
 
     const DMA_1_WORD_COUNT_BASE: u32 = 0x040000C4;
-    const DMA_1_WORD_COUNT_END: u32 = Self::DMA_1_WORD_COUNT_BASE + 3;
+    const DMA_1_WORD_COUNT_END: u32 = Self::DMA_1_WORD_COUNT_BASE + 1;
 
     const DMA_1_CONTROL_BASE: u32 = 0x040000C6;
-    const DMA_1_CONTROL_END: u32 = Self::DMA_1_CONTROL_BASE + 3;
+    const DMA_1_CONTROL_END: u32 = Self::DMA_1_CONTROL_BASE + 1;
 
     const DMA_2_SOURCE_BASE: u32 = 0x040000C8;
     const DMA_2_SOURCE_END: u32 = Self::DMA_2_SOURCE_BASE + 3;
@@ -348,10 +374,10 @@ impl Bus {
     const DMA_2_DEST_END: u32 = Self::DMA_2_DEST_BASE + 3;
 
     const DMA_2_WORD_COUNT_BASE: u32 = 0x040000D0;
-    const DMA_2_WORD_COUNT_END: u32 = Self::DMA_2_WORD_COUNT_BASE + 3;
+    const DMA_2_WORD_COUNT_END: u32 = Self::DMA_2_WORD_COUNT_BASE + 1;
 
     const DMA_2_CONTROL_BASE: u32 = 0x040000D2;
-    const DMA_2_CONTROL_END: u32 = Self::DMA_2_CONTROL_BASE + 3;
+    const DMA_2_CONTROL_END: u32 = Self::DMA_2_CONTROL_BASE + 1;
 
     const DMA_3_SOURCE_BASE: u32 = 0x040000D4;
     const DMA_3_SOURCE_END: u32 = Self::DMA_3_SOURCE_BASE + 3;
@@ -360,10 +386,10 @@ impl Bus {
     const DMA_3_DEST_END: u32 = Self::DMA_3_DEST_BASE + 3;
 
     const DMA_3_WORD_COUNT_BASE: u32 = 0x040000DC;
-    const DMA_3_WORD_COUNT_END: u32 = Self::DMA_3_WORD_COUNT_BASE + 3;
+    const DMA_3_WORD_COUNT_END: u32 = Self::DMA_3_WORD_COUNT_BASE + 1;
 
     const DMA_3_CONTROL_BASE: u32 = 0x040000DE;
-    const DMA_3_CONTROL_END: u32 = Self::DMA_3_CONTROL_BASE + 3;
+    const DMA_3_CONTROL_END: u32 = Self::DMA_3_CONTROL_BASE + 1;
 
     const KEY_STATUS_BASE: u32 = 0x04000130;
     const KEY_STATUS_END: u32 = Self::KEY_STATUS_BASE + 1;
@@ -450,6 +476,52 @@ impl Bus {
             }
             Self::BG2_TEXT_Y_OFFSET_BASE..=Self::BG2_TEXT_Y_OFFSET_END => {
                 self.lcd.read_layer2_text_y_offset(address & 0b1)
+            }
+            Self::BG2_AFFINE_X_OFFSET_BASE..=Self::BG2_AFFINE_X_OFFSET_END => {
+                self.lcd.read_layer2_affine_x_offset(address & 0b11)
+            }
+            Self::BG2_AFFINE_Y_OFFSET_BASE..=Self::BG2_AFFINE_Y_OFFSET_END => {
+                self.lcd.read_layer2_affine_y_offset(address & 0b11)
+            }
+            Self::BG2_AFFINE_PARAM_A_BASE..=Self::BG2_AFFINE_PARAM_A_END => {
+                self.lcd.read_layer2_affine_param_a(address & 0b1)
+            }
+            Self::BG2_AFFINE_PARAM_B_BASE..=Self::BG2_AFFINE_PARAM_B_END => {
+                self.lcd.read_layer2_affine_param_b(address & 0b1)
+            }
+            Self::BG2_AFFINE_PARAM_C_BASE..=Self::BG2_AFFINE_PARAM_C_END => {
+                self.lcd.read_layer2_affine_param_c(address & 0b1)
+            }
+            Self::BG2_AFFINE_PARAM_D_BASE..=Self::BG2_AFFINE_PARAM_D_END => {
+                self.lcd.read_layer2_affine_param_d(address & 0b1)
+            }
+
+            Self::BG3_CONTROL_BASE..=Self::BG3_CONTROL_END => {
+                self.lcd.read_layer3_bg_control(address & 0b1)
+            }
+            Self::BG3_TEXT_X_OFFSET_BASE..=Self::BG3_TEXT_X_OFFSET_END => {
+                self.lcd.read_layer3_text_x_offset(address & 0b1)
+            }
+            Self::BG3_TEXT_Y_OFFSET_BASE..=Self::BG3_TEXT_Y_OFFSET_END => {
+                self.lcd.read_layer3_text_y_offset(address & 0b1)
+            }
+            Self::BG3_AFFINE_X_OFFSET_BASE..=Self::BG3_AFFINE_X_OFFSET_END => {
+                self.lcd.read_layer3_affine_x_offset(address & 0b11)
+            }
+            Self::BG3_AFFINE_Y_OFFSET_BASE..=Self::BG3_AFFINE_Y_OFFSET_END => {
+                self.lcd.read_layer3_affine_y_offset(address & 0b11)
+            }
+            Self::BG3_AFFINE_PARAM_A_BASE..=Self::BG3_AFFINE_PARAM_A_END => {
+                self.lcd.read_layer3_affine_param_a(address & 0b1)
+            }
+            Self::BG3_AFFINE_PARAM_B_BASE..=Self::BG3_AFFINE_PARAM_B_END => {
+                self.lcd.read_layer3_affine_param_b(address & 0b1)
+            }
+            Self::BG3_AFFINE_PARAM_C_BASE..=Self::BG3_AFFINE_PARAM_C_END => {
+                self.lcd.read_layer3_affine_param_c(address & 0b1)
+            }
+            Self::BG3_AFFINE_PARAM_D_BASE..=Self::BG3_AFFINE_PARAM_D_END => {
+                self.lcd.read_layer3_affine_param_d(address & 0b1)
             }
 
             Self::SOUND_PWM_CONTROL_BASE..=Self::SOUND_PWM_CONTROL_END => {
@@ -547,6 +619,7 @@ impl Bus {
             Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => {
                 self.read_gamepak(address - Self::WAIT_STATE_3_ROM_BASE)
             }
+            0x0400020a..=0x0400020b => 0,
             _ => todo!("byte read 0x{:08x}", address),
         }
     }
@@ -570,7 +643,7 @@ impl Bus {
 
     pub fn write_byte_address(&mut self, value: u8, address: u32) {
         match address % Self::MEMORY_SIZE {
-            0x00000000..=0x00003FFF => unreachable!("BIOS write"),
+            0x00000000..=0x00003FFF => {} // println!("{:02X} -> ignored BIOS write", value),
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
                 let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
                 self.board_wram[actual_offset as usize] = value;
@@ -612,6 +685,52 @@ impl Bus {
             }
             Self::BG2_TEXT_Y_OFFSET_BASE..=Self::BG2_TEXT_Y_OFFSET_END => {
                 self.lcd.write_layer2_text_y_offset(value, address & 0b1)
+            }
+            Self::BG2_AFFINE_X_OFFSET_BASE..=Self::BG2_AFFINE_X_OFFSET_END => {
+                self.lcd.write_layer2_affine_x_offset(value, address & 0b11)
+            }
+            Self::BG2_AFFINE_Y_OFFSET_BASE..=Self::BG2_AFFINE_Y_OFFSET_END => {
+                self.lcd.write_layer2_affine_y_offset(value, address & 0b11)
+            }
+            Self::BG2_AFFINE_PARAM_A_BASE..=Self::BG2_AFFINE_PARAM_A_END => {
+                self.lcd.write_layer2_affine_param_a(value, address & 0b1)
+            }
+            Self::BG2_AFFINE_PARAM_B_BASE..=Self::BG2_AFFINE_PARAM_B_END => {
+                self.lcd.write_layer2_affine_param_b(value, address & 0b1)
+            }
+            Self::BG2_AFFINE_PARAM_C_BASE..=Self::BG2_AFFINE_PARAM_C_END => {
+                self.lcd.write_layer2_affine_param_c(value, address & 0b1)
+            }
+            Self::BG2_AFFINE_PARAM_D_BASE..=Self::BG2_AFFINE_PARAM_D_END => {
+                self.lcd.write_layer2_affine_param_d(value, address & 0b1)
+            }
+
+            Self::BG3_CONTROL_BASE..=Self::BG3_CONTROL_END => {
+                self.lcd.write_layer3_bg_control(value, address & 0b1)
+            }
+            Self::BG3_TEXT_X_OFFSET_BASE..=Self::BG3_TEXT_X_OFFSET_END => {
+                self.lcd.write_layer3_text_x_offset(value, address & 0b1)
+            }
+            Self::BG3_TEXT_Y_OFFSET_BASE..=Self::BG3_TEXT_Y_OFFSET_END => {
+                self.lcd.write_layer3_text_y_offset(value, address & 0b1)
+            }
+            Self::BG3_AFFINE_X_OFFSET_BASE..=Self::BG3_AFFINE_X_OFFSET_END => {
+                self.lcd.write_layer3_affine_x_offset(value, address & 0b11)
+            }
+            Self::BG3_AFFINE_Y_OFFSET_BASE..=Self::BG3_AFFINE_Y_OFFSET_END => {
+                self.lcd.write_layer3_affine_y_offset(value, address & 0b11)
+            }
+            Self::BG3_AFFINE_PARAM_A_BASE..=Self::BG3_AFFINE_PARAM_A_END => {
+                self.lcd.write_layer3_affine_param_a(value, address & 0b1)
+            }
+            Self::BG3_AFFINE_PARAM_B_BASE..=Self::BG3_AFFINE_PARAM_B_END => {
+                self.lcd.write_layer3_affine_param_b(value, address & 0b1)
+            }
+            Self::BG3_AFFINE_PARAM_C_BASE..=Self::BG3_AFFINE_PARAM_C_END => {
+                self.lcd.write_layer3_affine_param_c(value, address & 0b1)
+            }
+            Self::BG3_AFFINE_PARAM_D_BASE..=Self::BG3_AFFINE_PARAM_D_END => {
+                self.lcd.write_layer3_affine_param_d(value, address & 0b1)
             }
 
             Self::SOUND_PWM_CONTROL_BASE..=Self::SOUND_PWM_CONTROL_END => {
@@ -789,6 +908,10 @@ impl Bus {
     const LCD_VBLANK_INTERRUPT_BIT_INDEX: usize = 0;
     const LCD_HBLANK_INTERRUPT_BIT_INDEX: usize = 1;
     const LCD_VCOUNT_INTERRUPT_BIT_INDEX: usize = 2;
+    const DMA_0_INTERRUPT_BIT_INDEX: usize = 8;
+    const DMA_1_INTERRUPT_BIT_INDEX: usize = 9;
+    const DMA_2_INTERRUPT_BIT_INDEX: usize = 10;
+    const DMA_3_INTERRUPT_BIT_INDEX: usize = 11;
     const KEYPAD_INTERRUPT_BIT_INDEX: usize = 12;
 
     fn get_interrupts_enabled(&self) -> bool {
@@ -798,31 +921,87 @@ impl Bus {
     }
 
     fn step_dma(&mut self, interrupts: LcdInterruptInfo) {
-        for dma in self.dma_infos.iter_mut() {
-            if dma.get_dma_enable() {
+        for (dma_idx, dma) in self.dma_infos.into_iter().enumerate() {
+            let dma_triggered = if dma.get_dma_enable() {
                 match dma.get_dma_start_timing() {
-                    DmaStartTiming::Immediately => dma.dma_ongoing = true,
-                    DmaStartTiming::VBlank => {
-                        if interrupts.vblank {
-                            dma.dma_ongoing = true;
-                        }
-                    }
-                    DmaStartTiming::HBlank => {
-                        if interrupts.hblank {
-                            dma.dma_ongoing = true;
-                        }
-                    }
-                    DmaStartTiming::Special => todo!(),
-                };
-            }
-
-            if dma.dma_ongoing {
-                for _ in 0..dma.words_left {
-                    match dma.get_dma_transfer_type() {
-                        DmaTransferType::Bit16 => todo!(),
-                        DmaTransferType::Bit32 => todo!(),
-                    }
+                    DmaStartTiming::Immediately => true,
+                    DmaStartTiming::VBlank => interrupts.vblank,
+                    DmaStartTiming::HBlank => interrupts.hblank,
+                    DmaStartTiming::Special => false,
                 }
+            } else {
+                false
+            };
+
+            if dma_triggered {
+                println!("{:?}", dma.get_dma_start_timing());
+                println!("performing dma transfer");
+                println!("{:#08X?}", dma);
+                println!("---------------");
+
+                let mut dma_source = dma.source_addr;
+                let mut dma_dest = dma.dest_addr;
+                let original_dest = dma_dest;
+                let dma_length = usize::from(dma.word_count);
+
+                for _ in 0..dma_length {
+                    let transfer_size = match dma.get_dma_transfer_type() {
+                        DmaTransferType::Bit16 => 2,
+                        DmaTransferType::Bit32 => 4,
+                    };
+
+                    match dma.get_dma_transfer_type() {
+                        DmaTransferType::Bit16 => {
+                            let source_data = self.read_halfword_address(dma_source);
+                            self.write_halfword_address(source_data, dma_dest);
+                        }
+                        DmaTransferType::Bit32 => {
+                            let source_data = self.read_word_address(dma_source);
+                            self.write_word_address(source_data, dma_dest);
+                        }
+                    }
+
+                    match dma.get_source_addr_control() {
+                        DmaAddrControl::Fixed => {}
+                        DmaAddrControl::Decrement => dma_source -= transfer_size,
+                        DmaAddrControl::Increment | DmaAddrControl::IncrementReload => {
+                            dma_source += transfer_size
+                        }
+                    };
+
+                    match dma.get_dest_addr_control() {
+                        DmaAddrControl::Fixed => {}
+                        DmaAddrControl::Decrement => dma_dest -= transfer_size,
+                        DmaAddrControl::Increment | DmaAddrControl::IncrementReload => {
+                            dma_dest += transfer_size
+                        }
+                    };
+                }
+
+                if matches!(dma.get_dest_addr_control(), DmaAddrControl::IncrementReload) {
+                    dma_dest = original_dest;
+                }
+
+                let dma = &mut self.dma_infos[dma_idx];
+                dma.source_addr = dma_source;
+                dma.dest_addr = dma_dest;
+
+                if !dma.get_dma_repeat() {
+                    dma.set_dma_enable(false);
+                }
+
+                if dma.get_irq_at_end() {
+                    let irq_bit_index = match dma_idx {
+                        0 => Self::DMA_0_INTERRUPT_BIT_INDEX,
+                        1 => Self::DMA_1_INTERRUPT_BIT_INDEX,
+                        2 => Self::DMA_2_INTERRUPT_BIT_INDEX,
+                        3 => Self::DMA_3_INTERRUPT_BIT_INDEX,
+                        _ => unreachable!(),
+                    };
+
+                    self.interrupt_request = self.interrupt_request.set_bit(irq_bit_index, true);
+                }
+                return;
             }
         }
     }

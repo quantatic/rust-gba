@@ -6,8 +6,9 @@ mod data_access;
 mod keypad;
 mod lcd;
 
-use std::error::Error;
+use std::{error::Error, panic::PanicInfo, sync::Mutex};
 
+use lazy_static::lazy_static;
 use pixels::{wgpu::TextureFormat, PixelsBuilder, SurfaceTexture};
 use winit::{
     event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
@@ -18,19 +19,23 @@ use winit::{
 use bit_manipulation::BitManipulation;
 use data_access::DataAccess;
 
-use crate::keypad::Key;
+use crate::{cpu::Instruction, keypad::Key};
 
 #[cfg(target_pointer_width = "16")]
 compile_error!("architecture with pointer size >= 32 required");
 
 const DEBUG_AND_PANIC_ON_LOOP: bool = false;
 
+lazy_static! {
+    pub static ref INSTRUCTIONS_PRINT: Mutex<usize> = Mutex::default();
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     println!("{}", std::mem::size_of::<cpu::Cpu>());
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
-        .with_title("Aidan's GBA Emulator")
+        .with_title("Quantatic's GBA Emulator")
         .build(&event_loop)?;
 
     let mut pixels = {
@@ -48,10 +53,21 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut cpu = cpu::Cpu::default();
 
-    // for _ in 0..100_000_000 {
+    // for _ in 0..74_000_000 {
     //     cpu.fetch_decode_execute(false);
     // }
 
+    // let mut enter_pressed = false;
+    // loop {
+    //     for _ in 0..100_000 {
+    //         cpu.fetch_decode_execute(true);
+    //     }
+
+    //     cpu.bus.keypad.set_pressed(Key::Start, enter_pressed);
+    //     enter_pressed = !enter_pressed;
+    // }
+
+    let mut i = 0;
     event_loop.run(move |event, _, _control_flow| {
         match event {
             Event::MainEventsCleared => {
@@ -98,14 +114,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                 match keycode {
                     VirtualKeyCode::Z => cpu.bus.keypad.set_pressed(Key::B, pressed),
                     VirtualKeyCode::X => cpu.bus.keypad.set_pressed(Key::A, pressed),
-                    VirtualKeyCode::RShift => cpu.bus.keypad.set_pressed(Key::Select, pressed),
+                    VirtualKeyCode::RShift | VirtualKeyCode::LShift => {
+                        cpu.bus.keypad.set_pressed(Key::Select, pressed)
+                    }
                     VirtualKeyCode::Return => cpu.bus.keypad.set_pressed(Key::Start, pressed),
                     VirtualKeyCode::Up => cpu.bus.keypad.set_pressed(Key::Up, pressed),
                     VirtualKeyCode::Down => cpu.bus.keypad.set_pressed(Key::Down, pressed),
                     VirtualKeyCode::Left => cpu.bus.keypad.set_pressed(Key::Left, pressed),
                     VirtualKeyCode::Right => cpu.bus.keypad.set_pressed(Key::Right, pressed),
                     VirtualKeyCode::Q => cpu.bus.keypad.set_pressed(Key::L, pressed),
-                    VirtualKeyCode::P => cpu.bus.keypad.set_pressed(Key::R, pressed),
+                    VirtualKeyCode::E => cpu.bus.keypad.set_pressed(Key::R, pressed),
                     _ => {}
                 }
             }
