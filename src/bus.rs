@@ -2,13 +2,13 @@ use std::ops::RangeInclusive;
 
 use crate::apu::Apu;
 use crate::keypad::Keypad;
-use crate::lcd::{Lcd, LcdInterruptInfo, LcdStateChangeInfo};
+use crate::lcd::{Lcd, LcdStateChangeInfo};
 use crate::timer::Timer;
 use crate::BitManipulation;
 use crate::DataAccess;
 
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
-const ROM: &[u8] = include_bytes!("../minish_cap.gba");
+const ROM: &[u8] = include_bytes!("../emerald.gba");
 
 #[derive(Debug)]
 pub struct Bus {
@@ -301,6 +301,9 @@ impl Bus {
     const BG0_CONTROL_BASE: u32 = 0x04000008;
     const BG0_CONTROL_END: u32 = Self::BG0_CONTROL_BASE + 1;
 
+    const BG1_CONTROL_BASE: u32 = 0x0400000A;
+    const BG1_CONTROL_END: u32 = Self::BG1_CONTROL_BASE + 1;
+
     const BG2_CONTROL_BASE: u32 = 0x0400000C;
     const BG2_CONTROL_END: u32 = Self::BG2_CONTROL_BASE + 1;
 
@@ -312,6 +315,12 @@ impl Bus {
 
     const BG0_Y_OFFSET_BASE: u32 = 0x04000012;
     const BG0_Y_OFFSET_END: u32 = Self::BG0_Y_OFFSET_BASE + 1;
+
+    const BG1_X_OFFSET_BASE: u32 = 0x04000014;
+    const BG1_X_OFFSET_END: u32 = Self::BG1_X_OFFSET_BASE + 1;
+
+    const BG1_Y_OFFSET_BASE: u32 = 0x04000016;
+    const BG1_Y_OFFSET_END: u32 = Self::BG1_Y_OFFSET_BASE + 1;
 
     const BG2_TEXT_X_OFFSET_BASE: u32 = 0x04000018;
     const BG2_TEXT_X_OFFSET_END: u32 = Self::BG2_TEXT_X_OFFSET_BASE + 1;
@@ -518,6 +527,16 @@ impl Bus {
             }
             Self::BG0_Y_OFFSET_BASE..=Self::BG0_Y_OFFSET_END => {
                 self.lcd.read_layer0_y_offset(address & 0b1)
+            }
+
+            Self::BG1_CONTROL_BASE..=Self::BG1_CONTROL_END => {
+                self.lcd.read_layer1_bg_control(address & 0b1)
+            }
+            Self::BG1_X_OFFSET_BASE..=Self::BG1_X_OFFSET_END => {
+                self.lcd.read_layer1_x_offset(address & 0b1)
+            }
+            Self::BG1_Y_OFFSET_BASE..=Self::BG1_Y_OFFSET_END => {
+                self.lcd.read_layer1_y_offset(address & 0b1)
             }
 
             Self::BG2_CONTROL_BASE..=Self::BG2_CONTROL_END => {
@@ -767,6 +786,16 @@ impl Bus {
             }
             Self::BG0_Y_OFFSET_BASE..=Self::BG0_Y_OFFSET_END => {
                 self.lcd.write_layer0_y_offset(value, address & 0b1)
+            }
+
+            Self::BG1_CONTROL_BASE..=Self::BG1_CONTROL_END => {
+                self.lcd.write_layer1_bg_control(value, address & 0b1)
+            }
+            Self::BG1_X_OFFSET_BASE..=Self::BG1_X_OFFSET_END => {
+                self.lcd.write_layer1_x_offset(value, address & 0b1)
+            }
+            Self::BG1_Y_OFFSET_BASE..=Self::BG1_Y_OFFSET_END => {
+                self.lcd.write_layer1_y_offset(value, address & 0b1)
             }
 
             Self::BG2_CONTROL_BASE..=Self::BG2_CONTROL_END => {

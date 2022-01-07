@@ -338,12 +338,6 @@ fn word_fixed_point_to_float(val: u32) -> f64 {
     (signed_value as f64) / VALUE_DIVIDED
 }
 
-pub struct LcdInterruptInfo {
-    pub vblank: bool,
-    pub hblank: bool,
-    pub vcount: bool,
-}
-
 impl Default for Lcd {
     fn default() -> Self {
         Self {
@@ -379,12 +373,13 @@ impl Lcd {
                 self.set_hblank_flag(false);
                 self.state = LcdState::Visible;
             } else if self.dot == 240 {
-                self.set_hblank_flag(true);
                 hblank_entered = true;
+                self.set_hblank_flag(true);
                 self.state = LcdState::HBlank;
             }
         } else if self.vcount == 160 && self.dot == 0 {
             vblank_entered = true;
+            self.set_vblank_flag(true);
             self.state = LcdState::VBlank;
             std::mem::swap(&mut self.buffer, &mut self.back_buffer);
         }
@@ -408,55 +403,65 @@ impl Lcd {
             }
 
             let layer_0_pixel = if self.get_screen_display_bg_0() {
-                self.layer_0.get_pixel(
-                    pixel_x,
-                    pixel_y,
-                    current_mode,
-                    self.vram.as_slice(),
-                    self.bg_palette_ram.as_slice(),
-                )
+                self.layer_0
+                    .get_pixel(
+                        pixel_x,
+                        pixel_y,
+                        current_mode,
+                        self.vram.as_slice(),
+                        self.bg_palette_ram.as_slice(),
+                    )
+                    .map(|pixel| (pixel, self.layer_0.get_priority()))
             } else {
                 None
             };
 
             let layer_1_pixel = if self.get_screen_display_bg_1() {
-                self.layer_1.get_pixel(
-                    pixel_x,
-                    pixel_y,
-                    current_mode,
-                    self.vram.as_slice(),
-                    self.bg_palette_ram.as_slice(),
-                )
+                self.layer_1
+                    .get_pixel(
+                        pixel_x,
+                        pixel_y,
+                        current_mode,
+                        self.vram.as_slice(),
+                        self.bg_palette_ram.as_slice(),
+                    )
+                    .map(|pixel| (pixel, self.layer_1.get_priority()))
             } else {
                 None
             };
 
             let layer_2_pixel = if self.get_screen_display_bg_2() {
-                self.layer_2.get_pixel(
-                    pixel_x,
-                    pixel_y,
-                    current_mode,
-                    display_frame,
-                    self.vram.as_slice(),
-                    self.bg_palette_ram.as_slice(),
-                )
+                self.layer_2
+                    .get_pixel(
+                        pixel_x,
+                        pixel_y,
+                        current_mode,
+                        display_frame,
+                        self.vram.as_slice(),
+                        self.bg_palette_ram.as_slice(),
+                    )
+                    .map(|pixel| (pixel, self.layer_2.get_priority()))
             } else {
                 None
             };
 
             let layer_3_pixel = if self.get_screen_display_bg_3() {
-                self.layer_3.get_pixel(
-                    pixel_x,
-                    pixel_y,
-                    current_mode,
-                    self.vram.as_slice(),
-                    self.bg_palette_ram.as_slice(),
-                )
+                self.layer_3
+                    .get_pixel(
+                        pixel_x,
+                        pixel_y,
+                        current_mode,
+                        self.vram.as_slice(),
+                        self.bg_palette_ram.as_slice(),
+                    )
+                    .map(|pixel| (pixel, self.layer_2.get_priority()))
             } else {
                 None
             };
 
-            let sprite_pixel = self.get_sprite_pixel(pixel_x, pixel_y);
+            let sprite_pixel = self
+                .get_sprite_pixel(pixel_x, pixel_y)
+                .map(|pixel| (pixel, 0));
 
             let final_pixel = None
                 .or(sprite_pixel)
@@ -466,7 +471,7 @@ impl Lcd {
                 .or(layer_3_pixel);
 
             let drawn_pixel = match final_pixel {
-                Some(pixel) => pixel,
+                Some((pixel, _)) => pixel,
                 None => self.bg_palette_ram[0],
             };
 
@@ -704,7 +709,6 @@ impl Lcd {
         u16: DataAccess<T>,
     {
         self.lcd_status = self.lcd_status.set_data(value, index);
-        println!("new lcd status: 0b{:016b}", self.lcd_status)
     }
 
     const BG_PALETTE_RAM_OFFSET_START: u32 = 0x000;
@@ -889,6 +893,48 @@ impl Lcd {
         u16: DataAccess<T>,
     {
         self.layer_0.write_y_offset(value, index);
+    }
+
+    pub fn read_layer1_bg_control<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_1.read_bg_control(index)
+    }
+
+    pub fn write_layer1_bg_control<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_1.write_bg_control(value, index);
+    }
+
+    pub fn read_layer1_x_offset<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_1.read_x_offset(index)
+    }
+
+    pub fn write_layer1_x_offset<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_1.write_x_offset(value, index);
+    }
+
+    pub fn read_layer1_y_offset<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_1.read_y_offset(index)
+    }
+
+    pub fn write_layer1_y_offset<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.layer_1.write_y_offset(value, index);
     }
 
     pub fn read_layer2_bg_control<T>(&self, index: u32) -> T
