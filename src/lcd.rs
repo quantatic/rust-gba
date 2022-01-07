@@ -506,7 +506,7 @@ impl Lcd {
         const WORLD_WIDTH: u16 = 512;
         const WORLD_HEIGHT: u16 = 256;
 
-        for obj in self.obj_attributes.into_iter() {
+        for (i, obj) in self.obj_attributes.into_iter().enumerate() {
             let (sprite_tile_width, sprite_tile_height) = obj.get_obj_size().get_dimensions();
             let sprite_width = sprite_tile_width * TILE_SIZE;
             let sprite_height = sprite_tile_height * TILE_SIZE;
@@ -539,10 +539,10 @@ impl Lcd {
                 let base_corner_offset_y = base_corner_offset_y;
 
                 if obj.get_double_size_flag() {
-                    if base_corner_offset_x < (f64::from(sprite_width) * -0.5)
-                        || base_corner_offset_x >= (f64::from(sprite_width) * 1.5)
-                        || base_corner_offset_y < (f64::from(sprite_height) * -0.5)
-                        || base_corner_offset_y >= (f64::from(sprite_height) * 1.5)
+                    if base_corner_offset_x < 0.0
+                        || base_corner_offset_x >= (f64::from(sprite_width) * 2.0)
+                        || base_corner_offset_y < 0.0
+                        || base_corner_offset_y >= (f64::from(sprite_height) * 2.0)
                     {
                         continue;
                     }
@@ -556,10 +556,31 @@ impl Lcd {
                     }
                 }
 
-                let base_center_offset_x =
-                    f64::from(base_corner_offset_x) - f64::from(center_offset_adjustment_x);
-                let base_center_offset_y =
-                    f64::from(base_corner_offset_y) - f64::from(center_offset_adjustment_y);
+                // In a double-sized sprite, where each square represents the size of an original sprite,
+                //   we use "X" as the central reference point when performing transformations. We don't
+                //   move this point all the way back to an offset of WxH, instead only moving it back to
+                //   an offset of (W/2)x(H/2), as represented by the period ("."). This means that in
+                //   double-sized mode, the effective origin of the drawn sprite is at the dot, instead of
+                //   the top left of the below square. This has the effect of moving the drawn sprite over and
+                //   down by half the width & height of the sprite.
+                //     +---+---+
+                //     | . |   |
+                //     +---X---+
+                //     |   |   |
+                //     +---+---+
+                let (base_center_offset_x, base_center_offset_y) = if obj.get_double_size_flag() {
+                    (
+                        f64::from(base_corner_offset_x)
+                            - (2.0 * f64::from(center_offset_adjustment_x)),
+                        f64::from(base_corner_offset_y)
+                            - (2.0 * f64::from(center_offset_adjustment_y)),
+                    )
+                } else {
+                    (
+                        f64::from(base_corner_offset_x) - f64::from(center_offset_adjustment_x),
+                        f64::from(base_corner_offset_y) - f64::from(center_offset_adjustment_y),
+                    )
+                };
 
                 let center_offset_x = (base_center_offset_x * a) + (base_center_offset_y * b);
                 let center_offset_y = (base_center_offset_x * c) + (base_center_offset_y * d);

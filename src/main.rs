@@ -7,7 +7,7 @@ mod keypad;
 mod lcd;
 mod timer;
 
-use std::{error::Error, panic::PanicInfo, sync::Mutex};
+use std::error::Error;
 
 use lazy_static::lazy_static;
 use pixels::{wgpu::TextureFormat, PixelsBuilder, SurfaceTexture};
@@ -20,16 +20,12 @@ use winit::{
 use bit_manipulation::BitManipulation;
 use data_access::DataAccess;
 
-use crate::{cpu::Instruction, keypad::Key};
+use crate::keypad::Key;
 
 #[cfg(target_pointer_width = "16")]
 compile_error!("architecture with pointer size >= 32 required");
 
 const DEBUG_AND_PANIC_ON_LOOP: bool = false;
-
-lazy_static! {
-    pub static ref INSTRUCTIONS_PRINT: Mutex<usize> = Mutex::default();
-}
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("{}", std::mem::size_of::<cpu::Cpu>());

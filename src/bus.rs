@@ -8,7 +8,7 @@ use crate::BitManipulation;
 use crate::DataAccess;
 
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
-const ROM: &[u8] = include_bytes!("../emerald.gba");
+const ROM: &[u8] = include_bytes!("../obj_aff.gba");
 
 #[derive(Debug)]
 pub struct Bus {
@@ -1169,7 +1169,6 @@ impl Bus {
 
                     self.request_interrupt(interrupt_type);
                 }
-                return;
             }
         }
     }
