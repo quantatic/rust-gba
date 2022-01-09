@@ -110,6 +110,10 @@ impl Layer2 {
 
                         let palette_idx = vram[tile_idx];
 
+                        if palette_idx == 0 {
+                            return None;
+                        }
+
                         palette_idx
                     }
                     PaletteDepth::FourBit => {

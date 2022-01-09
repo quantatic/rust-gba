@@ -10,7 +10,7 @@ use layer_3::Layer3;
 
 use crate::{BitManipulation, DataAccess};
 
-use std::ops::RangeInclusive;
+use std::{cmp::Ordering, ops::RangeInclusive};
 
 pub const LCD_WIDTH: usize = 240;
 pub const LCD_HEIGHT: usize = 160;
@@ -481,7 +481,7 @@ impl Lcd {
                         self.vram.as_slice(),
                         self.bg_palette_ram.as_slice(),
                     )
-                    .map(|pixel| (pixel, self.layer_2.get_priority()))
+                    .map(|pixel| (pixel, self.layer_3.get_priority()))
             } else {
                 None
             };
@@ -493,27 +493,24 @@ impl Lcd {
                 self.get_sprite_pixel(pixel_x, pixel_y, obj_mosaic_horizontal, obj_mosaic_vertical);
             let sprite_pixel_info = (sprite_pixel, PixelType::Sprite);
 
-            let mut final_pixel = None;
-            for pixel in [
+            let mut pixels = [
                 sprite_pixel,
-                layer_0_pixel,
+                // layer_0_pixel,
                 layer_1_pixel,
                 layer_2_pixel,
                 layer_3_pixel,
-            ] {
-                final_pixel =
-                    final_pixel.map_or(pixel, |(final_pixel_color, final_pixel_priority)| {
-                        if let Some((current_pixel_color, current_pixel_priority)) = pixel {
-                            if current_pixel_priority < final_pixel_priority {
-                                return Some((current_pixel_color, current_pixel_priority));
-                            }
-                        }
+            ];
 
-                        Some((final_pixel_color, final_pixel_priority))
-                    });
-            }
+            pixels.sort_by(|pixel_one, pixel_two| match (pixel_one, pixel_two) {
+                (Some((_, priority_one)), Some((_, priority_two))) => {
+                    Ord::cmp(priority_one, priority_two)
+                }
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            });
 
-            let drawn_pixel = match final_pixel {
+            let drawn_pixel = match pixels[0] {
                 Some((pixel, _)) => pixel,
                 None => self.bg_palette_ram[0],
             };
