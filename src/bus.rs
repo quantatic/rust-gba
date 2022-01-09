@@ -1,3 +1,4 @@
+use std::fmt::{Debug, UpperHex};
 use std::ops::RangeInclusive;
 
 use crate::apu::Apu;
@@ -8,7 +9,7 @@ use crate::BitManipulation;
 use crate::DataAccess;
 
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
-const ROM: &[u8] = include_bytes!("../kirby_dream_land.gba");
+const ROM: &[u8] = include_bytes!("../bld_demo.gba");
 
 #[derive(Debug)]
 pub struct Bus {
@@ -83,6 +84,7 @@ struct DmaInfo {
     dest_addr: u32,
     word_count: u16,
     dma_control: u16,
+    dma_ongoing: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -114,8 +116,11 @@ impl DmaInfo {
     fn write_source_addr<T>(&mut self, value: T, index: u32)
     where
         u32: DataAccess<T>,
+        T: UpperHex,
     {
+        println!("write source address index {}: {:04X}", index, value);
         self.source_addr = self.source_addr.set_data(value, index);
+        println!("new src addr: {:08X}", self.source_addr);
     }
 
     fn read_dest_addr<T>(&self, index: u32) -> T
@@ -130,6 +135,7 @@ impl DmaInfo {
         u32: DataAccess<T>,
     {
         self.dest_addr = self.dest_addr.set_data(value, index);
+        println!("new dest addr: {:08X}", self.dest_addr);
     }
 
     fn read_word_count<T>(&self, index: u32) -> T
@@ -157,24 +163,28 @@ impl DmaInfo {
     where
         u16: DataAccess<T>,
     {
+        let old_dma_enable = self.get_dma_enable();
         self.dma_control = self.dma_control.set_data(value, index);
+
+        // DMA immedietly is started on rising edge of DMA enable.
+        if !old_dma_enable
+            && self.get_dma_enable()
+            && matches!(self.get_dma_start_timing(), DmaStartTiming::Immediately)
+        {
+            self.dma_ongoing = true;
+        }
     }
 }
 
 impl DmaInfo {
-    const INCREMENT_ADDR_CONTROL: u16 = 0;
-    const DECREMENT_ADDR_CONTROL: u16 = 1;
-    const FIXED_ADDR_CONTROL: u16 = 2;
-    const INCREMENT_RELOAD_ADDR_CONTROL: u16 = 3;
-
     fn get_dest_addr_control(&self) -> DmaAddrControl {
         const DEST_ADDR_CONTROL_BIT_RANGE: RangeInclusive<usize> = 5..=6;
 
         match self.dma_control.get_bit_range(DEST_ADDR_CONTROL_BIT_RANGE) {
-            Self::INCREMENT_ADDR_CONTROL => DmaAddrControl::Increment,
-            Self::DECREMENT_ADDR_CONTROL => DmaAddrControl::Decrement,
-            Self::FIXED_ADDR_CONTROL => DmaAddrControl::Fixed,
-            Self::INCREMENT_RELOAD_ADDR_CONTROL => DmaAddrControl::IncrementReload,
+            0 => DmaAddrControl::Increment,
+            1 => DmaAddrControl::Decrement,
+            2 => DmaAddrControl::Fixed,
+            3 => DmaAddrControl::IncrementReload,
             _ => unreachable!(),
         }
     }
@@ -186,10 +196,10 @@ impl DmaInfo {
             .dma_control
             .get_bit_range(SOURCE_ADDR_CONTROL_BIT_RANGE)
         {
-            Self::INCREMENT_ADDR_CONTROL => DmaAddrControl::Increment,
-            Self::DECREMENT_ADDR_CONTROL => DmaAddrControl::Decrement,
-            Self::FIXED_ADDR_CONTROL => DmaAddrControl::Fixed,
-            Self::INCREMENT_RELOAD_ADDR_CONTROL => DmaAddrControl::IncrementReload,
+            0 => DmaAddrControl::Increment,
+            1 => DmaAddrControl::Decrement,
+            2 => DmaAddrControl::Fixed,
+            3 => unreachable!("increment reload illegal for source control"),
             _ => unreachable!(),
         }
     }
@@ -241,6 +251,14 @@ impl DmaInfo {
 
     fn set_dma_enable(&mut self, set: bool) {
         self.dma_control = self.dma_control.set_bit(Self::DMA_ENABLE_BIT_INDEX, set);
+    }
+
+    fn get_dma_ongoing(&self) -> bool {
+        self.dma_ongoing
+    }
+
+    fn set_dma_ongoing(&mut self, set: bool) {
+        self.dma_ongoing = set;
     }
 }
 
@@ -369,6 +387,9 @@ impl Bus {
 
     const BG3_AFFINE_Y_OFFSET_BASE: u32 = 0x0400003C;
     const BG3_AFFINE_Y_OFFSET_END: u32 = Self::BG3_AFFINE_Y_OFFSET_BASE + 3;
+
+    const MOSAIC_SIZE_BASE: u32 = 0x0400004C;
+    const MOSAIC_SIZE_END: u32 = Self::MOSAIC_SIZE_BASE + 3;
 
     const SOUND_BASE: u32 = 0x04000060;
     const SOUND_END: u32 = 0x040000A8;
@@ -601,6 +622,10 @@ impl Bus {
                 self.lcd.read_layer3_affine_param_d(address & 0b1)
             }
 
+            Self::MOSAIC_SIZE_BASE..=Self::MOSAIC_SIZE_END => {
+                self.lcd.read_mosaic_size(address.get_bit_range(0..=1))
+            }
+
             Self::SOUND_PWM_CONTROL_BASE..=Self::SOUND_PWM_CONTROL_END => {
                 self.apu.read_sound_bias(address & 0b1)
             }
@@ -688,7 +713,7 @@ impl Bus {
             }
 
             Self::SIO_CONTROL_BASE..=Self::SIO_CONTROL_END => {
-                println!("read from stubbed SIOCNT");
+                // println!("read from stubbed SIOCNT");
                 0
             }
 
@@ -710,7 +735,7 @@ impl Bus {
                 self.read_interrupt_request(address & 0b1)
             }
             Self::GAME_PAK_WAITSTATE_BASE..=Self::GAME_PAK_WAITSTATE_END => {
-                println!("stubbed read game_pak[{}]", address & 0b1);
+                // println!("stubbed read game_pak[{}]", address & 0b1);
                 0
             }
             Self::INTERRUPT_MASTER_ENABLE_BASE..=Self::INTERRUPT_MASTER_ENABLE_END => {
@@ -740,7 +765,7 @@ impl Bus {
                 self.game_pak_sram[actual_offset as usize]
             }
             Self::SERIAL_BASE..=Self::SERIAL_END => {
-                println!("read from stubbed serial {:08X}", address);
+                // println!("read from stubbed serial {:08X}", address);
                 0
             }
             _ => todo!("byte read 0x{:08x}", address),
@@ -866,63 +891,15 @@ impl Bus {
                 self.lcd.write_layer3_affine_param_d(value, address & 0b1)
             }
 
+            Self::MOSAIC_SIZE_BASE..=Self::MOSAIC_SIZE_END => self
+                .lcd
+                .write_mosaic_size(value, address.get_bit_range(0..=1)),
+
             Self::SOUND_PWM_CONTROL_BASE..=Self::SOUND_PWM_CONTROL_END => {
                 self.apu.write_sound_bias(value, address & 0b1)
             }
             Self::SOUND_BASE..=Self::SOUND_END => {
-                println!("stubbed sound write {:02X} -> [{:08X}]", value, address)
-            }
-
-            Self::DMA_0_SOURCE_BASE..=Self::DMA_0_SOURCE_END => {
-                self.dma_infos[0].write_source_addr(value, address & 0b11)
-            }
-            Self::DMA_0_DEST_BASE..=Self::DMA_0_DEST_END => {
-                self.dma_infos[0].write_dest_addr(value, address & 0b11)
-            }
-            Self::DMA_0_WORD_COUNT_BASE..=Self::DMA_0_WORD_COUNT_END => {
-                self.dma_infos[0].write_word_count(value, address & 0b1)
-            }
-            Self::DMA_0_CONTROL_BASE..=Self::DMA_0_CONTROL_END => {
-                self.dma_infos[0].write_dma_control(value, address & 0b1)
-            }
-
-            Self::DMA_1_SOURCE_BASE..=Self::DMA_1_SOURCE_END => {
-                self.dma_infos[1].write_source_addr(value, address & 0b11)
-            }
-            Self::DMA_1_DEST_BASE..=Self::DMA_1_DEST_END => {
-                self.dma_infos[1].write_dest_addr(value, address & 0b11)
-            }
-            Self::DMA_1_WORD_COUNT_BASE..=Self::DMA_1_WORD_COUNT_END => {
-                self.dma_infos[1].write_word_count(value, address & 0b1)
-            }
-            Self::DMA_1_CONTROL_BASE..=Self::DMA_1_CONTROL_END => {
-                self.dma_infos[1].write_dma_control(value, address & 0b1)
-            }
-
-            Self::DMA_2_SOURCE_BASE..=Self::DMA_2_SOURCE_END => {
-                self.dma_infos[2].write_source_addr(value, address & 0b11)
-            }
-            Self::DMA_2_DEST_BASE..=Self::DMA_2_DEST_END => {
-                self.dma_infos[2].write_dest_addr(value, address & 0b11)
-            }
-            Self::DMA_2_WORD_COUNT_BASE..=Self::DMA_2_WORD_COUNT_END => {
-                self.dma_infos[2].write_word_count(value, address & 0b1)
-            }
-            Self::DMA_2_CONTROL_BASE..=Self::DMA_2_CONTROL_END => {
-                self.dma_infos[2].write_dma_control(value, address & 0b1)
-            }
-
-            Self::DMA_3_SOURCE_BASE..=Self::DMA_3_SOURCE_END => {
-                self.dma_infos[3].write_source_addr(value, address & 0b11)
-            }
-            Self::DMA_3_DEST_BASE..=Self::DMA_3_DEST_END => {
-                self.dma_infos[3].write_dest_addr(value, address & 0b11)
-            }
-            Self::DMA_3_WORD_COUNT_BASE..=Self::DMA_3_WORD_COUNT_END => {
-                self.dma_infos[3].write_word_count(value, address & 0b1)
-            }
-            Self::DMA_3_CONTROL_BASE..=Self::DMA_3_CONTROL_END => {
-                self.dma_infos[3].write_dma_control(value, address & 0b1)
+                // println!("stubbed sound write {:02X} -> [{:08X}]", value, address)
             }
 
             Self::TIMER_0_CONTROL_BASE..=Self::TIMER_0_CONTROL_END => {
@@ -979,7 +956,7 @@ impl Bus {
             }
             Self::OAM_BASE..=Self::OAM_END => self.lcd.write_oam(value, address - Self::OAM_BASE),
             0x04000008..=0x40001FF => {
-                println!("stubbed write 0x{:02x} -> 0x{:08x}", value, address)
+                // println!("stubbed write 0x{:02x} -> 0x{:08x}", value, address)
             }
             0x04000206..=0x04000207 | 0x0400020A..=0x040002FF | 0x04000410..=0x04000411 => {
                 println!(
@@ -1001,7 +978,7 @@ impl Bus {
                 self.game_pak_sram[actual_offset as usize] = value;
             }
             Self::SERIAL_BASE..=Self::SERIAL_END => {
-                println!("stubbed serial write {:02X} -> [{:08X}]", value, address);
+                // println!("stubbed serial write {:02X} -> [{:08X}]", value, address);
             }
             _ => todo!("0x{:02x} -> 0x{:08x}", value, address),
         }
@@ -1010,11 +987,66 @@ impl Bus {
     pub fn write_halfword_address(&mut self, value: u16, address: u32) {
         assert!(address & 0b1 == 0);
 
-        let low_byte = value.get_data(0);
-        let high_byte = value.get_data(1);
+        match address {
+            Self::DMA_0_SOURCE_BASE..=Self::DMA_0_SOURCE_END => {
+                self.dma_infos[0].write_source_addr(value, address.get_bit_range(1..=1))
+            }
+            Self::DMA_0_DEST_BASE..=Self::DMA_0_DEST_END => {
+                self.dma_infos[0].write_dest_addr(value, address.get_bit_range(1..=1))
+            }
+            Self::DMA_0_WORD_COUNT_BASE..=Self::DMA_0_WORD_COUNT_END => {
+                self.dma_infos[0].write_word_count(value, 0)
+            }
+            Self::DMA_0_CONTROL_BASE..=Self::DMA_0_CONTROL_END => {
+                self.dma_infos[0].write_dma_control(value, 0)
+            }
 
-        self.write_byte_address(low_byte, address);
-        self.write_byte_address(high_byte, address + 1);
+            Self::DMA_1_SOURCE_BASE..=Self::DMA_1_SOURCE_END => {
+                self.dma_infos[1].write_source_addr(value, address.get_bit_range(1..=1))
+            }
+            Self::DMA_1_DEST_BASE..=Self::DMA_1_DEST_END => {
+                self.dma_infos[1].write_dest_addr(value, address.get_bit_range(1..=1))
+            }
+            Self::DMA_1_WORD_COUNT_BASE..=Self::DMA_1_WORD_COUNT_END => {
+                self.dma_infos[1].write_word_count(value, 0)
+            }
+            Self::DMA_1_CONTROL_BASE..=Self::DMA_1_CONTROL_END => {
+                self.dma_infos[1].write_dma_control(value, 0)
+            }
+
+            Self::DMA_2_SOURCE_BASE..=Self::DMA_2_SOURCE_END => {
+                self.dma_infos[2].write_source_addr(value, address.get_bit_range(1..=1))
+            }
+            Self::DMA_2_DEST_BASE..=Self::DMA_2_DEST_END => {
+                self.dma_infos[2].write_dest_addr(value, address.get_bit_range(1..=1))
+            }
+            Self::DMA_2_WORD_COUNT_BASE..=Self::DMA_2_WORD_COUNT_END => {
+                self.dma_infos[2].write_word_count(value, 0)
+            }
+            Self::DMA_2_CONTROL_BASE..=Self::DMA_2_CONTROL_END => {
+                self.dma_infos[2].write_dma_control(value, 0)
+            }
+
+            Self::DMA_3_SOURCE_BASE..=Self::DMA_3_SOURCE_END => {
+                self.dma_infos[3].write_source_addr(value, address.get_bit_range(1..=1))
+            }
+            Self::DMA_3_DEST_BASE..=Self::DMA_3_DEST_END => {
+                self.dma_infos[3].write_dest_addr(value, address.get_bit_range(1..=1))
+            }
+            Self::DMA_3_WORD_COUNT_BASE..=Self::DMA_3_WORD_COUNT_END => {
+                self.dma_infos[3].write_word_count(value, 0)
+            }
+            Self::DMA_3_CONTROL_BASE..=Self::DMA_3_CONTROL_END => {
+                self.dma_infos[3].write_dma_control(value, 0)
+            }
+            _ => {
+                let low_byte = value.get_data(0);
+                let high_byte = value.get_data(1);
+
+                self.write_byte_address(low_byte, address);
+                self.write_byte_address(high_byte, address + 1);
+            }
+        }
     }
 
     pub fn write_word_address(&mut self, value: u32, address: u32) {
@@ -1105,10 +1137,12 @@ impl Bus {
     }
 
     fn step_dma(&mut self, state_changes: LcdStateChangeInfo) {
-        for (dma_idx, dma) in self.dma_infos.into_iter().enumerate() {
-            let dma_triggered = if dma.get_dma_enable() {
-                match dma.get_dma_start_timing() {
-                    DmaStartTiming::Immediately => true,
+        for dma_idx in 0..self.dma_infos.len() {
+            let original_dma_info = self.dma_infos[dma_idx];
+
+            let dma_triggered = if original_dma_info.get_dma_enable() {
+                match original_dma_info.get_dma_start_timing() {
+                    DmaStartTiming::Immediately => false,
                     DmaStartTiming::VBlank => state_changes.vblank_entered,
                     DmaStartTiming::HBlank => state_changes.hblank_entered,
                     DmaStartTiming::Special => false,
@@ -1117,24 +1151,29 @@ impl Bus {
                 false
             };
 
+            let dma = &mut self.dma_infos[dma_idx];
             if dma_triggered {
-                println!("{:?}", dma.get_dma_start_timing());
+                dma.set_dma_ongoing(true);
+            }
+
+            if original_dma_info.get_dma_ongoing() {
+                println!("{:?}", original_dma_info.get_dma_start_timing());
                 println!("performing dma transfer");
-                println!("{:#08X?}", dma);
+                println!("{:#08X?}", original_dma_info);
                 println!("---------------");
 
-                let mut dma_source = dma.source_addr;
-                let mut dma_dest = dma.dest_addr;
+                let mut dma_source = original_dma_info.source_addr;
+                let mut dma_dest = original_dma_info.dest_addr;
                 let original_dest = dma_dest;
-                let dma_length = usize::from(dma.word_count);
+                let dma_length = usize::from(original_dma_info.word_count);
 
                 for _ in 0..dma_length {
-                    let transfer_size = match dma.get_dma_transfer_type() {
+                    let transfer_size = match original_dma_info.get_dma_transfer_type() {
                         DmaTransferType::Bit16 => 2,
                         DmaTransferType::Bit32 => 4,
                     };
 
-                    match dma.get_dma_transfer_type() {
+                    match original_dma_info.get_dma_transfer_type() {
                         DmaTransferType::Bit16 => {
                             let source_data = self.read_halfword_address(dma_source);
                             self.write_halfword_address(source_data, dma_dest);
@@ -1147,7 +1186,7 @@ impl Bus {
                         }
                     }
 
-                    match dma.get_source_addr_control() {
+                    match original_dma_info.get_source_addr_control() {
                         DmaAddrControl::Fixed => {}
                         DmaAddrControl::Decrement => dma_source -= transfer_size,
                         DmaAddrControl::Increment | DmaAddrControl::IncrementReload => {
@@ -1155,7 +1194,7 @@ impl Bus {
                         }
                     };
 
-                    match dma.get_dest_addr_control() {
+                    match original_dma_info.get_dest_addr_control() {
                         DmaAddrControl::Fixed => {}
                         DmaAddrControl::Decrement => dma_dest -= transfer_size,
                         DmaAddrControl::Increment | DmaAddrControl::IncrementReload => {
@@ -1164,7 +1203,10 @@ impl Bus {
                     };
                 }
 
-                if matches!(dma.get_dest_addr_control(), DmaAddrControl::IncrementReload) {
+                if matches!(
+                    original_dma_info.get_dest_addr_control(),
+                    DmaAddrControl::IncrementReload
+                ) {
                     dma_dest = original_dest;
                 }
 
@@ -1175,6 +1217,7 @@ impl Bus {
                 if !dma.get_dma_repeat() {
                     dma.set_dma_enable(false);
                 }
+                dma.set_dma_ongoing(false);
 
                 if dma.get_irq_at_end() {
                     let interrupt_type = match dma_idx {

@@ -25,6 +25,8 @@ impl Layer3 {
         &self,
         pixel_x: u16,
         pixel_y: u16,
+        mosaic_horizontal: u16,
+        mosaic_vertical: u16,
         mode: BgMode,
         vram: &[u8],
         bg_palette: &[Rgb555],
@@ -33,8 +35,15 @@ impl Layer3 {
             BgMode::Mode0 => {
                 // text mode
 
-                let x = pixel_x + self.get_text_x_offset();
-                let y = pixel_y + self.get_text_y_offset();
+                let mut x = pixel_x + self.get_text_x_offset();
+                let mut y = pixel_y + self.get_text_y_offset();
+
+                if self.get_mosaic() {
+                    x -= x % mosaic_horizontal;
+                    y -= y % mosaic_vertical;
+                }
+                let x = x;
+                let y = y;
 
                 let map_data_base = self.bg_map_data_base() as usize;
                 let tile_data_base = self.bg_tile_data_base() as usize;

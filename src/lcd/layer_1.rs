@@ -16,14 +16,23 @@ impl Layer1 {
         &self,
         pixel_x: u16,
         pixel_y: u16,
+        mosaic_horizontal: u16,
+        mosaic_vertical: u16,
         mode: BgMode,
         vram: &[u8],
         bg_palette: &[Rgb555],
     ) -> Option<Rgb555> {
         match mode {
             BgMode::Mode0 | BgMode::Mode1 => {
-                let x = pixel_x + self.get_x_offset();
-                let y = pixel_y + self.get_y_offset();
+                let mut x = pixel_x + self.get_x_offset();
+                let mut y = pixel_y + self.get_y_offset();
+
+                if self.get_mosaic() {
+                    x -= x % mosaic_horizontal;
+                    y -= y % mosaic_vertical;
+                }
+                let x = x;
+                let y = y;
 
                 let map_data_base = self.bg_map_data_base() as usize;
                 let tile_data_base = self.bg_tile_data_base() as usize;

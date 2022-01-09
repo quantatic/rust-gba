@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             surface_texture,
         )
         .texture_format(TextureFormat::Rgba8UnormSrgb)
-        .enable_vsync(true)
+        .enable_vsync(false)
         .build()?
     };
 

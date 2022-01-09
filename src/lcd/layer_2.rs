@@ -25,6 +25,8 @@ impl Layer2 {
         &self,
         pixel_x: u16,
         pixel_y: u16,
+        mosaic_horizontal: u16,
+        mosaic_vertical: u16,
         mode: BgMode,
         frame: DisplayFrame,
         vram: &[u8],
@@ -32,11 +34,17 @@ impl Layer2 {
     ) -> Option<Rgb555> {
         match mode {
             BgMode::Mode0 => {
-                let map_base = self.bg_map_data_base() as usize;
                 // text mode
 
-                let x = pixel_x + self.get_text_x_offset();
-                let y = pixel_y + self.get_text_y_offset();
+                let mut x = pixel_x + self.get_text_x_offset();
+                let mut y = pixel_y + self.get_text_y_offset();
+
+                if self.get_mosaic() {
+                    x -= x % mosaic_horizontal;
+                    y -= y % mosaic_vertical;
+                }
+                let x = x;
+                let y = y;
 
                 let map_data_base = self.bg_map_data_base() as usize;
                 let tile_data_base = self.bg_tile_data_base() as usize;
@@ -200,7 +208,17 @@ impl Layer2 {
                 }
             }
             BgMode::Mode3 => {
-                let pixel_idx = (usize::from(pixel_y) * super::LCD_WIDTH) + usize::from(pixel_x);
+                let mut x = pixel_x;
+                let mut y = pixel_y;
+
+                if self.get_mosaic() {
+                    x -= x % mosaic_horizontal;
+                    y -= y % mosaic_vertical;
+                }
+                let x = x;
+                let y = y;
+
+                let pixel_idx = (usize::from(y) * super::LCD_WIDTH) + usize::from(x);
                 let pixel_offset = pixel_idx * 2;
 
                 let pixel_low = vram[pixel_offset];
@@ -212,7 +230,17 @@ impl Layer2 {
             BgMode::Mode4 => {
                 const FRAME_SIZE: u32 = 0xA000;
 
-                let pixel_idx = (usize::from(pixel_y) * super::LCD_WIDTH) + usize::from(pixel_x);
+                let mut x = pixel_x;
+                let mut y = pixel_y;
+
+                if self.get_mosaic() {
+                    x -= x % mosaic_horizontal;
+                    y -= y % mosaic_vertical;
+                }
+                let x = x;
+                let y = y;
+
+                let pixel_idx = (usize::from(y) * super::LCD_WIDTH) + usize::from(x);
                 let pixel_offset = match frame {
                     DisplayFrame::Frame0 => pixel_idx,
                     DisplayFrame::Frame1 => pixel_idx + (FRAME_SIZE as usize),
@@ -230,8 +258,17 @@ impl Layer2 {
                     return Some(Rgb555::default());
                 }
 
-                let pixel_idx =
-                    (usize::from(pixel_y) * usize::from(MODE_WIDTH)) + usize::from(pixel_x);
+                let mut x = pixel_x;
+                let mut y = pixel_y;
+
+                if self.get_mosaic() {
+                    x -= x % mosaic_horizontal;
+                    y -= y % mosaic_vertical;
+                }
+                let x = x;
+                let y = y;
+
+                let pixel_idx = (usize::from(y) * usize::from(MODE_WIDTH)) + usize::from(x);
                 let pixel_offset = pixel_idx * 2;
 
                 let pixel_low = vram[pixel_offset];

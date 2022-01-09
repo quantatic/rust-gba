@@ -40,6 +40,15 @@ enum BgMode {
 }
 
 #[derive(Clone, Copy, Debug)]
+enum PixelType {
+    Layer0,
+    Layer1,
+    Layer2,
+    Layer3,
+    Sprite,
+}
+
+#[derive(Clone, Copy, Debug)]
 enum DisplayFrame {
     Frame0,
     Frame1,
@@ -309,6 +318,7 @@ pub struct Lcd {
     vcount: u16,
     lcd_control: u16,
     lcd_status: u16,
+    mosaic_size: u32,
     state: LcdState,
     bg_palette_ram: Box<[Rgb555; 0x100]>,
     obj_palette_ram: Box<[Rgb555; 0x100]>,
@@ -347,6 +357,7 @@ impl Default for Lcd {
             vcount: 0,
             lcd_control: 0,
             lcd_status: 0,
+            mosaic_size: 0,
             state: LcdState::Visible,
             bg_palette_ram: Box::new([Rgb555::default(); 0x100]),
             obj_palette_ram: Box::new([Rgb555::default(); 0x100]),
@@ -404,11 +415,16 @@ impl Lcd {
             //     );
             // }
 
+            let bg_mosaic_horizontal = self.get_bg_mosaic_horizontal();
+            let bg_mosaic_vertical = self.get_bg_mosaic_vertical();
+
             let layer_0_pixel = if self.get_screen_display_bg_0() {
                 self.layer_0
                     .get_pixel(
                         pixel_x,
                         pixel_y,
+                        bg_mosaic_horizontal,
+                        bg_mosaic_vertical,
                         current_mode,
                         self.vram.as_slice(),
                         self.bg_palette_ram.as_slice(),
@@ -417,12 +433,15 @@ impl Lcd {
             } else {
                 None
             };
+            let layer_0_pixel_info = (layer_0_pixel, PixelType::Layer0);
 
             let layer_1_pixel = if self.get_screen_display_bg_1() {
                 self.layer_1
                     .get_pixel(
                         pixel_x,
                         pixel_y,
+                        bg_mosaic_horizontal,
+                        bg_mosaic_vertical,
                         current_mode,
                         self.vram.as_slice(),
                         self.bg_palette_ram.as_slice(),
@@ -431,12 +450,15 @@ impl Lcd {
             } else {
                 None
             };
+            let layer_1_pixel_info = (layer_1_pixel, PixelType::Layer1);
 
             let layer_2_pixel = if self.get_screen_display_bg_2() {
                 self.layer_2
                     .get_pixel(
                         pixel_x,
                         pixel_y,
+                        bg_mosaic_horizontal,
+                        bg_mosaic_vertical,
                         current_mode,
                         display_frame,
                         self.vram.as_slice(),
@@ -446,11 +468,15 @@ impl Lcd {
             } else {
                 None
             };
+            let layer_2_pixel_info = (layer_2_pixel, PixelType::Layer2);
+
             let layer_3_pixel = if self.get_screen_display_bg_3() {
                 self.layer_3
                     .get_pixel(
                         pixel_x,
                         pixel_y,
+                        bg_mosaic_horizontal,
+                        bg_mosaic_vertical,
                         current_mode,
                         self.vram.as_slice(),
                         self.bg_palette_ram.as_slice(),
@@ -459,8 +485,13 @@ impl Lcd {
             } else {
                 None
             };
+            let layer_3_pixel_info = (layer_3_pixel, PixelType::Layer3);
 
-            let sprite_pixel = self.get_sprite_pixel(pixel_x, pixel_y);
+            let obj_mosaic_horizontal = self.get_obj_mosaic_horizontal();
+            let obj_mosaic_vertical = self.get_obj_mosaic_vertical();
+            let sprite_pixel =
+                self.get_sprite_pixel(pixel_x, pixel_y, obj_mosaic_horizontal, obj_mosaic_vertical);
+            let sprite_pixel_info = (sprite_pixel, PixelType::Sprite);
 
             let mut final_pixel = None;
             for pixel in [
@@ -512,7 +543,13 @@ impl Lcd {
         }
     }
 
-    fn get_sprite_pixel(&self, pixel_x: u16, pixel_y: u16) -> Option<(Rgb555, u16)> {
+    fn get_sprite_pixel(
+        &self,
+        pixel_x: u16,
+        pixel_y: u16,
+        obj_mosaic_horizontal: u16,
+        obj_mosaic_vertical: u16,
+    ) -> Option<(Rgb555, u16)> {
         const OBJ_TILE_DATA_VRAM_BASE: usize = 0x10000;
         const TILE_SIZE: u16 = 8;
         const WORLD_WIDTH: u16 = 512;
@@ -610,8 +647,8 @@ impl Lcd {
 
                 (corner_offset_x as u16, corner_offset_y as u16)
             } else {
-                let base_corner_offset_x = f64::from(pixel_x) - f64::from(sprite_x);
-                let base_corner_offset_y = f64::from(pixel_y) - f64::from(sprite_y);
+                let mut base_corner_offset_x = f64::from(pixel_x) - f64::from(sprite_x);
+                let mut base_corner_offset_y = f64::from(pixel_y) - f64::from(sprite_y);
 
                 if base_corner_offset_x < 0.0
                     || base_corner_offset_x >= f64::from(sprite_width)
@@ -620,6 +657,13 @@ impl Lcd {
                 {
                     continue;
                 }
+
+                if obj.get_obj_mosaic() {
+                    base_corner_offset_x -= base_corner_offset_x % f64::from(obj_mosaic_horizontal);
+                    base_corner_offset_y -= base_corner_offset_y % f64::from(obj_mosaic_vertical);
+                }
+                let base_corner_offset_x = base_corner_offset_x;
+                let base_corner_offset_y = base_corner_offset_y;
 
                 let offset_x = if obj.get_horizontal_flip() {
                     f64::from(sprite_width) - 1.0 - base_corner_offset_x
@@ -745,6 +789,20 @@ impl Lcd {
         u16: DataAccess<T>,
     {
         self.lcd_status = self.lcd_status.set_data(value, index);
+    }
+
+    pub fn read_mosaic_size<T>(&self, index: u32) -> T
+    where
+        u32: DataAccess<T>,
+    {
+        self.mosaic_size.get_data(index)
+    }
+
+    pub fn write_mosaic_size<T>(&mut self, value: T, index: u32)
+    where
+        u32: DataAccess<T>,
+    {
+        self.mosaic_size = self.mosaic_size.set_data(value, index)
     }
 
     const BG_PALETTE_RAM_OFFSET_START: u32 = 0x000;
@@ -1320,6 +1378,42 @@ impl Lcd {
         const VCOUNT_SETTING_BIT_RANGE: RangeInclusive<usize> = 8..=15;
 
         self.lcd_status.get_bit_range(VCOUNT_SETTING_BIT_RANGE)
+    }
+
+    fn get_bg_mosaic_horizontal(&self) -> u16 {
+        const BG_MOSAIC_HORIZONTAL_SIZE_BIT_RANGE: RangeInclusive<usize> = 0..=3;
+
+        (self
+            .mosaic_size
+            .get_bit_range(BG_MOSAIC_HORIZONTAL_SIZE_BIT_RANGE)
+            + 1) as u16
+    }
+
+    fn get_bg_mosaic_vertical(&self) -> u16 {
+        const BG_MOSAIC_VERTICAL_SIZE_BIT_RANGE: RangeInclusive<usize> = 4..=7;
+
+        (self
+            .mosaic_size
+            .get_bit_range(BG_MOSAIC_VERTICAL_SIZE_BIT_RANGE)
+            + 1) as u16
+    }
+
+    fn get_obj_mosaic_horizontal(&self) -> u16 {
+        const OBJ_MOSAIC_HORIZONTAL_SIZE_BIT_RANGE: RangeInclusive<usize> = 8..=11;
+
+        (self
+            .mosaic_size
+            .get_bit_range(OBJ_MOSAIC_HORIZONTAL_SIZE_BIT_RANGE)
+            + 1) as u16
+    }
+
+    fn get_obj_mosaic_vertical(&self) -> u16 {
+        const OBJ_MOSAIC_VERTICAL_SIZE_BIT_RANGE: RangeInclusive<usize> = 12..=15;
+
+        (self
+            .mosaic_size
+            .get_bit_range(OBJ_MOSAIC_VERTICAL_SIZE_BIT_RANGE)
+            + 1) as u16
     }
 }
 
