@@ -10,7 +10,7 @@ use layer_3::Layer3;
 
 use crate::{BitManipulation, DataAccess};
 
-use std::{cmp::Ordering, ops::RangeInclusive};
+use std::{cmp::Ordering, default, ops::RangeInclusive};
 
 pub const LCD_WIDTH: usize = 240;
 pub const LCD_HEIGHT: usize = 160;
@@ -39,6 +39,25 @@ enum BgMode {
     Mode5,
 }
 
+#[derive(Copy, Clone, Debug)]
+struct PixelInfo {
+    priority: u16,
+    color: Rgb555,
+    pixel_type: PixelType,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct SpritePixelInfo {
+    pixel_info: PixelInfo,
+    semi_transparent: bool,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct SpritePixelQueryInfo {
+    sprite_pixel_info: Option<SpritePixelInfo>,
+    obj_window: bool,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum PixelType {
     Layer0,
@@ -46,6 +65,15 @@ enum PixelType {
     Layer2,
     Layer3,
     Sprite,
+    Backdrop,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ColorSpecialEffect {
+    None,
+    AlphaBlending,
+    BrightnessIncrease,
+    BrightnessDecrease,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -58,6 +86,12 @@ enum DisplayFrame {
 enum PaletteDepth {
     FourBit,
     EightBit,
+}
+
+impl Default for PaletteDepth {
+    fn default() -> Self {
+        PaletteDepth::EightBit
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -89,20 +123,23 @@ enum ObjectShape {
     Vertical,
 }
 
+impl Default for ObjectShape {
+    fn default() -> Self {
+        ObjectShape::Square
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
-enum ObjectSize {
-    Size8x8,
-    Size16x16,
-    Size32x32,
-    Size64x64,
-    Size16x8,
-    Size32x8,
-    Size32x16,
-    Size64x32,
-    Size8x16,
-    Size8x32,
-    Size16x32,
-    Size32x64,
+enum ObjMode {
+    Normal,
+    SemiTransparent,
+    ObjWindow,
+}
+
+impl Default for ObjMode {
+    fn default() -> Self {
+        ObjMode::Normal
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -111,23 +148,14 @@ enum ObjectTileMapping {
     TwoDimensional,
 }
 
-impl ObjectSize {
-    fn get_dimensions(self) -> (u16, u16) {
-        match self {
-            ObjectSize::Size8x8 => (1, 1),
-            ObjectSize::Size16x16 => (2, 2),
-            ObjectSize::Size32x32 => (4, 4),
-            ObjectSize::Size64x64 => (8, 8),
-            ObjectSize::Size16x8 => (2, 1),
-            ObjectSize::Size32x8 => (4, 1),
-            ObjectSize::Size32x16 => (4, 2),
-            ObjectSize::Size64x32 => (8, 4),
-            ObjectSize::Size8x16 => (1, 2),
-            ObjectSize::Size8x32 => (1, 4),
-            ObjectSize::Size16x32 => (2, 4),
-            ObjectSize::Size32x64 => (4, 8),
-        }
-    }
+#[derive(Clone, Copy, Debug)]
+struct DisplayedSelectionInfo {
+    bg0_displayed: bool,
+    bg1_displayed: bool,
+    bg2_displayed: bool,
+    bg3_displayed: bool,
+    obj_displayed: bool,
+    effects_displayed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -137,150 +165,295 @@ pub struct Rgb555 {
     pub blue: u8,
 }
 
+impl Rgb555 {
+    const MAX_VALUE: u8 = 31;
+
+    fn blend(self, coeff_self: f64, other: Rgb555, coeff_other: f64) -> Self {
+        let new_red =
+            ((f64::from(self.red) * coeff_self) + (f64::from(other.red) * coeff_other)) as u8;
+        let new_green =
+            ((f64::from(self.green) * coeff_self) + (f64::from(other.green) * coeff_other)) as u8;
+        let new_blue =
+            ((f64::from(self.blue) * coeff_self) + (f64::from(other.blue) * coeff_other)) as u8;
+
+        Self {
+            red: new_red.min(Self::MAX_VALUE),
+            green: new_green.min(Self::MAX_VALUE),
+            blue: new_blue.min(Self::MAX_VALUE),
+        }
+    }
+}
+
+// any change to any of these fields must uphold necessary invariants between fields
+// (for instance, between obj_size, obj_size_index, and tile_dims)
 #[derive(Clone, Copy, Debug, Default)]
 struct ObjectAttributeInfo {
-    pub attribute_0: u16,
-    pub attribute_1: u16,
-    pub attribute_2: u16,
+    y_coordinate: u16,
+    rotation_scaling_flag: bool,
+    obj_disable_double_size_flag: bool,
+    obj_mode: ObjMode,
+    obj_mosaic: bool,
+    palette_depth: PaletteDepth,
+    obj_shape: ObjectShape,
+    x_coordinate: u16,
+    rotation_scaling_index: u16,
+    tile_number: u16,
+    bg_priority: u16,
+    palette_number: u8,
+    obj_size_index: u16,
+    tile_dims: (u16, u16),
 }
 
 // attribute 0
 impl ObjectAttributeInfo {
-    fn get_y_coordinate(&self) -> u16 {
-        const Y_COORDINATE_BIT_RANGE: RangeInclusive<usize> = 0..=7;
-
-        self.attribute_0.get_bit_range(Y_COORDINATE_BIT_RANGE)
-    }
-
-    fn get_rotation_scaling_flag(&self) -> bool {
-        const ROTATION_SCALING_FLAG_BIT_INDEX: usize = 8;
-
-        self.attribute_0.get_bit(ROTATION_SCALING_FLAG_BIT_INDEX)
-    }
-
+    const Y_COORDINATE_BIT_RANGE: RangeInclusive<usize> = 0..=7;
+    const ROTATION_SCALING_FLAG_BIT_INDEX: usize = 8;
     const DOUBLE_SIZE_OBJ_DISABLE_BIT_INDEX: usize = 9;
+    const OBJ_MODE_BIT_RANGE: RangeInclusive<usize> = 10..=11;
+    const OBJ_MOSIAIC_BIT_INDEX: usize = 12;
+    const PALETTE_DEPTH_BIT_INDEX: usize = 13;
+    const OBJ_SHAPE_BIT_RANGE: RangeInclusive<usize> = 14..=15;
 
-    fn get_double_size_flag(&self) -> bool {
-        assert!(self.get_rotation_scaling_flag());
+    const OBJ_MODE_NORMAL: u16 = 0;
+    const OBJ_MODE_SEMI_TRANSPARENT: u16 = 1;
+    const OBJ_MODE_OBJ_WINDOW: u16 = 2;
+    const OBJ_MODE_PROHIBITED: u16 = 3;
 
-        self.attribute_0
-            .get_bit(Self::DOUBLE_SIZE_OBJ_DISABLE_BIT_INDEX)
+    const OBJ_SHAPE_SQUARE: u16 = 0;
+    const OBJ_SHAPE_HORIZONTAL: u16 = 1;
+    const OBJ_SHAPE_VERTICAL: u16 = 2;
+
+    fn read_attribute_0<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        let obj_mode_value = match self.obj_mode {
+            ObjMode::Normal => Self::OBJ_MODE_NORMAL,
+            ObjMode::SemiTransparent => Self::OBJ_MODE_SEMI_TRANSPARENT,
+            ObjMode::ObjWindow => Self::OBJ_MODE_OBJ_WINDOW,
+        };
+
+        let palette_depth_bit = matches!(self.palette_depth, PaletteDepth::EightBit);
+
+        let obj_shape_value = match self.obj_shape {
+            ObjectShape::Square => Self::OBJ_SHAPE_SQUARE,
+            ObjectShape::Horizontal => Self::OBJ_SHAPE_HORIZONTAL,
+            ObjectShape::Vertical => Self::OBJ_SHAPE_VERTICAL,
+        };
+
+        0.set_bit_range(self.y_coordinate, Self::Y_COORDINATE_BIT_RANGE)
+            .set_bit(
+                Self::ROTATION_SCALING_FLAG_BIT_INDEX,
+                self.rotation_scaling_flag,
+            )
+            .set_bit(
+                Self::DOUBLE_SIZE_OBJ_DISABLE_BIT_INDEX,
+                self.obj_disable_double_size_flag,
+            )
+            .set_bit_range(obj_mode_value, Self::OBJ_MODE_BIT_RANGE)
+            .set_bit(Self::OBJ_MOSIAIC_BIT_INDEX, self.obj_mosaic)
+            .set_bit(Self::PALETTE_DEPTH_BIT_INDEX, palette_depth_bit)
+            .set_bit_range(obj_shape_value, Self::OBJ_SHAPE_BIT_RANGE)
+            .get_data(index)
     }
 
-    fn get_obj_disable_flag(&self) -> bool {
-        assert!(!self.get_rotation_scaling_flag());
+    fn write_attribute_0<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        let new_attribute_0 = self.read_attribute_0::<u16>(0).set_data(value, index);
 
-        self.attribute_0
-            .get_bit(Self::DOUBLE_SIZE_OBJ_DISABLE_BIT_INDEX)
-    }
+        self.y_coordinate = new_attribute_0.get_bit_range(Self::Y_COORDINATE_BIT_RANGE);
+        self.rotation_scaling_flag = new_attribute_0.get_bit(Self::ROTATION_SCALING_FLAG_BIT_INDEX);
+        self.obj_disable_double_size_flag =
+            new_attribute_0.get_bit(Self::DOUBLE_SIZE_OBJ_DISABLE_BIT_INDEX);
 
-    fn get_obj_mode(&self) -> () {
-        todo!()
-    }
+        self.obj_mode = match new_attribute_0.get_bit_range(Self::OBJ_MODE_BIT_RANGE) {
+            Self::OBJ_MODE_NORMAL => ObjMode::Normal,
+            Self::OBJ_MODE_SEMI_TRANSPARENT => ObjMode::SemiTransparent,
+            Self::OBJ_MODE_OBJ_WINDOW => ObjMode::ObjWindow,
+            Self::OBJ_MODE_PROHIBITED => unreachable!("prohibited object mode"),
+            _ => unreachable!(),
+        };
 
-    fn get_obj_mosaic(&self) -> bool {
-        const OBJ_MOSIAIC_BIT_INDEX: usize = 12;
+        self.obj_mosaic = new_attribute_0.get_bit(Self::OBJ_MOSIAIC_BIT_INDEX);
 
-        self.attribute_0.get_bit(OBJ_MOSIAIC_BIT_INDEX)
-    }
-
-    fn get_palette_depth(&self) -> PaletteDepth {
-        const PALETTE_DEPTH_BIT_INDEX: usize = 13;
-
-        if self.attribute_0.get_bit(PALETTE_DEPTH_BIT_INDEX) {
+        self.palette_depth = if new_attribute_0.get_bit(Self::PALETTE_DEPTH_BIT_INDEX) {
             PaletteDepth::EightBit
         } else {
             PaletteDepth::FourBit
-        }
-    }
+        };
 
-    fn get_obj_shape(&self) -> ObjectShape {
-        const OBJ_SHAPE_BIT_RANGE: RangeInclusive<usize> = 14..=15;
-
-        match self.attribute_0.get_bit_range(OBJ_SHAPE_BIT_RANGE) {
-            0 => ObjectShape::Square,
-            1 => ObjectShape::Horizontal,
-            2 => ObjectShape::Vertical,
+        self.obj_shape = match new_attribute_0.get_bit_range(Self::OBJ_SHAPE_BIT_RANGE) {
+            Self::OBJ_SHAPE_SQUARE => ObjectShape::Square,
+            Self::OBJ_SHAPE_HORIZONTAL => ObjectShape::Horizontal,
+            Self::OBJ_SHAPE_VERTICAL => ObjectShape::Vertical,
             _ => unreachable!(),
-        }
+        };
+
+        self.tile_dims = match (self.obj_size_index, self.obj_shape) {
+            (0, ObjectShape::Square) => (1, 1),
+            (1, ObjectShape::Square) => (2, 2),
+            (2, ObjectShape::Square) => (4, 4),
+            (3, ObjectShape::Square) => (8, 8),
+            (0, ObjectShape::Horizontal) => (2, 1),
+            (1, ObjectShape::Horizontal) => (4, 1),
+            (2, ObjectShape::Horizontal) => (4, 2),
+            (3, ObjectShape::Horizontal) => (8, 4),
+            (0, ObjectShape::Vertical) => (1, 2),
+            (1, ObjectShape::Vertical) => (1, 4),
+            (2, ObjectShape::Vertical) => (2, 4),
+            (3, ObjectShape::Vertical) => (4, 8),
+            _ => unreachable!(),
+        };
     }
 }
 
 // attribute 1
 impl ObjectAttributeInfo {
-    fn get_x_coordinate(&self) -> u16 {
-        const X_COORDINATE_BIT_RANGE: RangeInclusive<usize> = 0..=8;
+    const X_COORDINATE_BIT_RANGE: RangeInclusive<usize> = 0..=8;
+    const ROTATION_SCALING_INDEX_BIT_RANGE: RangeInclusive<usize> = 9..=13;
+    const OBJ_SIZE_BIT_RANGE: RangeInclusive<usize> = 14..=15;
 
-        self.attribute_1.get_bit_range(X_COORDINATE_BIT_RANGE)
+    fn read_attribute_1<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        0.set_bit_range(self.x_coordinate, Self::X_COORDINATE_BIT_RANGE)
+            .set_bit_range(
+                self.rotation_scaling_index,
+                Self::ROTATION_SCALING_INDEX_BIT_RANGE,
+            )
+            .set_bit_range(self.obj_size_index, Self::OBJ_SIZE_BIT_RANGE)
+            .get_data(index)
     }
 
-    fn get_rotation_scaling_index(&self) -> u16 {
-        assert!(self.get_rotation_scaling_flag());
+    fn write_attribute_1<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        let new_attribute_1 = self.read_attribute_1::<u16>(0).set_data(value, index);
 
-        const ROTATION_SCALING_INDEX_BIT_RANGE: RangeInclusive<usize> = 9..=13;
+        self.x_coordinate = new_attribute_1.get_bit_range(Self::X_COORDINATE_BIT_RANGE);
+        self.rotation_scaling_index =
+            new_attribute_1.get_bit_range(Self::ROTATION_SCALING_INDEX_BIT_RANGE);
+        self.obj_size_index = new_attribute_1.get_bit_range(Self::OBJ_SIZE_BIT_RANGE);
 
-        self.attribute_1
-            .get_bit_range(ROTATION_SCALING_INDEX_BIT_RANGE)
-    }
-
-    fn get_horizontal_flip(&self) -> bool {
-        assert!(!self.get_rotation_scaling_flag());
-
-        const HORIZONTAL_FLIP_BIT_INDEX: usize = 12;
-
-        self.attribute_1.get_bit(HORIZONTAL_FLIP_BIT_INDEX)
-    }
-
-    fn get_vertical_flip(&self) -> bool {
-        assert!(!self.get_rotation_scaling_flag());
-
-        const VERTICAL_FLIP_BIT_INDEX: usize = 13;
-
-        self.attribute_1.get_bit(VERTICAL_FLIP_BIT_INDEX)
-    }
-
-    fn get_obj_size(&self) -> ObjectSize {
-        const OBJ_SIZE_BIT_RANGE: RangeInclusive<usize> = 14..=15;
-
-        match (
-            self.get_obj_shape(),
-            self.attribute_1.get_bit_range(OBJ_SIZE_BIT_RANGE),
-        ) {
-            (ObjectShape::Square, 0) => ObjectSize::Size8x8,
-            (ObjectShape::Square, 1) => ObjectSize::Size16x16,
-            (ObjectShape::Square, 2) => ObjectSize::Size32x32,
-            (ObjectShape::Square, 3) => ObjectSize::Size64x64,
-            (ObjectShape::Horizontal, 0) => ObjectSize::Size16x8,
-            (ObjectShape::Horizontal, 1) => ObjectSize::Size32x8,
-            (ObjectShape::Horizontal, 2) => ObjectSize::Size32x16,
-            (ObjectShape::Horizontal, 3) => ObjectSize::Size64x32,
-            (ObjectShape::Vertical, 0) => ObjectSize::Size8x16,
-            (ObjectShape::Vertical, 1) => ObjectSize::Size8x32,
-            (ObjectShape::Vertical, 2) => ObjectSize::Size16x32,
-            (ObjectShape::Vertical, 3) => ObjectSize::Size32x64,
+        self.tile_dims = match (self.obj_size_index, self.obj_shape) {
+            (0, ObjectShape::Square) => (1, 1),
+            (1, ObjectShape::Square) => (2, 2),
+            (2, ObjectShape::Square) => (4, 4),
+            (3, ObjectShape::Square) => (8, 8),
+            (0, ObjectShape::Horizontal) => (2, 1),
+            (1, ObjectShape::Horizontal) => (4, 1),
+            (2, ObjectShape::Horizontal) => (4, 2),
+            (3, ObjectShape::Horizontal) => (8, 4),
+            (0, ObjectShape::Vertical) => (1, 2),
+            (1, ObjectShape::Vertical) => (1, 4),
+            (2, ObjectShape::Vertical) => (2, 4),
+            (3, ObjectShape::Vertical) => (4, 8),
             _ => unreachable!(),
-        }
+        };
     }
 }
 
 //attribute 2
 impl ObjectAttributeInfo {
-    fn get_tile_number(&self) -> u16 {
-        const TILE_NUMBER_BIT_RANGE: RangeInclusive<usize> = 0..=9;
+    const TILE_NUMBER_BIT_RANGE: RangeInclusive<usize> = 0..=9;
+    const BG_PRIORITY_BIT_RANGE: RangeInclusive<usize> = 10..=11;
+    const PALETTE_NUMBER_BIT_RANGE: RangeInclusive<usize> = 12..=15;
 
-        self.attribute_2.get_bit_range(TILE_NUMBER_BIT_RANGE)
+    fn read_attribute_2<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        0.set_bit_range(self.tile_number, Self::TILE_NUMBER_BIT_RANGE)
+            .set_bit_range(self.bg_priority, Self::BG_PRIORITY_BIT_RANGE)
+            .set_bit_range(
+                u16::from(self.palette_number),
+                Self::PALETTE_NUMBER_BIT_RANGE,
+            )
+            .get_data(index)
+    }
+
+    fn write_attribute_2<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        let new_attribute_2 = self.read_attribute_2::<u16>(0).set_data(value, index);
+
+        self.tile_number = new_attribute_2.get_bit_range(Self::TILE_NUMBER_BIT_RANGE);
+        self.bg_priority = new_attribute_2.get_bit_range(Self::BG_PRIORITY_BIT_RANGE);
+        self.palette_number = new_attribute_2
+            .get_bit_range(Self::PALETTE_NUMBER_BIT_RANGE)
+            .try_into()
+            .unwrap();
+    }
+}
+
+impl ObjectAttributeInfo {
+    fn get_y_coordinate(&self) -> u16 {
+        self.y_coordinate
+    }
+
+    fn get_rotation_scaling_flag(&self) -> bool {
+        self.rotation_scaling_flag
+    }
+
+    fn get_double_size_flag(&self) -> bool {
+        self.obj_disable_double_size_flag
+    }
+
+    fn get_obj_disable_flag(&self) -> bool {
+        self.obj_disable_double_size_flag
+    }
+
+    fn get_obj_mode(&self) -> ObjMode {
+        self.obj_mode
+    }
+
+    fn get_obj_mosaic(&self) -> bool {
+        self.obj_mosaic
+    }
+
+    fn get_palette_depth(&self) -> PaletteDepth {
+        self.palette_depth
+    }
+
+    fn get_x_coordinate(&self) -> u16 {
+        self.x_coordinate
+    }
+
+    fn get_rotation_scaling_index(&self) -> u16 {
+        self.rotation_scaling_index
+    }
+
+    fn get_horizontal_flip(&self) -> bool {
+        const ROTATION_SCALING_HORIZONTAL_FLIP_BIT_INDEX: usize = 3;
+        self.rotation_scaling_index
+            .get_bit(ROTATION_SCALING_HORIZONTAL_FLIP_BIT_INDEX)
+    }
+
+    fn get_vertical_flip(&self) -> bool {
+        const ROTATION_SCALING_VERTICAL_FLIP_BIT_INDEX: usize = 4;
+        self.rotation_scaling_index
+            .get_bit(ROTATION_SCALING_VERTICAL_FLIP_BIT_INDEX)
+    }
+
+    fn get_tile_number(&self) -> u16 {
+        self.tile_number
     }
 
     fn get_bg_priority(&self) -> u16 {
-        const BG_PRIORITY_BIT_RANGE: RangeInclusive<usize> = 10..=11;
-
-        self.attribute_2.get_bit_range(BG_PRIORITY_BIT_RANGE)
+        self.bg_priority
     }
 
     fn get_palette_number(&self) -> u8 {
-        const PALETTE_NUMBER_BIT_RANGE: RangeInclusive<usize> = 12..=15;
+        self.palette_number
+    }
 
-        self.attribute_2.get_bit_range(PALETTE_NUMBER_BIT_RANGE) as u8
+    fn get_obj_tile_dims(&self) -> (u16, u16) {
+        self.tile_dims
     }
 }
 
@@ -319,6 +492,15 @@ pub struct Lcd {
     lcd_control: u16,
     lcd_status: u16,
     mosaic_size: u32,
+    color_effects_selection: u16,
+    alpha_coefficients: u16,
+    brightness_coefficient: u16,
+    window_0_horizontal: u16,
+    window_1_horizontal: u16,
+    window_0_vertical: u16,
+    window_1_vertical: u16,
+    window_in_control: u16,
+    window_out_control: u16,
     state: LcdState,
     bg_palette_ram: Box<[Rgb555; 0x100]>,
     obj_palette_ram: Box<[Rgb555; 0x100]>,
@@ -358,6 +540,15 @@ impl Default for Lcd {
             lcd_control: 0,
             lcd_status: 0,
             mosaic_size: 0,
+            color_effects_selection: 0,
+            alpha_coefficients: 0,
+            brightness_coefficient: 0,
+            window_0_horizontal: 0,
+            window_1_horizontal: 0,
+            window_0_vertical: 0,
+            window_1_vertical: 0,
+            window_in_control: 0,
+            window_out_control: 0,
             state: LcdState::Visible,
             bg_palette_ram: Box::new([Rgb555::default(); 0x100]),
             obj_palette_ram: Box::new([Rgb555::default(); 0x100]),
@@ -401,121 +592,276 @@ impl Lcd {
             let pixel_x = self.dot;
             let pixel_y = self.vcount;
 
-            let current_mode = self.get_bg_mode();
-            let display_frame = self.get_display_frame();
+            if true {
+                let current_mode = self.get_bg_mode();
+                let display_frame = self.get_display_frame();
 
-            // if pixel_x == 0 && pixel_y == 0 {
-            //     println!("{:?}", current_mode);
-            //     println!(
-            //         "{}, {}, {}, {}",
-            //         self.get_screen_display_bg_0(),
-            //         self.get_screen_display_bg_1(),
-            //         self.get_screen_display_bg_2(),
-            //         self.get_screen_display_bg_3()
-            //     );
-            // }
+                // if pixel_x == 0 && pixel_y == 0 {
+                //     println!("{:?}", current_mode);
+                //     println!(
+                //         "{}, {}, {}, {}",
+                //         self.get_screen_display_bg_0(),
+                //         self.get_screen_display_bg_1(),
+                //         self.get_screen_display_bg_2(),
+                //         self.get_screen_display_bg_3()
+                //     );
+                // }
 
-            let bg_mosaic_horizontal = self.get_bg_mosaic_horizontal();
-            let bg_mosaic_vertical = self.get_bg_mosaic_vertical();
+                let obj_mosaic_horizontal = self.get_obj_mosaic_horizontal();
+                let obj_mosaic_vertical = self.get_obj_mosaic_vertical();
+                let sprite_pixel_query_info = self.get_sprite_pixel(
+                    pixel_x,
+                    pixel_y,
+                    obj_mosaic_horizontal,
+                    obj_mosaic_vertical,
+                );
+                let displayed_selection = self.get_displayed_selection(
+                    pixel_x,
+                    pixel_y,
+                    sprite_pixel_query_info.obj_window,
+                );
 
-            let layer_0_pixel = if self.get_screen_display_bg_0() {
-                self.layer_0
-                    .get_pixel(
-                        pixel_x,
-                        pixel_y,
-                        bg_mosaic_horizontal,
-                        bg_mosaic_vertical,
-                        current_mode,
-                        self.vram.as_slice(),
-                        self.bg_palette_ram.as_slice(),
-                    )
-                    .map(|pixel| (pixel, self.layer_0.get_priority()))
-            } else {
-                None
-            };
-            let layer_0_pixel_info = (layer_0_pixel, PixelType::Layer0);
+                let bg_mosaic_horizontal = self.get_bg_mosaic_horizontal();
+                let bg_mosaic_vertical = self.get_bg_mosaic_vertical();
 
-            let layer_1_pixel = if self.get_screen_display_bg_1() {
-                self.layer_1
-                    .get_pixel(
-                        pixel_x,
-                        pixel_y,
-                        bg_mosaic_horizontal,
-                        bg_mosaic_vertical,
-                        current_mode,
-                        self.vram.as_slice(),
-                        self.bg_palette_ram.as_slice(),
-                    )
-                    .map(|pixel| (pixel, self.layer_1.get_priority()))
-            } else {
-                None
-            };
-            let layer_1_pixel_info = (layer_1_pixel, PixelType::Layer1);
+                let layer_0_pixel_info = if displayed_selection.bg0_displayed {
+                    self.layer_0
+                        .get_pixel(
+                            pixel_x,
+                            pixel_y,
+                            bg_mosaic_horizontal,
+                            bg_mosaic_vertical,
+                            current_mode,
+                            self.vram.as_slice(),
+                            self.bg_palette_ram.as_slice(),
+                        )
+                        .map(|color| PixelInfo {
+                            color,
+                            priority: self.layer_0.get_priority(),
+                            pixel_type: PixelType::Layer0,
+                        })
+                } else {
+                    None
+                };
 
-            let layer_2_pixel = if self.get_screen_display_bg_2() {
-                self.layer_2
-                    .get_pixel(
-                        pixel_x,
-                        pixel_y,
-                        bg_mosaic_horizontal,
-                        bg_mosaic_vertical,
-                        current_mode,
-                        display_frame,
-                        self.vram.as_slice(),
-                        self.bg_palette_ram.as_slice(),
-                    )
-                    .map(|pixel| (pixel, self.layer_2.get_priority()))
-            } else {
-                None
-            };
-            let layer_2_pixel_info = (layer_2_pixel, PixelType::Layer2);
+                let layer_1_pixel_info = if displayed_selection.bg1_displayed {
+                    self.layer_1
+                        .get_pixel(
+                            pixel_x,
+                            pixel_y,
+                            bg_mosaic_horizontal,
+                            bg_mosaic_vertical,
+                            current_mode,
+                            self.vram.as_slice(),
+                            self.bg_palette_ram.as_slice(),
+                        )
+                        .map(|color| PixelInfo {
+                            color,
+                            priority: self.layer_1.get_priority(),
+                            pixel_type: PixelType::Layer1,
+                        })
+                } else {
+                    None
+                };
 
-            let layer_3_pixel = if self.get_screen_display_bg_3() {
-                self.layer_3
-                    .get_pixel(
-                        pixel_x,
-                        pixel_y,
-                        bg_mosaic_horizontal,
-                        bg_mosaic_vertical,
-                        current_mode,
-                        self.vram.as_slice(),
-                        self.bg_palette_ram.as_slice(),
-                    )
-                    .map(|pixel| (pixel, self.layer_3.get_priority()))
-            } else {
-                None
-            };
-            let layer_3_pixel_info = (layer_3_pixel, PixelType::Layer3);
+                let layer_2_pixel_info = if displayed_selection.bg2_displayed {
+                    self.layer_2
+                        .get_pixel(
+                            pixel_x,
+                            pixel_y,
+                            bg_mosaic_horizontal,
+                            bg_mosaic_vertical,
+                            current_mode,
+                            display_frame,
+                            self.vram.as_slice(),
+                            self.bg_palette_ram.as_slice(),
+                        )
+                        .map(|color| PixelInfo {
+                            color,
+                            priority: self.layer_2.get_priority(),
+                            pixel_type: PixelType::Layer2,
+                        })
+                } else {
+                    None
+                };
 
-            let obj_mosaic_horizontal = self.get_obj_mosaic_horizontal();
-            let obj_mosaic_vertical = self.get_obj_mosaic_vertical();
-            let sprite_pixel =
-                self.get_sprite_pixel(pixel_x, pixel_y, obj_mosaic_horizontal, obj_mosaic_vertical);
-            let sprite_pixel_info = (sprite_pixel, PixelType::Sprite);
+                let layer_3_pixel_info = if displayed_selection.bg3_displayed {
+                    self.layer_3
+                        .get_pixel(
+                            pixel_x,
+                            pixel_y,
+                            bg_mosaic_horizontal,
+                            bg_mosaic_vertical,
+                            current_mode,
+                            self.vram.as_slice(),
+                            self.bg_palette_ram.as_slice(),
+                        )
+                        .map(|color| PixelInfo {
+                            color,
+                            priority: self.layer_3.get_priority(),
+                            pixel_type: PixelType::Layer3,
+                        })
+                } else {
+                    None
+                };
 
-            let mut pixels = [
-                sprite_pixel,
-                // layer_0_pixel,
-                layer_1_pixel,
-                layer_2_pixel,
-                layer_3_pixel,
-            ];
+                let sprite_pixel_info = if displayed_selection.obj_displayed {
+                    sprite_pixel_query_info
+                        .sprite_pixel_info
+                        .map(|sprite_pixel_info| sprite_pixel_info.pixel_info)
+                } else {
+                    None
+                };
 
-            pixels.sort_by(|pixel_one, pixel_two| match (pixel_one, pixel_two) {
-                (Some((_, priority_one)), Some((_, priority_two))) => {
-                    Ord::cmp(priority_one, priority_two)
-                }
-                (Some(_), None) => Ordering::Less,
-                (None, Some(_)) => Ordering::Greater,
-                (None, None) => Ordering::Equal,
-            });
+                let mut pixels = [
+                    sprite_pixel_info,
+                    layer_0_pixel_info,
+                    layer_1_pixel_info,
+                    layer_2_pixel_info,
+                    layer_3_pixel_info,
+                ];
+                pixels.sort_by(|pixel_one, pixel_two| match (pixel_one, pixel_two) {
+                    (
+                        Some(PixelInfo {
+                            priority: priority_one,
+                            ..
+                        }),
+                        Some(PixelInfo {
+                            priority: priority_two,
+                            ..
+                        }),
+                    ) => Ord::cmp(&priority_one, &priority_two),
+                    (Some(_), None) => Ordering::Less,
+                    (None, Some(_)) => Ordering::Greater,
+                    (None, None) => Ordering::Equal,
+                });
+                let pixels = pixels;
 
-            let drawn_pixel = match pixels[0] {
-                Some((pixel, _)) => pixel,
-                None => self.bg_palette_ram[0],
-            };
+                let drawn_pixel = match (
+                    displayed_selection.effects_displayed,
+                    self.get_color_special_effect(),
+                ) {
+                    (true, ColorSpecialEffect::AlphaBlending) => {
+                        let first_pixel = pixels[0];
+                        let second_pixel = pixels[1];
 
-            self.back_buffer[usize::from(pixel_y)][usize::from(pixel_x)] = drawn_pixel;
+                        // sanity check to ensure array was properly sorted.
+                        assert!(first_pixel.is_some() || second_pixel.is_none());
+
+                        let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
+
+                        let first_pixel_info = if let Some(PixelInfo {
+                            color, pixel_type, ..
+                        }) = first_pixel
+                        {
+                            (color, pixel_type)
+                        } else {
+                            backdrop_info
+                        };
+
+                        let second_pixel_info = if let Some(PixelInfo {
+                            color, pixel_type, ..
+                        }) = second_pixel
+                        {
+                            (color, pixel_type)
+                        } else {
+                            backdrop_info
+                        };
+
+                        if self.special_effect_first_pixel(first_pixel_info.1)
+                            && self.special_effect_second_pixel(second_pixel_info.1)
+                        {
+                            first_pixel_info.0.blend(
+                                self.get_alpha_first_target_coefficient(),
+                                second_pixel_info.0,
+                                self.get_alpha_second_target_coefficient(),
+                            )
+                        } else {
+                            first_pixel_info.0
+                        }
+                    }
+                    (true, ColorSpecialEffect::BrightnessIncrease) => {
+                        let pixel = pixels[0];
+
+                        let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
+
+                        let (pixel_color, pixel_type) =
+                            if let Some(PixelInfo {
+                                color, pixel_type, ..
+                            }) = pixel
+                            {
+                                (color, pixel_type)
+                            } else {
+                                backdrop_info
+                            };
+
+                        if self.special_effect_first_pixel(pixel_type) {
+                            let new_red = pixel_color.red
+                                + ((f64::from(31 - pixel_color.red)
+                                    * self.get_brightness_coefficient())
+                                    as u8);
+                            let new_green = pixel_color.green
+                                + ((f64::from(31 - pixel_color.green)
+                                    * self.get_brightness_coefficient())
+                                    as u8);
+                            let new_blue = pixel_color.blue
+                                + ((f64::from(31 - pixel_color.blue)
+                                    * self.get_brightness_coefficient())
+                                    as u8);
+
+                            Rgb555 {
+                                red: new_red,
+                                green: new_green,
+                                blue: new_blue,
+                            }
+                        } else {
+                            pixel_color
+                        }
+                    }
+                    (true, ColorSpecialEffect::BrightnessDecrease) => {
+                        let pixel = pixels[0];
+
+                        let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
+
+                        let (pixel_color, pixel_type) =
+                            if let Some(PixelInfo {
+                                color, pixel_type, ..
+                            }) = pixel
+                            {
+                                (color, pixel_type)
+                            } else {
+                                backdrop_info
+                            };
+
+                        if self.special_effect_first_pixel(pixel_type) {
+                            let new_red = pixel_color.red
+                                - ((f64::from(pixel_color.red) * self.get_brightness_coefficient())
+                                    as u8);
+                            let new_green = pixel_color.green
+                                - ((f64::from(pixel_color.green)
+                                    * self.get_brightness_coefficient())
+                                    as u8);
+                            let new_blue = pixel_color.blue
+                                - ((f64::from(pixel_color.blue) * self.get_brightness_coefficient())
+                                    as u8);
+
+                            Rgb555 {
+                                red: new_red,
+                                green: new_green,
+                                blue: new_blue,
+                            }
+                        } else {
+                            pixel_color
+                        }
+                    }
+                    (true, ColorSpecialEffect::None) | (false, _) => match pixels[0] {
+                        Some(PixelInfo { color, .. }) => color,
+                        None => self.bg_palette_ram[0],
+                    },
+                };
+
+                self.back_buffer[usize::from(pixel_y)][usize::from(pixel_x)] = drawn_pixel;
+            }
         }
 
         self.dot += 1;
@@ -546,14 +892,17 @@ impl Lcd {
         pixel_y: u16,
         obj_mosaic_horizontal: u16,
         obj_mosaic_vertical: u16,
-    ) -> Option<(Rgb555, u16)> {
+    ) -> SpritePixelQueryInfo {
         const OBJ_TILE_DATA_VRAM_BASE: usize = 0x10000;
         const TILE_SIZE: u16 = 8;
         const WORLD_WIDTH: u16 = 512;
         const WORLD_HEIGHT: u16 = 256;
 
-        for (i, obj) in self.obj_attributes.into_iter().enumerate() {
-            let (sprite_tile_width, sprite_tile_height) = obj.get_obj_size().get_dimensions();
+        let mut sprite_pixel_info = None;
+        let mut obj_window = false;
+
+        for obj in self.obj_attributes.iter() {
+            let (sprite_tile_width, sprite_tile_height) = obj.get_obj_tile_dims();
             let sprite_width = sprite_tile_width * TILE_SIZE;
             let sprite_height = sprite_tile_height * TILE_SIZE;
 
@@ -572,32 +921,26 @@ impl Lcd {
                 let center_offset_adjustment_x = sprite_width / 2;
                 let center_offset_adjustment_y = sprite_height / 2;
 
-                let mut base_corner_offset_x = f64::from(pixel_x) - f64::from(sprite_x);
-                if base_corner_offset_x < -f64::from(WORLD_WIDTH / 2) {
-                    base_corner_offset_x += f64::from(WORLD_WIDTH);
-                }
-                let base_corner_offset_x = base_corner_offset_x;
+                let base_corner_offset_x = if pixel_x < sprite_x {
+                    pixel_x + WORLD_WIDTH - sprite_x
+                } else {
+                    pixel_x - sprite_x
+                };
 
-                let mut base_corner_offset_y = f64::from(pixel_y) - f64::from(sprite_y);
-                if base_corner_offset_y < -f64::from(WORLD_HEIGHT / 2) {
-                    base_corner_offset_y += f64::from(WORLD_HEIGHT);
-                }
-                let base_corner_offset_y = base_corner_offset_y;
+                let base_corner_offset_y = if pixel_y < sprite_y {
+                    pixel_y + WORLD_HEIGHT - sprite_y
+                } else {
+                    pixel_y - sprite_y
+                };
 
                 if obj.get_double_size_flag() {
-                    if base_corner_offset_x < 0.0
-                        || base_corner_offset_x >= (f64::from(sprite_width) * 2.0)
-                        || base_corner_offset_y < 0.0
-                        || base_corner_offset_y >= (f64::from(sprite_height) * 2.0)
+                    if base_corner_offset_x > (sprite_width * 2)
+                        || base_corner_offset_y > (sprite_height * 2)
                     {
                         continue;
                     }
                 } else {
-                    if base_corner_offset_x < 0.0
-                        || base_corner_offset_x >= f64::from(sprite_width)
-                        || base_corner_offset_y < 0.0
-                        || base_corner_offset_y >= f64::from(sprite_height)
-                    {
+                    if base_corner_offset_x > sprite_width || base_corner_offset_y > sprite_height {
                         continue;
                     }
                 }
@@ -616,15 +959,13 @@ impl Lcd {
                 //     +---+---+
                 let (base_center_offset_x, base_center_offset_y) = if obj.get_double_size_flag() {
                     (
-                        f64::from(base_corner_offset_x)
-                            - (2.0 * f64::from(center_offset_adjustment_x)),
-                        f64::from(base_corner_offset_y)
-                            - (2.0 * f64::from(center_offset_adjustment_y)),
+                        f64::from(base_corner_offset_x) - f64::from(sprite_width),
+                        f64::from(base_corner_offset_y) - f64::from(sprite_height),
                     )
                 } else {
                     (
-                        f64::from(base_corner_offset_x) - f64::from(center_offset_adjustment_x),
-                        f64::from(base_corner_offset_y) - f64::from(center_offset_adjustment_y),
+                        f64::from(base_corner_offset_x) - (f64::from(sprite_width) / 2.0),
+                        f64::from(base_corner_offset_y) - (f64::from(sprite_height) / 2.0),
                     )
                 };
 
@@ -644,37 +985,46 @@ impl Lcd {
 
                 (corner_offset_x as u16, corner_offset_y as u16)
             } else {
-                let mut base_corner_offset_x = f64::from(pixel_x) - f64::from(sprite_x);
-                let mut base_corner_offset_y = f64::from(pixel_y) - f64::from(sprite_y);
-
-                if base_corner_offset_x < 0.0
-                    || base_corner_offset_x >= f64::from(sprite_width)
-                    || base_corner_offset_y < 0.0
-                    || base_corner_offset_y >= f64::from(sprite_height)
-                {
+                if obj.get_obj_disable_flag() {
                     continue;
                 }
 
+                let mut base_corner_offset_x = if pixel_x < sprite_x {
+                    pixel_x + WORLD_WIDTH - sprite_x
+                } else {
+                    pixel_x - sprite_x
+                };
+
+                let mut base_corner_offset_y = if pixel_y < sprite_y {
+                    pixel_y + WORLD_HEIGHT - sprite_y
+                } else {
+                    pixel_y - sprite_y
+                };
+
                 if obj.get_obj_mosaic() {
-                    base_corner_offset_x -= base_corner_offset_x % f64::from(obj_mosaic_horizontal);
-                    base_corner_offset_y -= base_corner_offset_y % f64::from(obj_mosaic_vertical);
+                    base_corner_offset_x -= base_corner_offset_x % obj_mosaic_horizontal;
+                    base_corner_offset_y -= base_corner_offset_y % obj_mosaic_vertical;
                 }
                 let base_corner_offset_x = base_corner_offset_x;
                 let base_corner_offset_y = base_corner_offset_y;
 
+                if base_corner_offset_x >= sprite_width || base_corner_offset_y >= sprite_height {
+                    continue;
+                }
+
                 let offset_x = if obj.get_horizontal_flip() {
-                    f64::from(sprite_width) - 1.0 - base_corner_offset_x
+                    sprite_width - 1 - base_corner_offset_x
                 } else {
                     base_corner_offset_x
                 };
 
                 let offset_y = if obj.get_vertical_flip() {
-                    f64::from(sprite_height) - 1.0 - base_corner_offset_y
+                    sprite_height - 1 - base_corner_offset_y
                 } else {
                     base_corner_offset_y
                 };
 
-                (offset_x as u16, offset_y as u16)
+                (offset_x, offset_y)
             };
 
             assert!(sprite_offset_x < sprite_width);
@@ -728,7 +1078,7 @@ impl Lcd {
 
                     let tile_data = self.vram[tile_idx];
 
-                    let palette_idx_low = if sprite_tile_x % 2 == 0 {
+                    let palette_idx_low = if tile_offset_x % 2 == 0 {
                         tile_data.get_bit_range(0..=3)
                     } else {
                         tile_data.get_bit_range(4..=7)
@@ -742,13 +1092,119 @@ impl Lcd {
                 }
             };
 
-            return Some((
-                self.obj_palette_ram[usize::from(palette_idx)],
-                obj.get_bg_priority(),
-            ));
+            let semi_transparent = match obj.get_obj_mode() {
+                ObjMode::Normal => false,
+                ObjMode::SemiTransparent => true,
+                ObjMode::ObjWindow => {
+                    obj_window = true;
+                    continue;
+                }
+            };
+
+            let new_pixel_info = PixelInfo {
+                color: self.obj_palette_ram[usize::from(palette_idx)],
+                priority: obj.get_bg_priority(),
+                pixel_type: PixelType::Sprite,
+            };
+
+            let new_sprite_pixel_info = SpritePixelInfo {
+                pixel_info: new_pixel_info,
+                semi_transparent,
+            };
+
+            sprite_pixel_info = match sprite_pixel_info {
+                Some(SpritePixelInfo {
+                    pixel_info:
+                        PixelInfo {
+                            priority: old_priority,
+                            ..
+                        },
+                    ..
+                }) => {
+                    if old_priority <= new_pixel_info.priority {
+                        sprite_pixel_info
+                    } else {
+                        Some(new_sprite_pixel_info)
+                    }
+                }
+                None => Some(new_sprite_pixel_info),
+            }
         }
 
-        None
+        SpritePixelQueryInfo {
+            sprite_pixel_info,
+            obj_window,
+        }
+    }
+
+    fn get_displayed_selection(
+        &self,
+        pixel_x: u16,
+        pixel_y: u16,
+        in_obj_window: bool,
+    ) -> DisplayedSelectionInfo {
+        let mut bg0_displayed = self.get_screen_display_bg_0();
+        let mut bg1_displayed = self.get_screen_display_bg_1();
+        let mut bg2_displayed = self.get_screen_display_bg_2();
+        let mut bg3_displayed = self.get_screen_display_bg_3();
+        let mut obj_displayed = self.get_screen_display_obj();
+
+        let mut effects_displayed = true;
+
+        if self.get_display_window_0()
+            || self.get_display_window_1()
+            || self.get_display_obj_window()
+        {
+            let in_window_0 = self.get_display_window_0()
+                && pixel_x >= self.get_window_0_left()
+                && pixel_x < self.get_window_0_right()
+                && pixel_y >= self.get_window_0_top()
+                && pixel_y < self.get_window_0_bottom();
+            let in_window_1 = self.get_display_window_1()
+                && pixel_x >= self.get_window_1_left()
+                && pixel_x < self.get_window_1_right()
+                && pixel_y >= self.get_window_1_top()
+                && pixel_y < self.get_window_1_bottom();
+
+            if in_window_0 {
+                bg0_displayed &= self.get_window_0_bg_0_enable();
+                bg1_displayed &= self.get_window_0_bg_1_enable();
+                bg2_displayed &= self.get_window_0_bg_2_enable();
+                bg3_displayed &= self.get_window_0_bg_3_enable();
+                obj_displayed &= self.get_window_0_obj_enable();
+                effects_displayed &= self.get_window_0_special_effects_enable();
+            } else if in_window_1 {
+                bg0_displayed &= self.get_window_1_bg_0_enable();
+                bg1_displayed &= self.get_window_1_bg_1_enable();
+                bg2_displayed &= self.get_window_1_bg_2_enable();
+                bg3_displayed &= self.get_window_1_bg_3_enable();
+                obj_displayed &= self.get_window_1_obj_enable();
+                effects_displayed &= self.get_window_1_special_effects_enable();
+            } else if in_obj_window {
+                bg0_displayed &= self.get_obj_window_bg_0_enable();
+                bg1_displayed &= self.get_obj_window_bg_1_enable();
+                bg2_displayed &= self.get_obj_window_bg_2_enable();
+                bg3_displayed &= self.get_obj_window_bg_3_enable();
+                obj_displayed &= self.get_obj_window_obj_enable();
+                effects_displayed &= self.get_obj_window_special_effects_enable();
+            } else {
+                bg0_displayed &= self.get_outside_window_bg_0_enable();
+                bg1_displayed &= self.get_outside_window_bg_1_enable();
+                bg2_displayed &= self.get_outside_window_bg_2_enable();
+                bg3_displayed &= self.get_outside_window_bg_3_enable();
+                obj_displayed &= self.get_outside_window_obj_enable();
+                effects_displayed &= self.get_outside_window_special_effects_enable();
+            }
+        }
+
+        DisplayedSelectionInfo {
+            bg0_displayed,
+            bg1_displayed,
+            bg2_displayed,
+            bg3_displayed,
+            obj_displayed,
+            effects_displayed,
+        }
     }
 }
 
@@ -800,6 +1256,132 @@ impl Lcd {
         u32: DataAccess<T>,
     {
         self.mosaic_size = self.mosaic_size.set_data(value, index)
+    }
+
+    pub fn read_color_effects_selection<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.color_effects_selection.get_data(index)
+    }
+
+    pub fn write_color_effects_selection<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.color_effects_selection = self.color_effects_selection.set_data(value, index)
+    }
+
+    pub fn read_alpha_blending_coefficients<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.alpha_coefficients.get_data(index)
+    }
+
+    pub fn write_alpha_blending_coefficients<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.alpha_coefficients = self.alpha_coefficients.set_data(value, index)
+    }
+
+    pub fn read_brightness_coefficient<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.brightness_coefficient.get_data(index)
+    }
+
+    pub fn write_brightness_coefficient<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.brightness_coefficient = self.brightness_coefficient.set_data(value, index)
+    }
+
+    pub fn read_window_0_horizontal<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.window_0_horizontal.get_data(index)
+    }
+
+    pub fn write_window_0_horizontal<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.window_0_horizontal = self.window_0_horizontal.set_data(value, index)
+    }
+
+    pub fn read_window_1_horizontal<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.window_1_horizontal.get_data(index)
+    }
+
+    pub fn write_window_1_horizontal<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.window_1_horizontal = self.window_1_horizontal.set_data(value, index)
+    }
+
+    pub fn read_window_0_vertical<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.window_0_vertical.get_data(index)
+    }
+
+    pub fn write_window_0_vertical<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.window_0_vertical = self.window_0_vertical.set_data(value, index)
+    }
+
+    pub fn read_window_1_vertical<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.window_1_vertical.get_data(index)
+    }
+
+    pub fn write_window_1_vertical<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.window_1_vertical = self.window_1_vertical.set_data(value, index)
+    }
+
+    pub fn read_window_in_control<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.window_in_control.get_data(index)
+    }
+
+    pub fn write_window_in_control<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.window_in_control = self.window_in_control.set_data(value, index)
+    }
+
+    pub fn read_window_out_control<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.window_out_control.get_data(index)
+    }
+
+    pub fn write_window_out_control<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.window_out_control = self.window_out_control.set_data(value, index);
     }
 
     const BG_PALETTE_RAM_OFFSET_START: u32 = 0x000;
@@ -869,9 +1451,9 @@ impl Lcd {
         let rotation_group_offset = (hword_offset / 4) % 4;
 
         let hword_result = match oam_offset {
-            0 => self.obj_attributes[oam_index].attribute_0,
-            1 => self.obj_attributes[oam_index].attribute_1,
-            2 => self.obj_attributes[oam_index].attribute_2,
+            0 => self.obj_attributes[oam_index].read_attribute_0(0),
+            1 => self.obj_attributes[oam_index].read_attribute_1(0),
+            2 => self.obj_attributes[oam_index].read_attribute_2(0),
             3 => match rotation_group_offset {
                 0 => self.obj_rotations[rotation_group_index].a,
                 1 => self.obj_rotations[rotation_group_index].b,
@@ -899,19 +1481,13 @@ impl Lcd {
 
         match oam_offset {
             0 => {
-                self.obj_attributes[oam_index].attribute_0 = self.obj_attributes[oam_index]
-                    .attribute_0
-                    .set_data(value, hword_index)
+                self.obj_attributes[oam_index].write_attribute_0(value, hword_index);
             }
             1 => {
-                self.obj_attributes[oam_index].attribute_1 = self.obj_attributes[oam_index]
-                    .attribute_1
-                    .set_data(value, hword_index)
+                self.obj_attributes[oam_index].write_attribute_1(value, hword_index);
             }
             2 => {
-                self.obj_attributes[oam_index].attribute_2 = self.obj_attributes[oam_index]
-                    .attribute_2
-                    .set_data(value, hword_index)
+                self.obj_attributes[oam_index].write_attribute_2(value, hword_index);
             }
             3 => match rotation_group_offset {
                 0 => {
@@ -1341,6 +1917,30 @@ impl Lcd {
         self.lcd_control.get_bit(SCREEN_DISPLAY_BG_3_BIT_INDEX)
     }
 
+    fn get_screen_display_obj(&self) -> bool {
+        const DISPLAY_OBJ_BIT_INDEX: usize = 12;
+
+        self.lcd_control.get_bit(DISPLAY_OBJ_BIT_INDEX)
+    }
+
+    fn get_display_window_0(&self) -> bool {
+        const DISPLAY_WINDOW_0_BIT_INDEX: usize = 13;
+
+        self.lcd_control.get_bit(DISPLAY_WINDOW_0_BIT_INDEX)
+    }
+
+    fn get_display_window_1(&self) -> bool {
+        const DISPLAY_WINDOW_1_BIT_INDEX: usize = 14;
+
+        self.lcd_control.get_bit(DISPLAY_WINDOW_1_BIT_INDEX)
+    }
+
+    fn get_display_obj_window(&self) -> bool {
+        const DISPLAY_OBJ_WINDOW_BIT_INDEX: usize = 15;
+
+        self.lcd_control.get_bit(DISPLAY_OBJ_WINDOW_BIT_INDEX)
+    }
+
     fn set_vblank_flag(&mut self, set: bool) {
         const VBLANK_FLAG_BIT_INDEX: usize = 0;
 
@@ -1411,6 +2011,333 @@ impl Lcd {
             .mosaic_size
             .get_bit_range(OBJ_MOSAIC_VERTICAL_SIZE_BIT_RANGE)
             + 1) as u16
+    }
+
+    fn special_effect_first_pixel(&self, pixel_type: PixelType) -> bool {
+        const BG0_FIRST_PIXEL_BIT_INDEX: usize = 0;
+        const BG1_FIRST_PIXEL_BIT_INDEX: usize = 1;
+        const BG2_FIRST_PIXEL_BIT_INDEX: usize = 2;
+        const BG3_FIRST_PIXEL_BIT_INDEX: usize = 3;
+        const OBJ_FIRST_PIXEL_BIT_INDEX: usize = 4;
+        const BD_FIRST_PIXEL_BIT_INDEX: usize = 5;
+
+        match pixel_type {
+            PixelType::Layer0 => self
+                .color_effects_selection
+                .get_bit(BG0_FIRST_PIXEL_BIT_INDEX),
+            PixelType::Layer1 => self
+                .color_effects_selection
+                .get_bit(BG1_FIRST_PIXEL_BIT_INDEX),
+            PixelType::Layer2 => self
+                .color_effects_selection
+                .get_bit(BG2_FIRST_PIXEL_BIT_INDEX),
+            PixelType::Layer3 => self
+                .color_effects_selection
+                .get_bit(BG3_FIRST_PIXEL_BIT_INDEX),
+            PixelType::Sprite => self
+                .color_effects_selection
+                .get_bit(OBJ_FIRST_PIXEL_BIT_INDEX),
+            PixelType::Backdrop => self
+                .color_effects_selection
+                .get_bit(BD_FIRST_PIXEL_BIT_INDEX),
+        }
+    }
+
+    fn get_color_special_effect(&self) -> ColorSpecialEffect {
+        const SPECIAL_EFFECT_BIT_RANGE: RangeInclusive<usize> = 6..=7;
+
+        match self
+            .color_effects_selection
+            .get_bit_range(SPECIAL_EFFECT_BIT_RANGE)
+        {
+            0 => ColorSpecialEffect::None,
+            1 => ColorSpecialEffect::AlphaBlending,
+            2 => ColorSpecialEffect::BrightnessIncrease,
+            3 => ColorSpecialEffect::BrightnessDecrease,
+            _ => unreachable!(),
+        }
+    }
+
+    fn special_effect_second_pixel(&self, pixel_type: PixelType) -> bool {
+        const BG0_SECOND_PIXEL_BIT_INDEX: usize = 8;
+        const BG1_SECOND_PIXEL_BIT_INDEX: usize = 9;
+        const BG2_SECOND_PIXEL_BIT_INDEX: usize = 10;
+        const BG3_SECOND_PIXEL_BIT_INDEX: usize = 11;
+        const OBJ_SECOND_PIXEL_BIT_INDEX: usize = 12;
+        const BD_SECOND_PIXEL_BIT_INDEX: usize = 13;
+
+        match pixel_type {
+            PixelType::Layer0 => self
+                .color_effects_selection
+                .get_bit(BG0_SECOND_PIXEL_BIT_INDEX),
+            PixelType::Layer1 => self
+                .color_effects_selection
+                .get_bit(BG1_SECOND_PIXEL_BIT_INDEX),
+            PixelType::Layer2 => self
+                .color_effects_selection
+                .get_bit(BG2_SECOND_PIXEL_BIT_INDEX),
+            PixelType::Layer3 => self
+                .color_effects_selection
+                .get_bit(BG3_SECOND_PIXEL_BIT_INDEX),
+            PixelType::Sprite => self
+                .color_effects_selection
+                .get_bit(OBJ_SECOND_PIXEL_BIT_INDEX),
+            PixelType::Backdrop => self
+                .color_effects_selection
+                .get_bit(BD_SECOND_PIXEL_BIT_INDEX),
+        }
+    }
+
+    fn get_alpha_first_target_coefficient(&self) -> f64 {
+        const FIRST_TARGET_COEFFICIENT_BIT_RANGE: RangeInclusive<usize> = 0..=4;
+
+        match self
+            .alpha_coefficients
+            .get_bit_range(FIRST_TARGET_COEFFICIENT_BIT_RANGE)
+        {
+            base @ 0..=16 => f64::from(base) / 16.0,
+            17..=31 => 1.0,
+            _ => unreachable!(),
+        }
+    }
+
+    fn get_alpha_second_target_coefficient(&self) -> f64 {
+        const SECOND_TARGET_COEFFICIENT_BIT_RANGE: RangeInclusive<usize> = 8..=12;
+
+        match self
+            .alpha_coefficients
+            .get_bit_range(SECOND_TARGET_COEFFICIENT_BIT_RANGE)
+        {
+            base @ 0..=16 => f64::from(base) / 16.0,
+            17..=31 => 1.0,
+            _ => unreachable!(),
+        }
+    }
+
+    fn get_brightness_coefficient(&self) -> f64 {
+        const BRIGHTNESS_COEFFICIENT_BIT_RANGE: RangeInclusive<usize> = 0..=4;
+
+        match self
+            .brightness_coefficient
+            .get_bit_range(BRIGHTNESS_COEFFICIENT_BIT_RANGE)
+        {
+            base @ 0..=16 => f64::from(base) / 16.0,
+            17..=31 => 1.0,
+            _ => unreachable!(),
+        }
+    }
+
+    const WINDOW_RIGHT_BIT_RANGE: RangeInclusive<usize> = 0..=7;
+    const WINDOW_LEFT_BIT_RANGE: RangeInclusive<usize> = 8..=15;
+    const WINDOW_BOTTOM_BIT_RANGE: RangeInclusive<usize> = 0..=7;
+    const WINDOW_TOP_BIT_RANGE: RangeInclusive<usize> = 8..=15;
+
+    fn get_window_0_right(&self) -> u16 {
+        self.window_0_horizontal
+            .get_bit_range(Self::WINDOW_RIGHT_BIT_RANGE)
+    }
+
+    fn get_window_0_left(&self) -> u16 {
+        self.window_0_horizontal
+            .get_bit_range(Self::WINDOW_LEFT_BIT_RANGE)
+    }
+
+    fn get_window_0_bottom(&self) -> u16 {
+        self.window_0_vertical
+            .get_bit_range(Self::WINDOW_BOTTOM_BIT_RANGE)
+    }
+
+    fn get_window_0_top(&self) -> u16 {
+        self.window_0_vertical
+            .get_bit_range(Self::WINDOW_TOP_BIT_RANGE)
+    }
+
+    fn get_window_1_right(&self) -> u16 {
+        self.window_1_horizontal
+            .get_bit_range(Self::WINDOW_RIGHT_BIT_RANGE)
+    }
+
+    fn get_window_1_left(&self) -> u16 {
+        self.window_1_horizontal
+            .get_bit_range(Self::WINDOW_LEFT_BIT_RANGE)
+    }
+
+    fn get_window_1_bottom(&self) -> u16 {
+        self.window_1_vertical
+            .get_bit_range(Self::WINDOW_BOTTOM_BIT_RANGE)
+    }
+
+    fn get_window_1_top(&self) -> u16 {
+        self.window_1_vertical
+            .get_bit_range(Self::WINDOW_TOP_BIT_RANGE)
+    }
+
+    fn get_window_0_bg_0_enable(&self) -> bool {
+        const WINDOW_0_BG_0_ENABLE_BIT_INDEX: usize = 0;
+
+        self.window_in_control
+            .get_bit(WINDOW_0_BG_0_ENABLE_BIT_INDEX)
+    }
+
+    fn get_window_0_bg_1_enable(&self) -> bool {
+        const WINDOW_0_BG_1_ENABLE_BIT_INDEX: usize = 1;
+
+        self.window_in_control
+            .get_bit(WINDOW_0_BG_1_ENABLE_BIT_INDEX)
+    }
+
+    fn get_window_0_bg_2_enable(&self) -> bool {
+        const WINDOW_0_BG_2_ENABLE_BIT_INDEX: usize = 2;
+
+        self.window_in_control
+            .get_bit(WINDOW_0_BG_2_ENABLE_BIT_INDEX)
+    }
+
+    fn get_window_0_bg_3_enable(&self) -> bool {
+        const WINDOW_0_BG_3_ENABLE_BIT_INDEX: usize = 3;
+
+        self.window_in_control
+            .get_bit(WINDOW_0_BG_3_ENABLE_BIT_INDEX)
+    }
+
+    fn get_window_0_obj_enable(&self) -> bool {
+        const WINDOW_0_OBJ_ENABLE_BIT_INDEX: usize = 4;
+
+        self.window_in_control
+            .get_bit(WINDOW_0_OBJ_ENABLE_BIT_INDEX)
+    }
+
+    fn get_window_0_special_effects_enable(&self) -> bool {
+        const WINDOW_0_SPECIAL_EFFECTS_BIT_INDEX: usize = 5;
+
+        self.window_in_control
+            .get_bit(WINDOW_0_SPECIAL_EFFECTS_BIT_INDEX)
+    }
+
+    fn get_window_1_bg_0_enable(&self) -> bool {
+        const WINDOW_1_BG_0_ENABLE_BIT_INDEX: usize = 8;
+
+        self.window_in_control
+            .get_bit(WINDOW_1_BG_0_ENABLE_BIT_INDEX)
+    }
+
+    fn get_window_1_bg_1_enable(&self) -> bool {
+        const WINDOW_1_BG_1_ENABLE_BIT_INDEX: usize = 9;
+
+        self.window_in_control
+            .get_bit(WINDOW_1_BG_1_ENABLE_BIT_INDEX)
+    }
+
+    fn get_window_1_bg_2_enable(&self) -> bool {
+        const WINDOW_1_BG_2_ENABLE_BIT_INDEX: usize = 10;
+
+        self.window_in_control
+            .get_bit(WINDOW_1_BG_2_ENABLE_BIT_INDEX)
+    }
+
+    fn get_window_1_bg_3_enable(&self) -> bool {
+        const WINDOW_1_BG_3_ENABLE_BIT_INDEX: usize = 11;
+
+        self.window_in_control
+            .get_bit(WINDOW_1_BG_3_ENABLE_BIT_INDEX)
+    }
+
+    fn get_window_1_obj_enable(&self) -> bool {
+        const WINDOW_1_OBJ_ENABLE_BIT_INDEX: usize = 12;
+
+        self.window_in_control
+            .get_bit(WINDOW_1_OBJ_ENABLE_BIT_INDEX)
+    }
+
+    fn get_window_1_special_effects_enable(&self) -> bool {
+        const WINDOW_1_SPECIAL_EFFECTS_BIT_INDEX: usize = 13;
+
+        self.window_in_control
+            .get_bit(WINDOW_1_SPECIAL_EFFECTS_BIT_INDEX)
+    }
+
+    fn get_outside_window_bg_0_enable(&self) -> bool {
+        const WINDOW_OUTSIDE_BG_0_ENABLE_BIT_INDEX: usize = 0;
+
+        self.window_out_control
+            .get_bit(WINDOW_OUTSIDE_BG_0_ENABLE_BIT_INDEX)
+    }
+
+    fn get_outside_window_bg_1_enable(&self) -> bool {
+        const WINDOW_OUTSIDE_BG_1_ENABLE_BIT_INDEX: usize = 1;
+
+        self.window_out_control
+            .get_bit(WINDOW_OUTSIDE_BG_1_ENABLE_BIT_INDEX)
+    }
+
+    fn get_outside_window_bg_2_enable(&self) -> bool {
+        const WINDOW_OUTSIDE_BG_2_ENABLE_BIT_INDEX: usize = 2;
+
+        self.window_out_control
+            .get_bit(WINDOW_OUTSIDE_BG_2_ENABLE_BIT_INDEX)
+    }
+
+    fn get_outside_window_bg_3_enable(&self) -> bool {
+        const WINDOW_OUTSIDE_BG_3_ENABLE_BIT_INDEX: usize = 3;
+
+        self.window_out_control
+            .get_bit(WINDOW_OUTSIDE_BG_3_ENABLE_BIT_INDEX)
+    }
+
+    fn get_outside_window_obj_enable(&self) -> bool {
+        const WINDOW_OUTSIDE_OBJ_ENABLE_BIT_INDEX: usize = 4;
+
+        self.window_out_control
+            .get_bit(WINDOW_OUTSIDE_OBJ_ENABLE_BIT_INDEX)
+    }
+
+    fn get_outside_window_special_effects_enable(&self) -> bool {
+        const WINDOW_OUTSIDE_SPECIAL_EFFECTS_BIT_INDEX: usize = 5;
+
+        self.window_out_control
+            .get_bit(WINDOW_OUTSIDE_SPECIAL_EFFECTS_BIT_INDEX)
+    }
+
+    fn get_obj_window_bg_0_enable(&self) -> bool {
+        const OBJ_WINDOW_BG_0_ENABLE_BIT_INDEX: usize = 8;
+
+        self.window_out_control
+            .get_bit(OBJ_WINDOW_BG_0_ENABLE_BIT_INDEX)
+    }
+
+    fn get_obj_window_bg_1_enable(&self) -> bool {
+        const OBJ_WINDOW_BG_1_ENABLE_BIT_INDEX: usize = 9;
+
+        self.window_out_control
+            .get_bit(OBJ_WINDOW_BG_1_ENABLE_BIT_INDEX)
+    }
+
+    fn get_obj_window_bg_2_enable(&self) -> bool {
+        const OBJ_WINDOW_BG_2_ENABLE_BIT_INDEX: usize = 10;
+
+        self.window_out_control
+            .get_bit(OBJ_WINDOW_BG_2_ENABLE_BIT_INDEX)
+    }
+
+    fn get_obj_window_bg_3_enable(&self) -> bool {
+        const OBJ_WINDOW_BG_3_ENABLE_BIT_INDEX: usize = 11;
+
+        self.window_out_control
+            .get_bit(OBJ_WINDOW_BG_3_ENABLE_BIT_INDEX)
+    }
+
+    fn get_obj_window_obj_enable(&self) -> bool {
+        const OBJ_WINDOW_OBJ_ENABLE_BIT_INDEX: usize = 12;
+
+        self.window_out_control
+            .get_bit(OBJ_WINDOW_OBJ_ENABLE_BIT_INDEX)
+    }
+
+    fn get_obj_window_special_effects_enable(&self) -> bool {
+        const OBJ_WINDOW_SPECIAL_EFFECTS_BIT_INDEX: usize = 13;
+
+        self.window_out_control
+            .get_bit(OBJ_WINDOW_SPECIAL_EFFECTS_BIT_INDEX)
     }
 }
 

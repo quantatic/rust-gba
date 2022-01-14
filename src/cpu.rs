@@ -505,12 +505,6 @@ impl Cpu {
 
 impl Cpu {
     pub fn fetch_decode_execute(&mut self, debug: bool) {
-        let pc_offset = if self.get_cpu_state_bit() {
-            |pc| pc + 2
-        } else {
-            |pc| pc + 4
-        };
-
         if self.bios_finished && debug {
             print!("{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} cpsr: {:08X} | ",
                 self.read_register(Register::R0, |_| unreachable!()),
@@ -528,7 +522,7 @@ impl Cpu {
                 self.read_register(Register::R12, |_| unreachable!()),
                 self.read_register(Register::R13, |_| unreachable!()),
                 self.read_register(Register::R14, |_| unreachable!()),
-                self.read_register(Register::R15, pc_offset),
+                self.read_register(Register::R15, |pc| pc),
                 self.read_register(Register::Cpsr, |_| unreachable!())
             );
         }
@@ -600,7 +594,13 @@ impl Cpu {
             ExceptionType::FastInterruptRequest => CpuMode::Fiq,
         };
 
-        let old_pc = self.read_register(Register::R15, |pc| pc);
+        let pc_offset = match exception_type {
+            ExceptionType::InterruptRequest => |pc| pc + 4,
+            ExceptionType::Swi => |pc| pc, // PC has already been incremented by decoder
+            _ => todo!("{:?}", exception_type),
+        };
+
+        let old_pc = self.read_register(Register::R15, pc_offset);
 
         // save old pc in new mode lr
         match new_mode {

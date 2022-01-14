@@ -7,12 +7,12 @@ mod keypad;
 mod lcd;
 mod timer;
 
-use std::error::Error;
+use std::{error::Error, time::Instant};
 
 use pixels::{wgpu::TextureFormat, PixelsBuilder, SurfaceTexture};
 use winit::{
     event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
-    event_loop::EventLoop,
+    event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
 
@@ -25,6 +25,8 @@ use crate::keypad::Key;
 compile_error!("architecture with pointer size >= 32 required");
 
 const DEBUG_AND_PANIC_ON_LOOP: bool = false;
+
+const CYCLES_PER_SECOND: u64 = 16_777_216;
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("{}", std::mem::size_of::<cpu::Cpu>());
@@ -64,10 +66,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     // }
 
     let mut i = 0;
-    event_loop.run(move |event, _, _control_flow| {
+    let mut last_step = Instant::now();
+    event_loop.run(move |event, _, control_flow| {
         match event {
             Event::MainEventsCleared => {
-                for _ in 0..266_666 {
+                for _ in 0..(CYCLES_PER_SECOND / 60) {
                     cpu.fetch_decode_execute(DEBUG_AND_PANIC_ON_LOOP);
                 }
 
@@ -80,6 +83,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     draw_buffer[(index * 4)..][3] = 255;
                 }
                 pixels.render().expect("failed to render new frame");
+
+                let time_elapsed = last_step.elapsed();
+                window.set_title(format!("last frame took {:?}", time_elapsed).as_str());
+
+                last_step = Instant::now();
             }
             Event::WindowEvent {
                 event: WindowEvent::Resized(new_size),
@@ -123,6 +131,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     _ => {}
                 }
             }
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                window_id,
+                ..
+            } if window_id == window.id() => *control_flow = ControlFlow::Exit,
             _ => {}
         };
     });

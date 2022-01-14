@@ -9,7 +9,7 @@ use crate::BitManipulation;
 use crate::DataAccess;
 
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
-const ROM: &[u8] = include_bytes!("../prio_demo.gba");
+const ROM: &[u8] = include_bytes!("../kirby_dream_land.gba");
 
 #[derive(Debug)]
 pub struct Bus {
@@ -118,9 +118,7 @@ impl DmaInfo {
         u32: DataAccess<T>,
         T: UpperHex,
     {
-        println!("write source address index {}: {:04X}", index, value);
         self.source_addr = self.source_addr.set_data(value, index);
-        println!("new src addr: {:08X}", self.source_addr);
     }
 
     fn read_dest_addr<T>(&self, index: u32) -> T
@@ -135,7 +133,6 @@ impl DmaInfo {
         u32: DataAccess<T>,
     {
         self.dest_addr = self.dest_addr.set_data(value, index);
-        println!("new dest addr: {:08X}", self.dest_addr);
     }
 
     fn read_word_count<T>(&self, index: u32) -> T
@@ -388,8 +385,35 @@ impl Bus {
     const BG3_AFFINE_Y_OFFSET_BASE: u32 = 0x0400003C;
     const BG3_AFFINE_Y_OFFSET_END: u32 = Self::BG3_AFFINE_Y_OFFSET_BASE + 3;
 
+    const WINDOW_0_HORIZONTAL_BASE: u32 = 0x04000040;
+    const WINDOW_0_HORIZONTAL_END: u32 = Self::WINDOW_0_HORIZONTAL_BASE + 1;
+
+    const WINDOW_1_HORIZONTAL_BASE: u32 = 0x04000042;
+    const WINDOW_1_HORIZONTAL_END: u32 = Self::WINDOW_1_HORIZONTAL_BASE + 1;
+
+    const WINDOW_0_VERTICAL_BASE: u32 = 0x04000044;
+    const WINDOW_0_VERTICAL_END: u32 = Self::WINDOW_0_VERTICAL_BASE + 1;
+
+    const WINDOW_1_VERTICAL_BASE: u32 = 0x04000046;
+    const WINDOW_1_VERTICAL_END: u32 = Self::WINDOW_1_VERTICAL_BASE + 1;
+
+    const WINDOW_IN_CONTROL_BASE: u32 = 0x04000048;
+    const WINDOW_IN_CONTROL_END: u32 = Self::WINDOW_IN_CONTROL_BASE + 1;
+
+    const WINDOW_OUT_CONTROL_BASE: u32 = 0x0400004A;
+    const WINDOW_OUT_CONTROL_END: u32 = Self::WINDOW_OUT_CONTROL_BASE + 1;
+
     const MOSAIC_SIZE_BASE: u32 = 0x0400004C;
     const MOSAIC_SIZE_END: u32 = Self::MOSAIC_SIZE_BASE + 3;
+
+    const BLEND_CONTROL_BASE: u32 = 0x04000050;
+    const BLEND_CONTROL_END: u32 = Self::BLEND_CONTROL_BASE + 1;
+
+    const BLEND_ALPHA_BASE: u32 = 0x04000052;
+    const BLEND_ALPHA_END: u32 = Self::BLEND_ALPHA_BASE + 1;
+
+    const BLEND_BRIGHTNESS_BASE: u32 = 0x04000054;
+    const BLEND_BRIGHTNESS_END: u32 = Self::BLEND_BRIGHTNESS_BASE + 1;
 
     const SOUND_BASE: u32 = 0x04000060;
     const SOUND_END: u32 = 0x040000A8;
@@ -499,14 +523,19 @@ impl Bus {
     const POSTFLG_ADDR: u32 = 0x04000300;
     const HALTCNT_ADDR: u32 = 0x04000301;
 
+    const UNUSED_IO_BASE: u32 = 0x04000302;
+    const UNUSED_IO_END: u32 = 0x04FFFFFF;
+
     const PALETTE_RAM_BASE: u32 = 0x05000000;
     const PALETTE_RAM_END: u32 = 0x050003FF;
 
     const VRAM_BASE: u32 = 0x06000000;
-    const VRAM_END: u32 = 0x06017FFF;
+    const VRAM_END: u32 = 0x06FFFFFF;
+    const VRAM_SIZE: u32 = 0x18000;
 
     const OAM_BASE: u32 = 0x07000000;
-    const OAM_END: u32 = 0x070003FF;
+    const OAM_END: u32 = 0x07FFFFFF;
+    const OAM_SIZE: u32 = 0x00000400;
 
     const WAIT_STATE_1_ROM_BASE: u32 = 0x08000000;
     const WAIT_STATE_1_ROM_END: u32 = 0x09FFFFFF;
@@ -622,9 +651,37 @@ impl Bus {
                 self.lcd.read_layer3_affine_param_d(address & 0b1)
             }
 
+            Self::WINDOW_0_HORIZONTAL_BASE..=Self::WINDOW_0_HORIZONTAL_END => self
+                .lcd
+                .read_window_0_horizontal(address.get_bit_range(0..=0)),
+            Self::WINDOW_1_HORIZONTAL_BASE..=Self::WINDOW_1_HORIZONTAL_END => self
+                .lcd
+                .read_window_1_horizontal(address.get_bit_range(0..=0)),
+            Self::WINDOW_0_VERTICAL_BASE..=Self::WINDOW_0_VERTICAL_END => self
+                .lcd
+                .read_window_0_vertical(address.get_bit_range(0..=0)),
+            Self::WINDOW_1_VERTICAL_BASE..=Self::WINDOW_1_VERTICAL_END => self
+                .lcd
+                .read_window_1_vertical(address.get_bit_range(0..=0)),
+            Self::WINDOW_IN_CONTROL_BASE..=Self::WINDOW_IN_CONTROL_END => self
+                .lcd
+                .read_window_in_control(address.get_bit_range(0..=0)),
+            Self::WINDOW_OUT_CONTROL_BASE..=Self::WINDOW_OUT_CONTROL_END => self
+                .lcd
+                .read_window_out_control(address.get_bit_range(0..=0)),
+
             Self::MOSAIC_SIZE_BASE..=Self::MOSAIC_SIZE_END => {
                 self.lcd.read_mosaic_size(address.get_bit_range(0..=1))
             }
+            Self::BLEND_CONTROL_BASE..=Self::BLEND_CONTROL_END => self
+                .lcd
+                .read_color_effects_selection(address.get_bit_range(0..=0)),
+            Self::BLEND_ALPHA_BASE..=Self::BLEND_ALPHA_END => self
+                .lcd
+                .read_alpha_blending_coefficients(address.get_bit_range(0..=0)),
+            Self::BLEND_BRIGHTNESS_BASE..=Self::BLEND_BRIGHTNESS_END => self
+                .lcd
+                .read_brightness_coefficient(address.get_bit_range(0..=0)),
 
             Self::SOUND_PWM_CONTROL_BASE..=Self::SOUND_PWM_CONTROL_END => {
                 self.apu.read_sound_bias(address & 0b1)
@@ -734,6 +791,10 @@ impl Bus {
             Self::INTERRUPT_REQUEST_BASE..=Self::INTERRUPT_REQUEST_END => {
                 self.read_interrupt_request(address & 0b1)
             }
+            Self::UNUSED_IO_BASE..=Self::UNUSED_IO_END => {
+                // println!("READ from {:08X}", address);
+                0
+            }
             Self::GAME_PAK_WAITSTATE_BASE..=Self::GAME_PAK_WAITSTATE_END => {
                 // println!("stubbed read game_pak[{}]", address & 0b1);
                 0
@@ -748,8 +809,14 @@ impl Bus {
             Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
                 self.lcd.read_palette_ram(address - Self::PALETTE_RAM_BASE)
             }
-            Self::VRAM_BASE..=Self::VRAM_END => self.lcd.read_vram(address - Self::VRAM_BASE),
-            Self::OAM_BASE..=Self::OAM_END => self.lcd.read_oam(address - Self::OAM_BASE),
+            Self::VRAM_BASE..=Self::VRAM_END => {
+                let offset = (address - Self::VRAM_BASE) % Self::VRAM_SIZE;
+                self.lcd.read_vram(offset)
+            }
+            Self::OAM_BASE..=Self::OAM_END => {
+                let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
+                self.lcd.read_oam(offset)
+            }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
                 self.read_gamepak(address - Self::WAIT_STATE_1_ROM_BASE)
             }
@@ -798,13 +865,15 @@ impl Bus {
             }
             Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
                 let actual_offset = (address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
+                self.chip_wram[actual_offset as usize] = value;
                 if (0x7FFC..=0x7FFF).contains(&actual_offset) {
                     println!(
-                        "INTERRUPT HANDLER WRITE 0x{:02X} -> 0x{:08X}",
-                        value, actual_offset
+                        "interrupt write {:02X} -> {:08X}, interrupt value now {:08X}",
+                        value,
+                        address,
+                        self.read_word_address(0x03FFFFFC)
                     );
                 }
-                self.chip_wram[actual_offset as usize] = value;
             }
             Self::LCD_CONTROL_BASE..=Self::LCD_CONTROL_END => {
                 self.lcd.write_lcd_control(value, address & 0b1)
@@ -891,9 +960,37 @@ impl Bus {
                 self.lcd.write_layer3_affine_param_d(value, address & 0b1)
             }
 
+            Self::WINDOW_0_HORIZONTAL_BASE..=Self::WINDOW_0_HORIZONTAL_END => self
+                .lcd
+                .write_window_0_horizontal(value, address.get_bit_range(0..=0)),
+            Self::WINDOW_1_HORIZONTAL_BASE..=Self::WINDOW_1_HORIZONTAL_END => self
+                .lcd
+                .write_window_1_horizontal(value, address.get_bit_range(0..=0)),
+            Self::WINDOW_0_VERTICAL_BASE..=Self::WINDOW_0_VERTICAL_END => self
+                .lcd
+                .write_window_0_vertical(value, address.get_bit_range(0..=0)),
+            Self::WINDOW_1_VERTICAL_BASE..=Self::WINDOW_1_VERTICAL_END => self
+                .lcd
+                .write_window_1_vertical(value, address.get_bit_range(0..=0)),
+            Self::WINDOW_IN_CONTROL_BASE..=Self::WINDOW_IN_CONTROL_END => self
+                .lcd
+                .write_window_in_control(value, address.get_bit_range(0..=0)),
+            Self::WINDOW_OUT_CONTROL_BASE..=Self::WINDOW_OUT_CONTROL_END => self
+                .lcd
+                .write_window_out_control(value, address.get_bit_range(0..=0)),
+
             Self::MOSAIC_SIZE_BASE..=Self::MOSAIC_SIZE_END => self
                 .lcd
                 .write_mosaic_size(value, address.get_bit_range(0..=1)),
+            Self::BLEND_CONTROL_BASE..=Self::BLEND_CONTROL_END => self
+                .lcd
+                .write_color_effects_selection(value, address.get_bit_range(0..=0)),
+            Self::BLEND_ALPHA_BASE..=Self::BLEND_ALPHA_END => self
+                .lcd
+                .write_alpha_blending_coefficients(value, address.get_bit_range(0..=0)),
+            Self::BLEND_BRIGHTNESS_BASE..=Self::BLEND_BRIGHTNESS_END => self
+                .lcd
+                .write_brightness_coefficient(value, address.get_bit_range(0..=0)),
 
             Self::SOUND_PWM_CONTROL_BASE..=Self::SOUND_PWM_CONTROL_END => {
                 self.apu.write_sound_bias(value, address & 0b1)
@@ -942,8 +1039,11 @@ impl Bus {
             }
             Self::POSTFLG_ADDR => println!("0x{:02x} -> UNIMPLEMENTED POSTFLG", value),
             Self::HALTCNT_ADDR => {} // println!("0x{:02x} -> UNIMPLEMENTED HALTCNT", value),
+            Self::UNUSED_IO_BASE..=Self::UNUSED_IO_END => {
+                // println!("WRITE of {:02X} -> {:08X}", value, address)
+            }
             Self::GAME_PAK_WAITSTATE_BASE..=Self::GAME_PAK_WAITSTATE_END => {
-                println!("game_pak[{}] = 0x{:02x}", address & 0b1, value)
+                // println!("game_pak[{}] = 0x{:02x}", address & 0b1, value)
             }
             Self::INTERRUPT_MASTER_ENABLE_BASE..=Self::INTERRUPT_MASTER_ENABLE_END => {
                 self.write_interrupt_master_enable(value, address & 0b1)
@@ -952,17 +1052,21 @@ impl Bus {
                 .lcd
                 .write_palette_ram(value, address - Self::PALETTE_RAM_BASE),
             Self::VRAM_BASE..=Self::VRAM_END => {
-                self.lcd.write_vram(value, address - Self::VRAM_BASE)
+                let offset = (address - Self::VRAM_BASE) % Self::VRAM_SIZE;
+                self.lcd.write_vram(value, offset)
             }
-            Self::OAM_BASE..=Self::OAM_END => self.lcd.write_oam(value, address - Self::OAM_BASE),
+            Self::OAM_BASE..=Self::OAM_END => {
+                let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
+                self.lcd.write_oam(value, offset)
+            }
             0x04000008..=0x40001FF => {
                 // println!("stubbed write 0x{:02x} -> 0x{:08x}", value, address)
             }
             0x04000206..=0x04000207 | 0x0400020A..=0x040002FF | 0x04000410..=0x04000411 => {
-                println!(
-                    "ignoring unused byte write of 0x{:02x} to 0x{:08x}",
-                    value, address
-                )
+                // println!(
+                //     "ignoring unused byte write of 0x{:02x} to 0x{:08x}",
+                //     value, address
+                // )
             }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
                 println!("ignoring write of {:02X} to wait state 1 rom", value);
