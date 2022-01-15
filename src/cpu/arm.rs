@@ -1362,7 +1362,7 @@ impl Cpu {
                         (first_operand_value as i32).overflowing_add(second_operand_value as i32);
                     let (final_signed_result, carry_2) =
                         intermediate_signed_result.overflowing_add(1);
-                    (final_signed_result, carry_1 | carry_2)
+                    (final_signed_result, carry_1 ^ carry_2)
                 } else {
                     (first_operand_value as i32).overflowing_add(second_operand_value as i32)
                 };
@@ -1393,7 +1393,7 @@ impl Cpu {
                     let (result_1, overflow_1) =
                         (first_operand_value as i32).overflowing_sub(second_operand_value as i32);
                     let (signed_result, overflow_2) = result_1.overflowing_sub(1);
-                    (signed_result, overflow_1 | overflow_2)
+                    (signed_result, overflow_1 ^ overflow_2)
                 } else {
                     (first_operand_value as i32).overflowing_sub(second_operand_value as i32)
                 };
@@ -1416,7 +1416,7 @@ impl Cpu {
                     let (result_1, overflow_1) =
                         (second_operand_value as i32).overflowing_sub(first_operand_value as i32);
                     let (signed_result, overflow_2) = result_1.overflowing_sub(1);
-                    (signed_result, overflow_1 | overflow_2)
+                    (signed_result, overflow_1 ^ overflow_2)
                 } else {
                     (second_operand_value as i32).overflowing_sub(first_operand_value as i32)
                 };

@@ -9,7 +9,7 @@ use crate::BitManipulation;
 use crate::DataAccess;
 
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
-const ROM: &[u8] = include_bytes!("../kirby_dream_land.gba");
+const ROM: &[u8] = include_bytes!("../suite.gba");
 
 #[derive(Debug)]
 pub struct Bus {
