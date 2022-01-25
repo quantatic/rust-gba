@@ -281,7 +281,7 @@ impl Layer2 {
 
                 Some(Rgb555::from_int(pixel_int))
             }
-            _ => None,
+            BgMode::Invalid => None,
         }
     }
 }

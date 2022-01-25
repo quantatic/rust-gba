@@ -30,6 +30,13 @@ pub struct LcdStateChangeInfo {
 }
 
 #[derive(Clone, Copy, Debug)]
+enum BgModeType {
+    TileMode,
+    BitmapMode,
+    Invalid,
+}
+
+#[derive(Clone, Copy, Debug)]
 enum BgMode {
     Mode0,
     Mode1,
@@ -37,6 +44,17 @@ enum BgMode {
     Mode3,
     Mode4,
     Mode5,
+    Invalid,
+}
+
+impl BgMode {
+    fn get_type(self) -> BgModeType {
+        match self {
+            Self::Mode0 | Self::Mode1 | Self::Mode2 => BgModeType::TileMode,
+            Self::Mode3 | Self::Mode4 | Self::Mode5 => BgModeType::BitmapMode,
+            Self::Invalid => BgModeType::Invalid,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -184,24 +202,13 @@ impl Rgb555 {
     }
 }
 
-// any change to any of these fields must uphold necessary invariants between fields
-// (for instance, between obj_size, obj_size_index, and tile_dims)
+// any change to any of these attributes must update "tile_dims_cache" if the value would change.
 #[derive(Clone, Copy, Debug, Default)]
 struct ObjectAttributeInfo {
-    y_coordinate: u16,
-    rotation_scaling_flag: bool,
-    obj_disable_double_size_flag: bool,
-    obj_mode: ObjMode,
-    obj_mosaic: bool,
-    palette_depth: PaletteDepth,
-    obj_shape: ObjectShape,
-    x_coordinate: u16,
-    rotation_scaling_index: u16,
-    tile_number: u16,
-    bg_priority: u16,
-    palette_number: u8,
-    obj_size_index: u16,
-    tile_dims: (u16, u16),
+    attribute_0: u16,
+    attribute_1: u16,
+    attribute_2: u16,
+    tile_dims_cache: (u16, u16),
 }
 
 // attribute 0
@@ -227,71 +234,18 @@ impl ObjectAttributeInfo {
     where
         u16: DataAccess<T>,
     {
-        let obj_mode_value = match self.obj_mode {
-            ObjMode::Normal => Self::OBJ_MODE_NORMAL,
-            ObjMode::SemiTransparent => Self::OBJ_MODE_SEMI_TRANSPARENT,
-            ObjMode::ObjWindow => Self::OBJ_MODE_OBJ_WINDOW,
-        };
-
-        let palette_depth_bit = matches!(self.palette_depth, PaletteDepth::EightBit);
-
-        let obj_shape_value = match self.obj_shape {
-            ObjectShape::Square => Self::OBJ_SHAPE_SQUARE,
-            ObjectShape::Horizontal => Self::OBJ_SHAPE_HORIZONTAL,
-            ObjectShape::Vertical => Self::OBJ_SHAPE_VERTICAL,
-        };
-
-        0.set_bit_range(self.y_coordinate, Self::Y_COORDINATE_BIT_RANGE)
-            .set_bit(
-                Self::ROTATION_SCALING_FLAG_BIT_INDEX,
-                self.rotation_scaling_flag,
-            )
-            .set_bit(
-                Self::DOUBLE_SIZE_OBJ_DISABLE_BIT_INDEX,
-                self.obj_disable_double_size_flag,
-            )
-            .set_bit_range(obj_mode_value, Self::OBJ_MODE_BIT_RANGE)
-            .set_bit(Self::OBJ_MOSIAIC_BIT_INDEX, self.obj_mosaic)
-            .set_bit(Self::PALETTE_DEPTH_BIT_INDEX, palette_depth_bit)
-            .set_bit_range(obj_shape_value, Self::OBJ_SHAPE_BIT_RANGE)
-            .get_data(index)
+        self.attribute_0.get_data(index)
     }
 
     fn write_attribute_0<T>(&mut self, value: T, index: u32)
     where
         u16: DataAccess<T>,
     {
-        let new_attribute_0 = self.read_attribute_0::<u16>(0).set_data(value, index);
+        self.attribute_0 = self.attribute_0.set_data(value, index);
 
-        self.y_coordinate = new_attribute_0.get_bit_range(Self::Y_COORDINATE_BIT_RANGE);
-        self.rotation_scaling_flag = new_attribute_0.get_bit(Self::ROTATION_SCALING_FLAG_BIT_INDEX);
-        self.obj_disable_double_size_flag =
-            new_attribute_0.get_bit(Self::DOUBLE_SIZE_OBJ_DISABLE_BIT_INDEX);
+        let obj_size_index = self.attribute_1.get_bit_range(Self::OBJ_SIZE_BIT_RANGE);
 
-        self.obj_mode = match new_attribute_0.get_bit_range(Self::OBJ_MODE_BIT_RANGE) {
-            Self::OBJ_MODE_NORMAL => ObjMode::Normal,
-            Self::OBJ_MODE_SEMI_TRANSPARENT => ObjMode::SemiTransparent,
-            Self::OBJ_MODE_OBJ_WINDOW => ObjMode::ObjWindow,
-            Self::OBJ_MODE_PROHIBITED => unreachable!("prohibited object mode"),
-            _ => unreachable!(),
-        };
-
-        self.obj_mosaic = new_attribute_0.get_bit(Self::OBJ_MOSIAIC_BIT_INDEX);
-
-        self.palette_depth = if new_attribute_0.get_bit(Self::PALETTE_DEPTH_BIT_INDEX) {
-            PaletteDepth::EightBit
-        } else {
-            PaletteDepth::FourBit
-        };
-
-        self.obj_shape = match new_attribute_0.get_bit_range(Self::OBJ_SHAPE_BIT_RANGE) {
-            Self::OBJ_SHAPE_SQUARE => ObjectShape::Square,
-            Self::OBJ_SHAPE_HORIZONTAL => ObjectShape::Horizontal,
-            Self::OBJ_SHAPE_VERTICAL => ObjectShape::Vertical,
-            _ => unreachable!(),
-        };
-
-        self.tile_dims = match (self.obj_size_index, self.obj_shape) {
+        let (tile_width, tile_height) = match (obj_size_index, self.get_obj_shape()) {
             (0, ObjectShape::Square) => (1, 1),
             (1, ObjectShape::Square) => (2, 2),
             (2, ObjectShape::Square) => (4, 4),
@@ -306,6 +260,8 @@ impl ObjectAttributeInfo {
             (3, ObjectShape::Vertical) => (4, 8),
             _ => unreachable!(),
         };
+
+        self.tile_dims_cache = (tile_width, tile_height);
     }
 }
 
@@ -319,27 +275,18 @@ impl ObjectAttributeInfo {
     where
         u16: DataAccess<T>,
     {
-        0.set_bit_range(self.x_coordinate, Self::X_COORDINATE_BIT_RANGE)
-            .set_bit_range(
-                self.rotation_scaling_index,
-                Self::ROTATION_SCALING_INDEX_BIT_RANGE,
-            )
-            .set_bit_range(self.obj_size_index, Self::OBJ_SIZE_BIT_RANGE)
-            .get_data(index)
+        self.attribute_1.get_data(index)
     }
 
     fn write_attribute_1<T>(&mut self, value: T, index: u32)
     where
         u16: DataAccess<T>,
     {
-        let new_attribute_1 = self.read_attribute_1::<u16>(0).set_data(value, index);
+        self.attribute_1 = self.attribute_1.set_data(value, index);
 
-        self.x_coordinate = new_attribute_1.get_bit_range(Self::X_COORDINATE_BIT_RANGE);
-        self.rotation_scaling_index =
-            new_attribute_1.get_bit_range(Self::ROTATION_SCALING_INDEX_BIT_RANGE);
-        self.obj_size_index = new_attribute_1.get_bit_range(Self::OBJ_SIZE_BIT_RANGE);
+        let obj_size_index = self.attribute_1.get_bit_range(Self::OBJ_SIZE_BIT_RANGE);
 
-        self.tile_dims = match (self.obj_size_index, self.obj_shape) {
+        let (tile_width, tile_height) = match (obj_size_index, self.get_obj_shape()) {
             (0, ObjectShape::Square) => (1, 1),
             (1, ObjectShape::Square) => (2, 2),
             (2, ObjectShape::Square) => (4, 4),
@@ -354,6 +301,8 @@ impl ObjectAttributeInfo {
             (3, ObjectShape::Vertical) => (4, 8),
             _ => unreachable!(),
         };
+
+        self.tile_dims_cache = (tile_width, tile_height);
     }
 }
 
@@ -367,93 +316,102 @@ impl ObjectAttributeInfo {
     where
         u16: DataAccess<T>,
     {
-        0.set_bit_range(self.tile_number, Self::TILE_NUMBER_BIT_RANGE)
-            .set_bit_range(self.bg_priority, Self::BG_PRIORITY_BIT_RANGE)
-            .set_bit_range(
-                u16::from(self.palette_number),
-                Self::PALETTE_NUMBER_BIT_RANGE,
-            )
-            .get_data(index)
+        self.attribute_2.get_data(index)
     }
 
     fn write_attribute_2<T>(&mut self, value: T, index: u32)
     where
         u16: DataAccess<T>,
     {
-        let new_attribute_2 = self.read_attribute_2::<u16>(0).set_data(value, index);
-
-        self.tile_number = new_attribute_2.get_bit_range(Self::TILE_NUMBER_BIT_RANGE);
-        self.bg_priority = new_attribute_2.get_bit_range(Self::BG_PRIORITY_BIT_RANGE);
-        self.palette_number = new_attribute_2
-            .get_bit_range(Self::PALETTE_NUMBER_BIT_RANGE)
-            .try_into()
-            .unwrap();
+        self.attribute_2 = self.attribute_2.set_data(value, index);
     }
 }
 
 impl ObjectAttributeInfo {
+    fn get_obj_shape(&self) -> ObjectShape {
+        match self.attribute_0.get_bit_range(Self::OBJ_SHAPE_BIT_RANGE) {
+            Self::OBJ_SHAPE_SQUARE => ObjectShape::Square,
+            Self::OBJ_SHAPE_HORIZONTAL => ObjectShape::Horizontal,
+            Self::OBJ_SHAPE_VERTICAL => ObjectShape::Vertical,
+            _ => unreachable!(),
+        }
+    }
+
     fn get_y_coordinate(&self) -> u16 {
-        self.y_coordinate
+        self.attribute_0.get_bit_range(Self::Y_COORDINATE_BIT_RANGE)
     }
 
     fn get_rotation_scaling_flag(&self) -> bool {
-        self.rotation_scaling_flag
+        self.attribute_0
+            .get_bit(Self::ROTATION_SCALING_FLAG_BIT_INDEX)
     }
 
     fn get_double_size_flag(&self) -> bool {
-        self.obj_disable_double_size_flag
+        self.attribute_0
+            .get_bit(Self::DOUBLE_SIZE_OBJ_DISABLE_BIT_INDEX)
     }
 
     fn get_obj_disable_flag(&self) -> bool {
-        self.obj_disable_double_size_flag
+        self.attribute_0
+            .get_bit(Self::DOUBLE_SIZE_OBJ_DISABLE_BIT_INDEX)
     }
 
     fn get_obj_mode(&self) -> ObjMode {
-        self.obj_mode
+        match self.attribute_0.get_bit_range(Self::OBJ_MODE_BIT_RANGE) {
+            Self::OBJ_MODE_NORMAL => ObjMode::Normal,
+            Self::OBJ_MODE_SEMI_TRANSPARENT => ObjMode::SemiTransparent,
+            Self::OBJ_MODE_OBJ_WINDOW => ObjMode::ObjWindow,
+            Self::OBJ_MODE_PROHIBITED => unreachable!("prohibited object mode"),
+            _ => unreachable!(),
+        }
     }
 
     fn get_obj_mosaic(&self) -> bool {
-        self.obj_mosaic
+        self.attribute_0.get_bit(Self::OBJ_MOSIAIC_BIT_INDEX)
     }
 
     fn get_palette_depth(&self) -> PaletteDepth {
-        self.palette_depth
+        if self.attribute_0.get_bit(Self::PALETTE_DEPTH_BIT_INDEX) {
+            PaletteDepth::EightBit
+        } else {
+            PaletteDepth::FourBit
+        }
     }
 
     fn get_x_coordinate(&self) -> u16 {
-        self.x_coordinate
+        self.attribute_1.get_bit_range(Self::X_COORDINATE_BIT_RANGE)
     }
 
     fn get_rotation_scaling_index(&self) -> u16 {
-        self.rotation_scaling_index
+        self.attribute_1
+            .get_bit_range(Self::ROTATION_SCALING_INDEX_BIT_RANGE)
     }
 
     fn get_horizontal_flip(&self) -> bool {
-        const ROTATION_SCALING_HORIZONTAL_FLIP_BIT_INDEX: usize = 3;
-        self.rotation_scaling_index
-            .get_bit(ROTATION_SCALING_HORIZONTAL_FLIP_BIT_INDEX)
+        const HORIZONTAL_FLIP_BIT_INDEX: usize = 12;
+        self.attribute_1.get_bit(HORIZONTAL_FLIP_BIT_INDEX)
     }
 
     fn get_vertical_flip(&self) -> bool {
-        const ROTATION_SCALING_VERTICAL_FLIP_BIT_INDEX: usize = 4;
-        self.rotation_scaling_index
-            .get_bit(ROTATION_SCALING_VERTICAL_FLIP_BIT_INDEX)
+        const VERTICAL_FLIP_BIT_INDEX: usize = 13;
+        self.attribute_1.get_bit(VERTICAL_FLIP_BIT_INDEX)
     }
 
     fn get_tile_number(&self) -> u16 {
-        self.tile_number
+        self.attribute_2.get_bit_range(Self::TILE_NUMBER_BIT_RANGE)
     }
 
     fn get_bg_priority(&self) -> u16 {
-        self.bg_priority
+        self.attribute_2.get_bit_range(Self::BG_PRIORITY_BIT_RANGE)
     }
 
     fn get_palette_number(&self) -> u8 {
-        self.palette_number
+        self.attribute_2
+            .get_bit_range(Self::PALETTE_NUMBER_BIT_RANGE) as u8
     }
 
     fn get_obj_tile_dims(&self) -> (u16, u16) {
-        self.tile_dims
+        self.tile_dims_cache
     }
 }
 
@@ -1387,7 +1345,19 @@ impl Lcd {
         color.to_int().get_data(offset & 0b1)
     }
 
-    pub fn write_palette_ram(&mut self, value: u8, offset: u32) {
+    pub fn write_palette_ram_byte(&mut self, value: u8, offset: u32) {
+        // write byte value to both high and low byte of addressed halfword.
+
+        let actual_offset = offset & (!0b1);
+
+        let actual_value = u16::from_le_bytes([value, value]);
+
+        self.write_palette_ram_hword(actual_value, actual_offset);
+    }
+
+    pub fn write_palette_ram_hword(&mut self, value: u16, offset: u32) {
+        assert!(offset & 0b1 == 0);
+
         let color = match offset {
             Self::BG_PALETTE_RAM_OFFSET_START..=Self::BG_PALETTE_RAM_OFFSET_END => {
                 let color_idx = (offset - Self::BG_PALETTE_RAM_OFFSET_START) / 2;
@@ -1400,19 +1370,7 @@ impl Lcd {
             _ => unreachable!(),
         };
 
-        let modified_range = match offset & 0b1 {
-            0 => 0..=7,
-            1 => 8..=15,
-            _ => unreachable!(),
-        };
-
-        let new_color = Rgb555::from_int(
-            color
-                .to_int()
-                .set_bit_range(u16::from(value), modified_range),
-        );
-
-        *color = new_color;
+        *color = Rgb555::from_int(value);
     }
 
     pub fn read_vram(&self, offset: u32) -> u8 {
@@ -1420,11 +1378,56 @@ impl Lcd {
     }
 
     pub fn write_vram_byte(&mut self, value: u8, offset: u32) {
-        // self.vram[offset as usize] = value;
-        todo!();
+        const TILE_MODE_BG_RANGE_START: u32 = 0x00000;
+        const TILE_MODE_BG_RANGE_END: u32 = 0x0FFFF;
+        const TILE_MODE_OBJ_RANGE_START: u32 = 0x10000;
+        const TILE_MODE_OBJ_RANGE_END: u32 = 0x17FFF;
+
+        const BITMAP_MODE_BG_RANGE_START: u32 = 0x00000;
+        const BITMAP_MODE_BG_RANGE_END: u32 = 0x13FFF;
+        const BITMAP_MODE_OBJ_RANGE_START: u32 = 0x14000;
+        const BITMAP_MODE_OBJ_RANGE_END: u32 = 0x17FFF;
+
+        #[derive(Clone, Copy, Debug)]
+        enum WriteBehavior {
+            IgnoreWrite,
+            WriteUpperLowerByte,
+        }
+
+        let write_behavior = match self.get_bg_mode().get_type() {
+            BgModeType::TileMode | BgModeType::Invalid => match offset {
+                TILE_MODE_BG_RANGE_START..=TILE_MODE_BG_RANGE_END => {
+                    WriteBehavior::WriteUpperLowerByte
+                }
+                TILE_MODE_OBJ_RANGE_START..=TILE_MODE_OBJ_RANGE_END => WriteBehavior::IgnoreWrite,
+                _ => unreachable!(),
+            },
+            BgModeType::BitmapMode => match offset {
+                BITMAP_MODE_BG_RANGE_START..=BITMAP_MODE_BG_RANGE_END => {
+                    WriteBehavior::WriteUpperLowerByte
+                }
+                BITMAP_MODE_OBJ_RANGE_START..=BITMAP_MODE_OBJ_RANGE_END => {
+                    WriteBehavior::IgnoreWrite
+                }
+                _ => unreachable!(),
+            },
+        };
+
+        match write_behavior {
+            WriteBehavior::IgnoreWrite => {}
+            WriteBehavior::WriteUpperLowerByte => {
+                let actual_offset = offset & (!0b1);
+
+                let actual_value = u16::from_le_bytes([value, value]);
+
+                self.write_vram_hword(actual_value, actual_offset);
+            }
+        }
     }
 
     pub fn write_vram_hword(&mut self, value: u16, offset: u32) {
+        assert!(offset & 0b1 == 0);
+
         let [low_byte, high_byte] = value.to_le_bytes();
 
         self.vram[offset as usize] = low_byte;
@@ -1465,7 +1468,11 @@ impl Lcd {
         }
     }
 
-    pub fn write_oam(&mut self, value: u16, offset: u32) {
+    pub fn write_oam_byte(&mut self, value: u8, offset: u32) {
+        // byte write to OAM is ignored
+    }
+
+    pub fn write_oam_hword(&mut self, value: u16, offset: u32) {
         assert!(offset & 0b1 == 0);
 
         let hword_offset = offset / 2;
@@ -1866,7 +1873,8 @@ impl Lcd {
             3 => BgMode::Mode3,
             4 => BgMode::Mode4,
             5 => BgMode::Mode5,
-            _ => unreachable!("prohibited mode {}", mode_index),
+            6 | 7 => BgMode::Invalid,
+            _ => unreachable!(),
         }
     }
 

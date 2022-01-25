@@ -9,7 +9,7 @@ use crate::BitManipulation;
 use crate::DataAccess;
 
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
-const ROM: &[u8] = include_bytes!("../kirby_dream_land.gba");
+const ROM: &[u8] = include_bytes!("../memory.gba");
 
 #[derive(Debug)]
 pub struct Bus {
@@ -1115,10 +1115,6 @@ impl Bus {
             Self::INTERRUPT_MASTER_ENABLE_BASE..=Self::INTERRUPT_MASTER_ENABLE_END => {
                 self.write_interrupt_master_enable(value, address & 0b1)
             }
-            Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
-                let offset = (address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
-                self.lcd.write_palette_ram(value, offset)
-            }
             Self::VRAM_BASE..=Self::VRAM_END => {
                 let vram_offset = (address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
                 let offset = match vram_offset {
@@ -1131,7 +1127,14 @@ impl Bus {
                 };
                 self.lcd.write_vram_byte(value, offset)
             }
-            Self::OAM_BASE..=Self::OAM_END => {} // "byte writes to OAM are ignored, the memory content remains unchanged"
+            Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
+                let offset = (address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
+                self.lcd.write_palette_ram_byte(value, offset)
+            }
+            Self::OAM_BASE..=Self::OAM_END => {
+                let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
+                self.lcd.write_oam_byte(value, offset);
+            }
             0x04000008..=0x40001FF => {
                 // println!("stubbed write 0x{:02x} -> 0x{:08x}", value, address)
             }
@@ -1165,7 +1168,11 @@ impl Bus {
             Self::OAM_BASE..=Self::OAM_END => {
                 let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
 
-                self.lcd.write_oam(value, offset);
+                self.lcd.write_oam_hword(value, offset);
+            }
+            Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
+                let offset = (address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
+                self.lcd.write_palette_ram_hword(value, offset)
             }
             Self::VRAM_BASE..=Self::VRAM_END => {
                 let vram_offset = (address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
@@ -1296,11 +1303,6 @@ impl Bus {
             }
 
             if original_dma_info.get_dma_ongoing() {
-                println!("{:?}", original_dma_info.get_dma_start_timing());
-                println!("performing dma transfer");
-                println!("{:#08X?}", original_dma_info);
-                println!("---------------");
-
                 let mut dma_source = original_dma_info.source_addr;
                 let mut dma_dest = original_dma_info.dest_addr;
                 let original_dest = dma_dest;
@@ -1316,12 +1318,10 @@ impl Bus {
                         DmaTransferType::Bit16 => {
                             let source_data = self.read_halfword_address(dma_source);
                             self.write_halfword_address(source_data, dma_dest);
-                            println!("u16 {:04X} -> [{:08X}]", source_data, dma_dest)
                         }
                         DmaTransferType::Bit32 => {
                             let source_data = self.read_word_address(dma_source);
                             self.write_word_address(source_data, dma_dest);
-                            println!("u32 {:08X} -> [{:08X}]", source_data, dma_dest)
                         }
                     }
 

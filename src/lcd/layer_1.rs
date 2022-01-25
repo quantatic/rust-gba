@@ -127,7 +127,7 @@ impl Layer1 {
 
                 Some(bg_palette[usize::from(palette_idx)])
             }
-            _ => None,
+            BgMode::Mode2 | BgMode::Mode3 | BgMode::Mode4 | BgMode::Mode5 | BgMode::Invalid => None,
         }
     }
 }
