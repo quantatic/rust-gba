@@ -9,13 +9,13 @@ use crate::BitManipulation;
 use crate::DataAccess;
 
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
-const ROM: &[u8] = include_bytes!("../suite.gba");
+const ROM: &[u8] = include_bytes!("../kirby_dream_land.gba");
 
 #[derive(Debug)]
 pub struct Bus {
-    chip_wram: Box<[u8; 0x8000]>,
-    board_wram: Box<[u8; 0x40000]>,
-    game_pak_sram: Box<[u8; 0x10000]>,
+    chip_wram: [u8; 0x8000],
+    board_wram: [u8; 0x40000],
+    game_pak_sram: [u8; 0x10000],
     cycle_count: usize,
     interrupt_master_enable: u16,
     interrupt_enable: u16,
@@ -30,9 +30,9 @@ pub struct Bus {
 impl Default for Bus {
     fn default() -> Self {
         Self {
-            chip_wram: Box::new([0; 0x8000]),
-            board_wram: Box::new([0; 0x40000]),
-            game_pak_sram: Box::new([0; 0x10000]),
+            chip_wram: [0; 0x8000],
+            board_wram: [0; 0x40000],
+            game_pak_sram: [0; 0x10000],
             cycle_count: 0,
             interrupt_master_enable: 0,
             interrupt_enable: 0,
@@ -527,11 +527,17 @@ impl Bus {
     const UNUSED_IO_END: u32 = 0x04FFFFFF;
 
     const PALETTE_RAM_BASE: u32 = 0x05000000;
-    const PALETTE_RAM_END: u32 = 0x050003FF;
+    const PALETTE_RAM_END: u32 = 0x05FFFFFF;
+    const PALETTER_RAM_SIZE: u32 = 0x400;
 
     const VRAM_BASE: u32 = 0x06000000;
     const VRAM_END: u32 = 0x06FFFFFF;
-    const VRAM_SIZE: u32 = 0x18000;
+    const VRAM_FULL_SIZE: u32 = 0x20000;
+    const VRAM_OFFSET_FIRST_BASE: u32 = 0x00000;
+    const VRAM_OFFSET_FIRST_END: u32 = 0x0FFFF;
+    const VRAM_OFFSET_SECOND_BASE: u32 = 0x10000;
+    const VRAM_OFFSET_SECOND_END: u32 = 0x1FFFF;
+    const VRAM_SECOND_SIZE: u32 = 0x8000;
 
     const OAM_BASE: u32 = 0x07000000;
     const OAM_END: u32 = 0x07FFFFFF;
@@ -807,10 +813,19 @@ impl Bus {
                 0
             }
             Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
-                self.lcd.read_palette_ram(address - Self::PALETTE_RAM_BASE)
+                let offset = (address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
+                self.lcd.read_palette_ram(offset)
             }
             Self::VRAM_BASE..=Self::VRAM_END => {
-                let offset = (address - Self::VRAM_BASE) % Self::VRAM_SIZE;
+                let vram_offset = (address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
+                let offset = match vram_offset {
+                    Self::VRAM_OFFSET_FIRST_BASE..=Self::VRAM_OFFSET_FIRST_END => vram_offset,
+                    Self::VRAM_OFFSET_SECOND_BASE..=Self::VRAM_OFFSET_SECOND_END => {
+                        ((vram_offset - Self::VRAM_OFFSET_SECOND_BASE) % Self::VRAM_SECOND_SIZE)
+                            + Self::VRAM_OFFSET_SECOND_BASE
+                    }
+                    _ => unreachable!(),
+                };
                 self.lcd.read_vram(offset)
             }
             Self::OAM_BASE..=Self::OAM_END => {
@@ -999,6 +1014,58 @@ impl Bus {
                 // println!("stubbed sound write {:02X} -> [{:08X}]", value, address)
             }
 
+            Self::DMA_0_SOURCE_BASE..=Self::DMA_0_SOURCE_END => {
+                self.dma_infos[0].write_source_addr(value, address & 0b11)
+            }
+            Self::DMA_0_DEST_BASE..=Self::DMA_0_DEST_END => {
+                self.dma_infos[0].write_dest_addr(value, address & 0b11)
+            }
+            Self::DMA_0_WORD_COUNT_BASE..=Self::DMA_0_WORD_COUNT_END => {
+                self.dma_infos[0].write_word_count(value, address & 0b1)
+            }
+            Self::DMA_0_CONTROL_BASE..=Self::DMA_0_CONTROL_END => {
+                self.dma_infos[0].write_dma_control(value, address & 0b1)
+            }
+
+            Self::DMA_1_SOURCE_BASE..=Self::DMA_1_SOURCE_END => {
+                self.dma_infos[1].write_source_addr(value, address & 0b11)
+            }
+            Self::DMA_1_DEST_BASE..=Self::DMA_1_DEST_END => {
+                self.dma_infos[1].write_dest_addr(value, address & 0b11)
+            }
+            Self::DMA_1_WORD_COUNT_BASE..=Self::DMA_1_WORD_COUNT_END => {
+                self.dma_infos[1].write_word_count(value, address & 0b1)
+            }
+            Self::DMA_1_CONTROL_BASE..=Self::DMA_1_CONTROL_END => {
+                self.dma_infos[1].write_dma_control(value, address & 0b1)
+            }
+
+            Self::DMA_2_SOURCE_BASE..=Self::DMA_2_SOURCE_END => {
+                self.dma_infos[2].write_source_addr(value, address & 0b11)
+            }
+            Self::DMA_2_DEST_BASE..=Self::DMA_2_DEST_END => {
+                self.dma_infos[2].write_dest_addr(value, address & 0b11)
+            }
+            Self::DMA_2_WORD_COUNT_BASE..=Self::DMA_2_WORD_COUNT_END => {
+                self.dma_infos[2].write_word_count(value, address & 0b1)
+            }
+            Self::DMA_2_CONTROL_BASE..=Self::DMA_2_CONTROL_END => {
+                self.dma_infos[2].write_dma_control(value, address & 0b1)
+            }
+
+            Self::DMA_3_SOURCE_BASE..=Self::DMA_3_SOURCE_END => {
+                self.dma_infos[3].write_source_addr(value, address & 0b11)
+            }
+            Self::DMA_3_DEST_BASE..=Self::DMA_3_DEST_END => {
+                self.dma_infos[3].write_dest_addr(value, address & 0b11)
+            }
+            Self::DMA_3_WORD_COUNT_BASE..=Self::DMA_3_WORD_COUNT_END => {
+                self.dma_infos[3].write_word_count(value, address & 0b1)
+            }
+            Self::DMA_3_CONTROL_BASE..=Self::DMA_3_CONTROL_END => {
+                self.dma_infos[3].write_dma_control(value, address & 0b1)
+            }
+
             Self::TIMER_0_CONTROL_BASE..=Self::TIMER_0_CONTROL_END => {
                 self.timers[0].write_timer_control(value, address & 0b1)
             }
@@ -1048,17 +1115,23 @@ impl Bus {
             Self::INTERRUPT_MASTER_ENABLE_BASE..=Self::INTERRUPT_MASTER_ENABLE_END => {
                 self.write_interrupt_master_enable(value, address & 0b1)
             }
-            Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => self
-                .lcd
-                .write_palette_ram(value, address - Self::PALETTE_RAM_BASE),
+            Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
+                let offset = (address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
+                self.lcd.write_palette_ram(value, offset)
+            }
             Self::VRAM_BASE..=Self::VRAM_END => {
-                let offset = (address - Self::VRAM_BASE) % Self::VRAM_SIZE;
-                self.lcd.write_vram(value, offset)
+                let vram_offset = (address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
+                let offset = match vram_offset {
+                    Self::VRAM_OFFSET_FIRST_BASE..=Self::VRAM_OFFSET_FIRST_END => vram_offset,
+                    Self::VRAM_OFFSET_SECOND_BASE..=Self::VRAM_OFFSET_SECOND_END => {
+                        ((vram_offset - Self::VRAM_OFFSET_SECOND_BASE) % Self::VRAM_SECOND_SIZE)
+                            + Self::VRAM_OFFSET_SECOND_BASE
+                    }
+                    _ => unreachable!(),
+                };
+                self.lcd.write_vram_byte(value, offset)
             }
-            Self::OAM_BASE..=Self::OAM_END => {
-                let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
-                self.lcd.write_oam(value, offset)
-            }
+            Self::OAM_BASE..=Self::OAM_END => {} // "byte writes to OAM are ignored, the memory content remains unchanged"
             0x04000008..=0x40001FF => {
                 // println!("stubbed write 0x{:02x} -> 0x{:08x}", value, address)
             }
@@ -1081,9 +1154,6 @@ impl Bus {
                 let actual_offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
                 self.game_pak_sram[actual_offset as usize] = value;
             }
-            Self::SERIAL_BASE..=Self::SERIAL_END => {
-                // println!("stubbed serial write {:02X} -> [{:08X}]", value, address);
-            }
             _ => todo!("0x{:02x} -> 0x{:08x}", value, address),
         }
     }
@@ -1092,60 +1162,25 @@ impl Bus {
         assert!(address & 0b1 == 0);
 
         match address {
-            Self::DMA_0_SOURCE_BASE..=Self::DMA_0_SOURCE_END => {
-                self.dma_infos[0].write_source_addr(value, address.get_bit_range(1..=1))
-            }
-            Self::DMA_0_DEST_BASE..=Self::DMA_0_DEST_END => {
-                self.dma_infos[0].write_dest_addr(value, address.get_bit_range(1..=1))
-            }
-            Self::DMA_0_WORD_COUNT_BASE..=Self::DMA_0_WORD_COUNT_END => {
-                self.dma_infos[0].write_word_count(value, 0)
-            }
-            Self::DMA_0_CONTROL_BASE..=Self::DMA_0_CONTROL_END => {
-                self.dma_infos[0].write_dma_control(value, 0)
-            }
+            Self::OAM_BASE..=Self::OAM_END => {
+                let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
 
-            Self::DMA_1_SOURCE_BASE..=Self::DMA_1_SOURCE_END => {
-                self.dma_infos[1].write_source_addr(value, address.get_bit_range(1..=1))
+                self.lcd.write_oam(value, offset);
             }
-            Self::DMA_1_DEST_BASE..=Self::DMA_1_DEST_END => {
-                self.dma_infos[1].write_dest_addr(value, address.get_bit_range(1..=1))
-            }
-            Self::DMA_1_WORD_COUNT_BASE..=Self::DMA_1_WORD_COUNT_END => {
-                self.dma_infos[1].write_word_count(value, 0)
-            }
-            Self::DMA_1_CONTROL_BASE..=Self::DMA_1_CONTROL_END => {
-                self.dma_infos[1].write_dma_control(value, 0)
-            }
-
-            Self::DMA_2_SOURCE_BASE..=Self::DMA_2_SOURCE_END => {
-                self.dma_infos[2].write_source_addr(value, address.get_bit_range(1..=1))
-            }
-            Self::DMA_2_DEST_BASE..=Self::DMA_2_DEST_END => {
-                self.dma_infos[2].write_dest_addr(value, address.get_bit_range(1..=1))
-            }
-            Self::DMA_2_WORD_COUNT_BASE..=Self::DMA_2_WORD_COUNT_END => {
-                self.dma_infos[2].write_word_count(value, 0)
-            }
-            Self::DMA_2_CONTROL_BASE..=Self::DMA_2_CONTROL_END => {
-                self.dma_infos[2].write_dma_control(value, 0)
-            }
-
-            Self::DMA_3_SOURCE_BASE..=Self::DMA_3_SOURCE_END => {
-                self.dma_infos[3].write_source_addr(value, address.get_bit_range(1..=1))
-            }
-            Self::DMA_3_DEST_BASE..=Self::DMA_3_DEST_END => {
-                self.dma_infos[3].write_dest_addr(value, address.get_bit_range(1..=1))
-            }
-            Self::DMA_3_WORD_COUNT_BASE..=Self::DMA_3_WORD_COUNT_END => {
-                self.dma_infos[3].write_word_count(value, 0)
-            }
-            Self::DMA_3_CONTROL_BASE..=Self::DMA_3_CONTROL_END => {
-                self.dma_infos[3].write_dma_control(value, 0)
+            Self::VRAM_BASE..=Self::VRAM_END => {
+                let vram_offset = (address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
+                let offset = match vram_offset {
+                    Self::VRAM_OFFSET_FIRST_BASE..=Self::VRAM_OFFSET_FIRST_END => vram_offset,
+                    Self::VRAM_OFFSET_SECOND_BASE..=Self::VRAM_OFFSET_SECOND_END => {
+                        ((vram_offset - Self::VRAM_OFFSET_SECOND_BASE) % Self::VRAM_SECOND_SIZE)
+                            + Self::VRAM_OFFSET_SECOND_BASE
+                    }
+                    _ => unreachable!(),
+                };
+                self.lcd.write_vram_hword(value, offset)
             }
             _ => {
-                let low_byte = value.get_data(0);
-                let high_byte = value.get_data(1);
+                let [low_byte, high_byte] = value.to_le_bytes();
 
                 self.write_byte_address(low_byte, address);
                 self.write_byte_address(high_byte, address + 1);

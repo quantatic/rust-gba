@@ -502,13 +502,13 @@ pub struct Lcd {
     window_in_control: u16,
     window_out_control: u16,
     state: LcdState,
-    bg_palette_ram: Box<[Rgb555; 0x100]>,
-    obj_palette_ram: Box<[Rgb555; 0x100]>,
-    vram: Box<[u8; 0x18000]>,
-    obj_attributes: Box<[ObjectAttributeInfo; 0x100]>,
-    obj_rotations: Box<[ObjectRotationScalingInfo; 0x40]>,
-    buffer: Box<[[Rgb555; LCD_WIDTH]; LCD_HEIGHT]>, // access as buffer[y][x]
-    back_buffer: Box<[[Rgb555; LCD_WIDTH]; LCD_HEIGHT]>,
+    bg_palette_ram: [Rgb555; 0x100],
+    obj_palette_ram: [Rgb555; 0x100],
+    vram: [u8; 0x18000],
+    obj_attributes: [ObjectAttributeInfo; 0x80],
+    obj_rotations: [ObjectRotationScalingInfo; 0x20],
+    buffer: [[Rgb555; LCD_WIDTH]; LCD_HEIGHT], // access as buffer[y][x]
+    back_buffer: [[Rgb555; LCD_WIDTH]; LCD_HEIGHT],
     layer_0: Layer0,
     layer_1: Layer1,
     layer_2: Layer2,
@@ -550,13 +550,13 @@ impl Default for Lcd {
             window_in_control: 0,
             window_out_control: 0,
             state: LcdState::Visible,
-            bg_palette_ram: Box::new([Rgb555::default(); 0x100]),
-            obj_palette_ram: Box::new([Rgb555::default(); 0x100]),
-            vram: Box::new([0; 0x18000]),
-            obj_attributes: Box::new([ObjectAttributeInfo::default(); 0x100]),
-            obj_rotations: Box::new([ObjectRotationScalingInfo::default(); 0x40]),
-            buffer: Box::new([[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT]),
-            back_buffer: Box::new([[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT]),
+            bg_palette_ram: [Rgb555::default(); 0x100],
+            obj_palette_ram: [Rgb555::default(); 0x100],
+            vram: [0; 0x18000],
+            obj_attributes: [ObjectAttributeInfo::default(); 0x80],
+            obj_rotations: [ObjectRotationScalingInfo::default(); 0x20],
+            buffer: [[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT],
+            back_buffer: [[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT],
             layer_0: Layer0::default(),
             layer_1: Layer1::default(),
             layer_2: Layer2::default(),
@@ -921,17 +921,8 @@ impl Lcd {
                 let center_offset_adjustment_x = sprite_width / 2;
                 let center_offset_adjustment_y = sprite_height / 2;
 
-                let base_corner_offset_x = if pixel_x < sprite_x {
-                    pixel_x + WORLD_WIDTH - sprite_x
-                } else {
-                    pixel_x - sprite_x
-                };
-
-                let base_corner_offset_y = if pixel_y < sprite_y {
-                    pixel_y + WORLD_HEIGHT - sprite_y
-                } else {
-                    pixel_y - sprite_y
-                };
+                let base_corner_offset_x = (pixel_x + WORLD_WIDTH - sprite_x) % WORLD_WIDTH;
+                let base_corner_offset_y = (pixel_y + WORLD_HEIGHT - sprite_y) % WORLD_HEIGHT;
 
                 if obj.get_double_size_flag() {
                     if base_corner_offset_x > (sprite_width * 2)
@@ -989,17 +980,8 @@ impl Lcd {
                     continue;
                 }
 
-                let mut base_corner_offset_x = if pixel_x < sprite_x {
-                    pixel_x + WORLD_WIDTH - sprite_x
-                } else {
-                    pixel_x - sprite_x
-                };
-
-                let mut base_corner_offset_y = if pixel_y < sprite_y {
-                    pixel_y + WORLD_HEIGHT - sprite_y
-                } else {
-                    pixel_y - sprite_y
-                };
+                let mut base_corner_offset_x = (pixel_x + WORLD_WIDTH - sprite_x) % WORLD_WIDTH;
+                let mut base_corner_offset_y = (pixel_y + WORLD_HEIGHT - sprite_y) % WORLD_HEIGHT;
 
                 if obj.get_obj_mosaic() {
                     base_corner_offset_x -= base_corner_offset_x % obj_mosaic_horizontal;
@@ -1437,8 +1419,16 @@ impl Lcd {
         self.vram[offset as usize]
     }
 
-    pub fn write_vram(&mut self, value: u8, offset: u32) {
-        self.vram[offset as usize] = value;
+    pub fn write_vram_byte(&mut self, value: u8, offset: u32) {
+        // self.vram[offset as usize] = value;
+        todo!();
+    }
+
+    pub fn write_vram_hword(&mut self, value: u16, offset: u32) {
+        let [low_byte, high_byte] = value.to_le_bytes();
+
+        self.vram[offset as usize] = low_byte;
+        self.vram[(offset + 1) as usize] = high_byte;
     }
 
     pub fn read_oam(&self, offset: u32) -> u8 {
@@ -1450,25 +1440,34 @@ impl Lcd {
         let rotation_group_index = (hword_offset / 16) as usize;
         let rotation_group_offset = (hword_offset / 4) % 4;
 
-        let hword_result = match oam_offset {
-            0 => self.obj_attributes[oam_index].read_attribute_0(0),
-            1 => self.obj_attributes[oam_index].read_attribute_1(0),
-            2 => self.obj_attributes[oam_index].read_attribute_2(0),
+        let hword_index = offset % 2;
+
+        match oam_offset {
+            0 => self.obj_attributes[oam_index].read_attribute_0(hword_index),
+            1 => self.obj_attributes[oam_index].read_attribute_1(hword_index),
+            2 => self.obj_attributes[oam_index].read_attribute_2(hword_index),
             3 => match rotation_group_offset {
-                0 => self.obj_rotations[rotation_group_index].a,
-                1 => self.obj_rotations[rotation_group_index].b,
-                2 => self.obj_rotations[rotation_group_index].c,
-                3 => self.obj_rotations[rotation_group_index].d,
+                0 => self.obj_rotations[rotation_group_index]
+                    .a
+                    .get_data(hword_index),
+                1 => self.obj_rotations[rotation_group_index]
+                    .b
+                    .get_data(hword_index),
+                2 => self.obj_rotations[rotation_group_index]
+                    .c
+                    .get_data(hword_index),
+                3 => self.obj_rotations[rotation_group_index]
+                    .d
+                    .get_data(hword_index),
                 _ => unreachable!(),
             },
             _ => unreachable!(),
-        };
-
-        let hword_index = offset % 2;
-        hword_result.get_data(hword_index)
+        }
     }
 
-    pub fn write_oam(&mut self, value: u8, offset: u32) {
+    pub fn write_oam(&mut self, value: u16, offset: u32) {
+        assert!(offset & 0b1 == 0);
+
         let hword_offset = offset / 2;
 
         let oam_index = (hword_offset / 4) as usize;
@@ -1477,42 +1476,40 @@ impl Lcd {
         let rotation_group_index = (hword_offset / 16) as usize;
         let rotation_group_offset = (hword_offset / 4) % 4;
 
-        let hword_index = offset % 2;
-
         match oam_offset {
             0 => {
-                self.obj_attributes[oam_index].write_attribute_0(value, hword_index);
+                self.obj_attributes[oam_index].write_attribute_0(value, 0);
             }
             1 => {
-                self.obj_attributes[oam_index].write_attribute_1(value, hword_index);
+                self.obj_attributes[oam_index].write_attribute_1(value, 0);
             }
             2 => {
-                self.obj_attributes[oam_index].write_attribute_2(value, hword_index);
+                self.obj_attributes[oam_index].write_attribute_2(value, 0);
             }
             3 => match rotation_group_offset {
                 0 => {
                     self.obj_rotations[rotation_group_index].a = self.obj_rotations
                         [rotation_group_index]
                         .a
-                        .set_data(value, hword_index)
+                        .set_data(value, 0)
                 }
                 1 => {
                     self.obj_rotations[rotation_group_index].b = self.obj_rotations
                         [rotation_group_index]
                         .b
-                        .set_data(value, hword_index)
+                        .set_data(value, 0)
                 }
                 2 => {
                     self.obj_rotations[rotation_group_index].c = self.obj_rotations
                         [rotation_group_index]
                         .c
-                        .set_data(value, hword_index)
+                        .set_data(value, 0)
                 }
                 3 => {
                     self.obj_rotations[rotation_group_index].d = self.obj_rotations
                         [rotation_group_index]
                         .d
-                        .set_data(value, hword_index)
+                        .set_data(value, 0)
                 }
                 _ => unreachable!(),
             },

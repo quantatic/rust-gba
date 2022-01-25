@@ -85,7 +85,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 pixels.render().expect("failed to render new frame");
 
                 let time_elapsed = last_step.elapsed();
-                window.set_title(format!("last frame took {:?}", time_elapsed).as_str());
+                let fps = 1.0 / time_elapsed.as_secs_f64();
+                window.set_title(format!("FPS: {}", fps).as_str());
 
                 last_step = Instant::now();
             }
