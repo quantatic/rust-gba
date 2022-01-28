@@ -41,12 +41,12 @@ impl Timer {
         self.tick += 1;
 
         if increment {
-            let overflow = self.counter == u16::MAX;
+            let (new_counter, overflow) = self.counter.overflowing_add(1);
 
             if overflow {
                 self.counter = self.reload;
             } else {
-                self.counter += 1;
+                self.counter = new_counter;
             }
 
             overflow

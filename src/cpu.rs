@@ -665,35 +665,39 @@ impl Cpu {
 
 impl Cpu {
     fn evaluate_instruction_condition(&self, condition: InstructionCondition) -> bool {
-        match condition {
-            InstructionCondition::Equal => self.get_zero_flag(),
-            InstructionCondition::NotEqual => !self.get_zero_flag(),
-            InstructionCondition::UnsignedHigherOrSame => self.get_carry_flag(),
-            InstructionCondition::UnsignedLower => !self.get_carry_flag(),
-            InstructionCondition::SignedNegative => self.get_sign_flag(),
-            InstructionCondition::SignedPositiveOrZero => !self.get_sign_flag(),
-            InstructionCondition::SignedOverflow => self.get_overflow_flag(),
-            InstructionCondition::SignedNoOverflow => !self.get_overflow_flag(),
-            InstructionCondition::UnsignedHigher => {
-                self.get_carry_flag() && (!self.get_zero_flag())
+        if matches!(condition, InstructionCondition::Always) {
+            true
+        } else {
+            match condition {
+                InstructionCondition::Equal => self.get_zero_flag(),
+                InstructionCondition::NotEqual => !self.get_zero_flag(),
+                InstructionCondition::UnsignedHigherOrSame => self.get_carry_flag(),
+                InstructionCondition::UnsignedLower => !self.get_carry_flag(),
+                InstructionCondition::SignedNegative => self.get_sign_flag(),
+                InstructionCondition::SignedPositiveOrZero => !self.get_sign_flag(),
+                InstructionCondition::SignedOverflow => self.get_overflow_flag(),
+                InstructionCondition::SignedNoOverflow => !self.get_overflow_flag(),
+                InstructionCondition::UnsignedHigher => {
+                    self.get_carry_flag() && (!self.get_zero_flag())
+                }
+                InstructionCondition::UnsignedLowerOrSame => {
+                    (!self.get_carry_flag()) || self.get_zero_flag()
+                }
+                InstructionCondition::SignedGreaterOrEqual => {
+                    self.get_sign_flag() == self.get_overflow_flag()
+                }
+                InstructionCondition::SignedLessThan => {
+                    self.get_sign_flag() != self.get_overflow_flag()
+                }
+                InstructionCondition::SignedGreaterThan => {
+                    (!self.get_zero_flag()) && (self.get_sign_flag() == self.get_overflow_flag())
+                }
+                InstructionCondition::SignedLessOrEqual => {
+                    self.get_zero_flag() || (self.get_sign_flag() != self.get_overflow_flag())
+                }
+                InstructionCondition::Never => false,
+                InstructionCondition::Always => unreachable!(),
             }
-            InstructionCondition::UnsignedLowerOrSame => {
-                (!self.get_carry_flag()) || self.get_zero_flag()
-            }
-            InstructionCondition::SignedGreaterOrEqual => {
-                self.get_sign_flag() == self.get_overflow_flag()
-            }
-            InstructionCondition::SignedLessThan => {
-                self.get_sign_flag() != self.get_overflow_flag()
-            }
-            InstructionCondition::SignedGreaterThan => {
-                (!self.get_zero_flag()) && (self.get_sign_flag() == self.get_overflow_flag())
-            }
-            InstructionCondition::SignedLessOrEqual => {
-                self.get_zero_flag() || (self.get_sign_flag() != self.get_overflow_flag())
-            }
-            InstructionCondition::Always => true,
-            InstructionCondition::Never => false,
         }
     }
 }

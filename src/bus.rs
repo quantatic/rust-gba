@@ -9,7 +9,7 @@ use crate::BitManipulation;
 use crate::DataAccess;
 
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
-const ROM: &[u8] = include_bytes!("../memory.gba");
+const ROM: &[u8] = include_bytes!("../fire_red.gba");
 
 #[derive(Debug)]
 pub struct Bus {
@@ -270,7 +270,7 @@ impl Bus {
         if self.cycle_count % 4 == 0 {
             let state_changes = self.lcd.step();
 
-            self.step_dma(state_changes);
+            self.step_dma(Some(state_changes));
 
             if state_changes.vblank_entered && self.lcd.get_vblank_irq_enable() {
                 self.request_interrupt(InterruptType::VBlank);
@@ -283,6 +283,8 @@ impl Bus {
             if state_changes.vcount_matched && self.lcd.get_vcount_irq_enable() {
                 self.request_interrupt(InterruptType::VCount);
             }
+        } else {
+            self.step_dma(None);
         }
 
         self.cycle_count += 1;
@@ -881,14 +883,6 @@ impl Bus {
             Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
                 let actual_offset = (address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
                 self.chip_wram[actual_offset as usize] = value;
-                if (0x7FFC..=0x7FFF).contains(&actual_offset) {
-                    println!(
-                        "interrupt write {:02X} -> {:08X}, interrupt value now {:08X}",
-                        value,
-                        address,
-                        self.read_word_address(0x03FFFFFC)
-                    );
-                }
             }
             Self::LCD_CONTROL_BASE..=Self::LCD_CONTROL_END => {
                 self.lcd.write_lcd_control(value, address & 0b1)
@@ -1282,15 +1276,19 @@ impl Bus {
             .get_bit(INTERRUPT_MASTER_ENABLE_BIT_INDEX)
     }
 
-    fn step_dma(&mut self, state_changes: LcdStateChangeInfo) {
+    fn step_dma(&mut self, state_changes: Option<LcdStateChangeInfo>) {
         for dma_idx in 0..self.dma_infos.len() {
             let original_dma_info = self.dma_infos[dma_idx];
 
             let dma_triggered = if original_dma_info.get_dma_enable() {
                 match original_dma_info.get_dma_start_timing() {
                     DmaStartTiming::Immediately => false,
-                    DmaStartTiming::VBlank => state_changes.vblank_entered,
-                    DmaStartTiming::HBlank => state_changes.hblank_entered,
+                    DmaStartTiming::VBlank => {
+                        state_changes.map(|s| s.vblank_entered).unwrap_or(false)
+                    }
+                    DmaStartTiming::HBlank => {
+                        state_changes.map(|s| s.hblank_entered).unwrap_or(false)
+                    }
                     DmaStartTiming::Special => false,
                 }
             } else {
@@ -1303,6 +1301,12 @@ impl Bus {
             }
 
             if original_dma_info.get_dma_ongoing() {
+                // println!("{:?}", original_dma_info.get_dma_start_timing());
+                // println!("performing dma transfer");
+                // println!("{:#08X?}", original_dma_info);
+                // println!("dma idx: {}", dma_idx);
+                // println!("---------------");
+
                 let mut dma_source = original_dma_info.source_addr;
                 let mut dma_dest = original_dma_info.dest_addr;
                 let original_dest = dma_dest;
@@ -1318,10 +1322,12 @@ impl Bus {
                         DmaTransferType::Bit16 => {
                             let source_data = self.read_halfword_address(dma_source);
                             self.write_halfword_address(source_data, dma_dest);
+                            // println!("u16 {:04X} -> [{:08X}]", source_data, dma_dest)
                         }
                         DmaTransferType::Bit32 => {
                             let source_data = self.read_word_address(dma_source);
                             self.write_word_address(source_data, dma_dest);
+                            // println!("u32 {:08X} -> [{:08X}]", source_data, dma_dest)
                         }
                     }
 
@@ -1375,29 +1381,28 @@ impl Bus {
 
     fn step_timers(&mut self) {
         let mut timer_overflow = false;
-        let mut interrupt_requests = Vec::new();
+        let mut interrupt_requests = [false; 4];
+
         for (i, timer) in self.timers.iter_mut().enumerate() {
             timer_overflow = timer.step(timer_overflow);
 
             if timer_overflow && timer.get_timer_irq_enable() {
-                interrupt_requests.push(i);
+                interrupt_requests[i] = true;
             }
         }
 
-        if !interrupt_requests.is_empty() {
-            println!("timer interrupt requests: {:?}", interrupt_requests);
-        }
+        for (i, requested) in interrupt_requests.into_iter().enumerate() {
+            if requested {
+                let interrupt_type = match i {
+                    0 => InterruptType::Timer0,
+                    1 => InterruptType::Timer1,
+                    2 => InterruptType::Timer2,
+                    3 => InterruptType::Timer3,
+                    _ => unreachable!(),
+                };
 
-        for i in interrupt_requests {
-            let interrupt_type = match i {
-                0 => InterruptType::Timer0,
-                1 => InterruptType::Timer1,
-                2 => InterruptType::Timer2,
-                3 => InterruptType::Timer3,
-                _ => unreachable!(),
-            };
-
-            self.request_interrupt(interrupt_type);
+                self.request_interrupt(interrupt_type);
+            }
         }
     }
 

@@ -202,7 +202,6 @@ impl Rgb555 {
     }
 }
 
-// any change to any of these attributes must update "tile_dims_cache" if the value would change.
 #[derive(Clone, Copy, Debug, Default)]
 struct ObjectAttributeInfo {
     attribute_0: u16,
@@ -242,26 +241,7 @@ impl ObjectAttributeInfo {
         u16: DataAccess<T>,
     {
         self.attribute_0 = self.attribute_0.set_data(value, index);
-
-        let obj_size_index = self.attribute_1.get_bit_range(Self::OBJ_SIZE_BIT_RANGE);
-
-        let (tile_width, tile_height) = match (obj_size_index, self.get_obj_shape()) {
-            (0, ObjectShape::Square) => (1, 1),
-            (1, ObjectShape::Square) => (2, 2),
-            (2, ObjectShape::Square) => (4, 4),
-            (3, ObjectShape::Square) => (8, 8),
-            (0, ObjectShape::Horizontal) => (2, 1),
-            (1, ObjectShape::Horizontal) => (4, 1),
-            (2, ObjectShape::Horizontal) => (4, 2),
-            (3, ObjectShape::Horizontal) => (8, 4),
-            (0, ObjectShape::Vertical) => (1, 2),
-            (1, ObjectShape::Vertical) => (1, 4),
-            (2, ObjectShape::Vertical) => (2, 4),
-            (3, ObjectShape::Vertical) => (4, 8),
-            _ => unreachable!(),
-        };
-
-        self.tile_dims_cache = (tile_width, tile_height);
+        self.update_cache();
     }
 }
 
@@ -283,26 +263,7 @@ impl ObjectAttributeInfo {
         u16: DataAccess<T>,
     {
         self.attribute_1 = self.attribute_1.set_data(value, index);
-
-        let obj_size_index = self.attribute_1.get_bit_range(Self::OBJ_SIZE_BIT_RANGE);
-
-        let (tile_width, tile_height) = match (obj_size_index, self.get_obj_shape()) {
-            (0, ObjectShape::Square) => (1, 1),
-            (1, ObjectShape::Square) => (2, 2),
-            (2, ObjectShape::Square) => (4, 4),
-            (3, ObjectShape::Square) => (8, 8),
-            (0, ObjectShape::Horizontal) => (2, 1),
-            (1, ObjectShape::Horizontal) => (4, 1),
-            (2, ObjectShape::Horizontal) => (4, 2),
-            (3, ObjectShape::Horizontal) => (8, 4),
-            (0, ObjectShape::Vertical) => (1, 2),
-            (1, ObjectShape::Vertical) => (1, 4),
-            (2, ObjectShape::Vertical) => (2, 4),
-            (3, ObjectShape::Vertical) => (4, 8),
-            _ => unreachable!(),
-        };
-
-        self.tile_dims_cache = (tile_width, tile_height);
+        self.update_cache();
     }
 }
 
@@ -324,6 +285,7 @@ impl ObjectAttributeInfo {
         u16: DataAccess<T>,
     {
         self.attribute_2 = self.attribute_2.set_data(value, index);
+        self.update_cache();
     }
 }
 
@@ -412,6 +374,31 @@ impl ObjectAttributeInfo {
 
     fn get_obj_tile_dims(&self) -> (u16, u16) {
         self.tile_dims_cache
+    }
+}
+
+impl ObjectAttributeInfo {
+    // This MUST be called whenever any attribute values are updated.
+    fn update_cache(&mut self) {
+        let obj_size_index = self.attribute_1.get_bit_range(Self::OBJ_SIZE_BIT_RANGE);
+
+        let (tile_width, tile_height) = match (obj_size_index, self.get_obj_shape()) {
+            (0, ObjectShape::Square) => (1, 1),
+            (1, ObjectShape::Square) => (2, 2),
+            (2, ObjectShape::Square) => (4, 4),
+            (3, ObjectShape::Square) => (8, 8),
+            (0, ObjectShape::Horizontal) => (2, 1),
+            (1, ObjectShape::Horizontal) => (4, 1),
+            (2, ObjectShape::Horizontal) => (4, 2),
+            (3, ObjectShape::Horizontal) => (8, 4),
+            (0, ObjectShape::Vertical) => (1, 2),
+            (1, ObjectShape::Vertical) => (1, 4),
+            (2, ObjectShape::Vertical) => (2, 4),
+            (3, ObjectShape::Vertical) => (4, 8),
+            _ => unreachable!(),
+        };
+
+        self.tile_dims_cache = (tile_width, tile_height);
     }
 }
 
@@ -857,6 +844,7 @@ impl Lcd {
         const WORLD_HEIGHT: u16 = 256;
 
         let mut sprite_pixel_info = None;
+
         let mut obj_window = false;
 
         for obj in self.obj_attributes.iter() {
@@ -868,6 +856,21 @@ impl Lcd {
             let sprite_y = obj.get_y_coordinate();
 
             let (sprite_offset_x, sprite_offset_y) = if obj.get_rotation_scaling_flag() {
+                let base_corner_offset_x = (pixel_x + WORLD_WIDTH - sprite_x) % WORLD_WIDTH;
+                let base_corner_offset_y = (pixel_y + WORLD_HEIGHT - sprite_y) % WORLD_HEIGHT;
+
+                if obj.get_double_size_flag() {
+                    if base_corner_offset_x > (sprite_width * 2)
+                        || base_corner_offset_y > (sprite_height * 2)
+                    {
+                        continue;
+                    }
+                } else if base_corner_offset_x > sprite_width
+                    || base_corner_offset_y > sprite_height
+                {
+                    continue;
+                }
+
                 let rotation_info_idx = obj.get_rotation_scaling_index();
                 let rotation_info = self.obj_rotations[usize::from(rotation_info_idx)];
 
@@ -878,21 +881,6 @@ impl Lcd {
 
                 let center_offset_adjustment_x = sprite_width / 2;
                 let center_offset_adjustment_y = sprite_height / 2;
-
-                let base_corner_offset_x = (pixel_x + WORLD_WIDTH - sprite_x) % WORLD_WIDTH;
-                let base_corner_offset_y = (pixel_y + WORLD_HEIGHT - sprite_y) % WORLD_HEIGHT;
-
-                if obj.get_double_size_flag() {
-                    if base_corner_offset_x > (sprite_width * 2)
-                        || base_corner_offset_y > (sprite_height * 2)
-                    {
-                        continue;
-                    }
-                } else {
-                    if base_corner_offset_x > sprite_width || base_corner_offset_y > sprite_height {
-                        continue;
-                    }
-                }
 
                 // In a double-sized sprite, where each square represents the size of an original sprite,
                 //   we use "X" as the central reference point when performing transformations. We don't
@@ -941,16 +929,16 @@ impl Lcd {
                 let mut base_corner_offset_x = (pixel_x + WORLD_WIDTH - sprite_x) % WORLD_WIDTH;
                 let mut base_corner_offset_y = (pixel_y + WORLD_HEIGHT - sprite_y) % WORLD_HEIGHT;
 
+                if base_corner_offset_x >= sprite_width || base_corner_offset_y >= sprite_height {
+                    continue;
+                }
+
                 if obj.get_obj_mosaic() {
                     base_corner_offset_x -= base_corner_offset_x % obj_mosaic_horizontal;
                     base_corner_offset_y -= base_corner_offset_y % obj_mosaic_vertical;
                 }
                 let base_corner_offset_x = base_corner_offset_x;
                 let base_corner_offset_y = base_corner_offset_y;
-
-                if base_corner_offset_x >= sprite_width || base_corner_offset_y >= sprite_height {
-                    continue;
-                }
 
                 let offset_x = if obj.get_horizontal_flip() {
                     sprite_width - 1 - base_corner_offset_x
@@ -970,8 +958,6 @@ impl Lcd {
             assert!(sprite_offset_x < sprite_width);
             assert!(sprite_offset_y < sprite_height);
 
-            let palette_depth = obj.get_palette_depth();
-
             let sprite_tile_x = sprite_offset_x / 8;
             let sprite_tile_y = sprite_offset_y / 8;
 
@@ -980,25 +966,20 @@ impl Lcd {
 
             let base_tile_number = obj.get_tile_number();
 
-            let tile_number = match (self.get_obj_tile_mapping(), palette_depth) {
-                (ObjectTileMapping::OneDimensional, PaletteDepth::FourBit) => {
+            let four_bit_tile_number = match self.get_obj_tile_mapping() {
+                ObjectTileMapping::OneDimensional => {
                     base_tile_number + (sprite_tile_y * sprite_tile_width) + sprite_tile_x
                 }
-                (ObjectTileMapping::OneDimensional, PaletteDepth::EightBit) => {
-                    base_tile_number + (sprite_tile_y * sprite_tile_width) + (sprite_tile_x * 2)
-                }
-                (ObjectTileMapping::TwoDimensional, PaletteDepth::FourBit) => {
+                ObjectTileMapping::TwoDimensional => {
                     base_tile_number + (sprite_tile_y * 32) + sprite_tile_x
                 }
-                (ObjectTileMapping::TwoDimensional, PaletteDepth::EightBit) => {
-                    base_tile_number + (sprite_tile_y * 32) + (sprite_tile_x * 2)
-                }
             };
+            let eight_bit_tile_number = four_bit_tile_number + sprite_tile_x;
 
             let palette_idx = match obj.get_palette_depth() {
                 PaletteDepth::EightBit => {
                     let tile_idx = OBJ_TILE_DATA_VRAM_BASE
-                        + (usize::from(tile_number) * 32)
+                        + (usize::from(eight_bit_tile_number) * 32)
                         + (usize::from(tile_offset_y) * 8)
                         + usize::from(tile_offset_x);
 
@@ -1012,7 +993,7 @@ impl Lcd {
                 }
                 PaletteDepth::FourBit => {
                     let tile_idx = OBJ_TILE_DATA_VRAM_BASE
-                        + (usize::from(tile_number) * 32)
+                        + (usize::from(four_bit_tile_number) * 32)
                         + (usize::from(tile_offset_y) * 4)
                         + (usize::from(tile_offset_x) / 2);
 
