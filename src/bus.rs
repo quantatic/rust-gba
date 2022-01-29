@@ -2,6 +2,7 @@ use std::fmt::{Debug, UpperHex};
 use std::ops::RangeInclusive;
 
 use crate::apu::Apu;
+use crate::cartridge::Cartridge;
 use crate::keypad::Keypad;
 use crate::lcd::{Lcd, LcdStateChangeInfo};
 use crate::timer::Timer;
@@ -9,13 +10,10 @@ use crate::BitManipulation;
 use crate::DataAccess;
 
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
-const ROM: &[u8] = include_bytes!("../fire_red.gba");
 
-#[derive(Debug)]
 pub struct Bus {
     chip_wram: [u8; 0x8000],
     board_wram: [u8; 0x40000],
-    game_pak_sram: [u8; 0x10000],
     cycle_count: usize,
     interrupt_master_enable: u16,
     interrupt_enable: u16,
@@ -25,14 +23,14 @@ pub struct Bus {
     pub lcd: Lcd,
     pub apu: Apu,
     pub keypad: Keypad,
+    pub cartridge: Cartridge,
 }
 
-impl Default for Bus {
-    fn default() -> Self {
+impl Bus {
+    pub fn new(cartridge: Cartridge) -> Self {
         Self {
             chip_wram: [0; 0x8000],
             board_wram: [0; 0x40000],
-            game_pak_sram: [0; 0x10000],
             cycle_count: 0,
             interrupt_master_enable: 0,
             interrupt_enable: 0,
@@ -52,6 +50,7 @@ impl Default for Bus {
             lcd: Lcd::default(),
             apu: Apu::default(),
             keypad: Keypad::default(),
+            cartridge,
         }
     }
 }
@@ -555,8 +554,7 @@ impl Bus {
     const WAIT_STATE_3_ROM_END: u32 = 0x0DFFFFFF;
 
     const GAME_PAK_SRAM_BASE: u32 = 0x0E000000;
-    const GAME_PAK_SRAM_END: u32 = 0x0E00FFFF;
-    const GAME_PAK_SRAM_SIZE: u32 = 0x10000;
+    const GAME_PAK_SRAM_END: u32 = 0x0FFFFFFF;
 
     const MEMORY_SIZE: u32 = 0x10000000;
 
@@ -834,20 +832,18 @@ impl Bus {
                 let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
                 self.lcd.read_oam(offset)
             }
-            Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
-                self.read_gamepak(address - Self::WAIT_STATE_1_ROM_BASE)
-            }
-            Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
-                self.read_gamepak(address - Self::WAIT_STATE_2_ROM_BASE)
-            }
-            Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => {
-                self.read_gamepak(address - Self::WAIT_STATE_3_ROM_BASE)
-            }
-            0x0400020a..=0x0400020b => 0,
-            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
-                let actual_offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
-                self.game_pak_sram[actual_offset as usize]
-            }
+            Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => self
+                .cartridge
+                .read_rom_byte(address - Self::WAIT_STATE_1_ROM_BASE),
+            Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => self
+                .cartridge
+                .read_rom_byte(address - Self::WAIT_STATE_2_ROM_BASE),
+            Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => self
+                .cartridge
+                .read_rom_byte(address - Self::WAIT_STATE_3_ROM_BASE),
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => self
+                .cartridge
+                .read_sram_byte(address - Self::GAME_PAK_SRAM_BASE),
             Self::SERIAL_BASE..=Self::SERIAL_END => {
                 // println!("read from stubbed serial {:08X}", address);
                 0
@@ -856,21 +852,58 @@ impl Bus {
         }
     }
 
-    pub fn read_halfword_address(&self, address: u32) -> u16 {
+    pub fn read_halfword_address(&mut self, address: u32) -> u16 {
         assert!(address & 0b1 == 0);
 
-        let low_byte = self.read_byte_address(address);
-        let high_byte = self.read_byte_address(address + 1);
+        match address {
+            Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => self
+                .cartridge
+                .read_rom_hword(address - Self::WAIT_STATE_1_ROM_BASE),
+            Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => self
+                .cartridge
+                .read_rom_hword(address - Self::WAIT_STATE_2_ROM_BASE),
+            Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => self
+                .cartridge
+                .read_rom_hword(address - Self::WAIT_STATE_3_ROM_BASE),
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => self
+                .cartridge
+                .read_sram_hword(address - Self::GAME_PAK_SRAM_BASE),
+            _ => {
+                let low_byte = self.read_byte_address(address);
+                let high_byte = self.read_byte_address(address + 1);
 
-        u16::from_le_bytes([low_byte, high_byte])
+                u16::from_le_bytes([low_byte, high_byte])
+            }
+        }
     }
 
     pub fn read_word_address(&self, address: u32) -> u32 {
         assert!(address & 0b11 == 0);
 
-        let low_halfword = self.read_halfword_address(address);
-        let high_halfword = self.read_halfword_address(address + 2);
-        u32::from(low_halfword) | (u32::from(high_halfword) << 16)
+        match address {
+            Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => self
+                .cartridge
+                .read_rom_word(address - Self::WAIT_STATE_1_ROM_BASE),
+            Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => self
+                .cartridge
+                .read_rom_word(address - Self::WAIT_STATE_2_ROM_BASE),
+            Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => self
+                .cartridge
+                .read_rom_word(address - Self::WAIT_STATE_3_ROM_BASE),
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => self
+                .cartridge
+                .read_sram_word(address - Self::GAME_PAK_SRAM_BASE),
+            _ => {
+                let le_bytes = [
+                    self.read_byte_address(address),
+                    self.read_byte_address(address + 1),
+                    self.read_byte_address(address + 2),
+                    self.read_byte_address(address + 3),
+                ];
+
+                u32::from_le_bytes(le_bytes)
+            }
+        }
     }
 
     pub fn write_byte_address(&mut self, value: u8, address: u32) {
@@ -1132,24 +1165,27 @@ impl Bus {
             0x04000008..=0x40001FF => {
                 // println!("stubbed write 0x{:02x} -> 0x{:08x}", value, address)
             }
-            0x04000206..=0x04000207 | 0x0400020A..=0x040002FF | 0x04000410..=0x04000411 => {
+            0x04000206..=0x04000207 | 0x0400020A..=0x040002FF => {
                 // println!(
                 //     "ignoring unused byte write of 0x{:02x} to 0x{:08x}",
                 //     value, address
                 // )
             }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
-                println!("ignoring write of {:02X} to wait state 1 rom", value);
+                self.cartridge
+                    .write_rom_byte(value, address - Self::WAIT_STATE_1_ROM_BASE);
             }
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
-                println!("ignoring write of {:02X} to wait state 2 rom", value);
+                self.cartridge
+                    .write_rom_byte(value, address - Self::WAIT_STATE_2_ROM_BASE);
             }
             Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => {
-                println!("ignoring write of {:02X} to wait state 3 rom", value);
+                self.cartridge
+                    .write_rom_byte(value, address - Self::WAIT_STATE_3_ROM_BASE);
             }
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
-                let actual_offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
-                self.game_pak_sram[actual_offset as usize] = value;
+                self.cartridge
+                    .write_sram_byte(value, address - Self::GAME_PAK_SRAM_BASE);
             }
             _ => todo!("0x{:02x} -> 0x{:08x}", value, address),
         }
@@ -1180,6 +1216,22 @@ impl Bus {
                 };
                 self.lcd.write_vram_hword(value, offset)
             }
+            Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
+                self.cartridge
+                    .write_rom_hword(value, address - Self::WAIT_STATE_1_ROM_BASE);
+            }
+            Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
+                self.cartridge
+                    .write_rom_hword(value, address - Self::WAIT_STATE_2_ROM_BASE);
+            }
+            Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => {
+                self.cartridge
+                    .write_rom_hword(value, address - Self::WAIT_STATE_3_ROM_BASE);
+            }
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
+                self.cartridge
+                    .write_sram_hword(value, address - Self::GAME_PAK_SRAM_BASE);
+            }
             _ => {
                 let [low_byte, high_byte] = value.to_le_bytes();
 
@@ -1192,11 +1244,52 @@ impl Bus {
     pub fn write_word_address(&mut self, value: u32, address: u32) {
         assert!(address & 0b11 == 0);
 
-        let low_halfword = value as u16;
-        let high_halfword = (value >> 16) as u16;
+        match address {
+            Self::OAM_BASE..=Self::OAM_END => {
+                let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
 
-        self.write_halfword_address(low_halfword, address);
-        self.write_halfword_address(high_halfword, address + 2);
+                self.lcd.write_oam_word(value, offset);
+            }
+            Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
+                let offset = (address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
+                self.lcd.write_palette_ram_word(value, offset)
+            }
+            Self::VRAM_BASE..=Self::VRAM_END => {
+                let vram_offset = (address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
+                let offset = match vram_offset {
+                    Self::VRAM_OFFSET_FIRST_BASE..=Self::VRAM_OFFSET_FIRST_END => vram_offset,
+                    Self::VRAM_OFFSET_SECOND_BASE..=Self::VRAM_OFFSET_SECOND_END => {
+                        ((vram_offset - Self::VRAM_OFFSET_SECOND_BASE) % Self::VRAM_SECOND_SIZE)
+                            + Self::VRAM_OFFSET_SECOND_BASE
+                    }
+                    _ => unreachable!(),
+                };
+                self.lcd.write_vram_word(value, offset)
+            }
+            Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
+                self.cartridge
+                    .write_rom_word(value, address - Self::WAIT_STATE_1_ROM_BASE);
+            }
+            Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
+                self.cartridge
+                    .write_rom_word(value, address - Self::WAIT_STATE_2_ROM_BASE);
+            }
+            Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => {
+                self.cartridge
+                    .write_rom_word(value, address - Self::WAIT_STATE_3_ROM_BASE);
+            }
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
+                self.cartridge
+                    .write_sram_word(value, address - Self::GAME_PAK_SRAM_BASE);
+            }
+            _ => {
+                for (offset, byte) in value.to_le_bytes().into_iter().enumerate() {
+                    let offset = offset as u32;
+
+                    self.write_byte_address(byte, address + offset);
+                }
+            }
+        }
     }
 }
 
@@ -1244,15 +1337,6 @@ impl Bus {
 
         // any bits which are high in the acknowledge write clear the corresponding IRQ waiting bit.
         self.interrupt_request &= !written_value;
-    }
-
-    fn read_gamepak(&self, offset: u32) -> u8 {
-        let offset = offset as usize;
-        if offset < ROM.len() {
-            ROM[offset]
-        } else {
-            0
-        }
     }
 }
 

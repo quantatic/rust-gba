@@ -1,14 +1,20 @@
 mod apu;
 mod bit_manipulation;
 mod bus;
+mod cartridge;
 mod cpu;
 mod data_access;
 mod keypad;
 mod lcd;
 mod timer;
 
-use std::{error::Error, time::Instant};
+use std::{error::Error, hash::Hasher, time::Instant};
 
+use cpu::Cpu;
+use fasthash::{
+    xx::{Hasher32, Hasher64},
+    FastHasher,
+};
 use pixels::{wgpu::TextureFormat, PixelsBuilder, SurfaceTexture};
 use winit::{
     event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
@@ -27,6 +33,8 @@ compile_error!("architecture with pointer size >= 32 required");
 const DEBUG_AND_PANIC_ON_LOOP: bool = false;
 
 const CYCLES_PER_SECOND: u64 = 16_777_216;
+
+const ROM: &[u8] = include_bytes!("../bld_demo.gba");
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("{}", std::mem::size_of::<cpu::Cpu>());
@@ -49,7 +57,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build()?
     };
 
-    let mut cpu = cpu::Cpu::default();
+    let cartridge = cartridge::Cartridge::new(ROM);
+    let mut cpu = cpu::Cpu::new(cartridge);
 
     // for _ in 0..74_000_000 {
     //     cpu.fetch_decode_execute(false);
@@ -129,6 +138,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     VirtualKeyCode::Right => cpu.bus.keypad.set_pressed(Key::Right, pressed),
                     VirtualKeyCode::Q => cpu.bus.keypad.set_pressed(Key::L, pressed),
                     VirtualKeyCode::E => cpu.bus.keypad.set_pressed(Key::R, pressed),
+                    VirtualKeyCode::Space if pressed => {
+                        println!("current checksum: {:016X}", calculate_lcd_checksum(&cpu));
+                    }
                     _ => {}
                 }
             }
@@ -140,4 +152,65 @@ fn main() -> Result<(), Box<dyn Error>> {
             _ => {}
         };
     });
+}
+
+fn calculate_lcd_checksum(cpu: &Cpu) -> u64 {
+    let mut hasher = Hasher64::new();
+
+    for pixel in cpu.bus.lcd.get_buffer().iter().flatten() {
+        hasher.write_u8(pixel.red);
+        hasher.write_u8(pixel.green);
+        hasher.write_u8(pixel.blue);
+    }
+
+    hasher.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cartridge::Cartridge;
+    use super::cpu::Cpu;
+
+    use super::*;
+
+    fn test_rom_ppu_checksum_matches(rom: &[u8], checksum: u64) {
+        let cartridge = Cartridge::new(rom);
+        let mut cpu = Cpu::new(cartridge);
+
+        for _ in 0..100_000_000 {
+            cpu.fetch_decode_execute(false);
+        }
+
+        assert_eq!(calculate_lcd_checksum(&cpu), checksum);
+    }
+
+    #[test]
+    fn test_eeprom_integration() {
+        test_rom_ppu_checksum_matches(
+            include_bytes!("../tests/eeprom_test.gba"),
+            0x95B774A3A0135B05,
+        );
+    }
+
+    #[test]
+    fn test_mandelbrot() {
+        test_rom_ppu_checksum_matches(
+            include_bytes!("../tests/mandelbrot.gba"),
+            0xF03FB6C8A3297764,
+        )
+    }
+
+    #[test]
+    fn test_memory() {
+        test_rom_ppu_checksum_matches(include_bytes!("../tests/memory.gba"), 0x88920F69912EB5BF)
+    }
+
+    #[test]
+    fn test_swi_demo() {
+        test_rom_ppu_checksum_matches(include_bytes!("../tests/swi_demo.gba"), 0x4DDE194C2C6D8C28);
+    }
+
+    fn test_first() {
+        test_rom_ppu_checksum_matches(include_bytes!("../tests/first.gba"), 0x410F7ED1ED807064);
+    }
 }

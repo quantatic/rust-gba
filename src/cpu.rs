@@ -8,7 +8,8 @@ use std::fmt::Display;
 use std::{fmt::Debug, ops::RangeInclusive};
 
 use crate::bus::Bus;
-use crate::{BitManipulation, DataAccess};
+use crate::cartridge::Cartridge;
+use crate::{cartridge, BitManipulation, DataAccess};
 
 use crate::DEBUG_AND_PANIC_ON_LOOP;
 
@@ -30,7 +31,6 @@ impl Display for Instruction {
     }
 }
 
-#[derive(Debug)]
 pub struct Cpu {
     r0: u32,
     r1: u32,
@@ -86,8 +86,8 @@ enum ExceptionType {
     FastInterruptRequest,
 }
 
-impl Default for Cpu {
-    fn default() -> Self {
+impl Cpu {
+    pub fn new(cartridge: Cartridge) -> Self {
         Self {
             r0: 0,
             r1: 0,
@@ -127,7 +127,7 @@ impl Default for Cpu {
             r14_und: 0,
             spsr_und: 0,
             cycle_count: 0,
-            bus: Bus::default(),
+            bus: Bus::new(cartridge),
             bios_finished: false,
         }
     }

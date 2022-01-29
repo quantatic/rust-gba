@@ -1354,6 +1354,16 @@ impl Lcd {
         *color = Rgb555::from_int(value);
     }
 
+    pub fn write_palette_ram_word(&mut self, value: u32, offset: u32) {
+        assert!(offset & 0b11 == 0);
+
+        let high_hword = (value >> 16) as u16;
+        let low_hword = value as u16;
+
+        self.write_palette_ram_hword(low_hword, offset);
+        self.write_palette_ram_hword(high_hword, offset + 2);
+    }
+
     pub fn read_vram(&self, offset: u32) -> u8 {
         self.vram[offset as usize]
     }
@@ -1413,6 +1423,14 @@ impl Lcd {
 
         self.vram[offset as usize] = low_byte;
         self.vram[(offset + 1) as usize] = high_byte;
+    }
+
+    pub fn write_vram_word(&mut self, value: u32, offset: u32) {
+        assert!(offset & 0b11 == 0);
+
+        for (byte_offset, byte) in value.to_le_bytes().into_iter().enumerate() {
+            self.vram[(offset as usize) + byte_offset] = byte;
+        }
     }
 
     pub fn read_oam(&self, offset: u32) -> u8 {
@@ -1503,6 +1521,16 @@ impl Lcd {
             },
             _ => unreachable!(),
         };
+    }
+
+    pub fn write_oam_word(&mut self, value: u32, offset: u32) {
+        assert!(offset & 0b11 == 0);
+
+        let high_hword = (value >> 16) as u16;
+        let low_hword = value as u16;
+
+        self.write_oam_hword(low_hword, offset);
+        self.write_oam_hword(high_hword, offset + 2);
     }
 
     pub fn read_layer0_bg_control<T>(&self, index: u32) -> T
