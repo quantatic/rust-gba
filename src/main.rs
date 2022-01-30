@@ -11,10 +11,7 @@ mod timer;
 use std::{error::Error, hash::Hasher, time::Instant};
 
 use cpu::Cpu;
-use fasthash::{
-    xx::{Hasher32, Hasher64},
-    FastHasher,
-};
+use fasthash::{xx::Hasher64, FastHasher};
 use pixels::{wgpu::TextureFormat, PixelsBuilder, SurfaceTexture};
 use winit::{
     event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
@@ -34,7 +31,7 @@ const DEBUG_AND_PANIC_ON_LOOP: bool = false;
 
 const CYCLES_PER_SECOND: u64 = 16_777_216;
 
-const ROM: &[u8] = include_bytes!("../bld_demo.gba");
+const ROM: &[u8] = include_bytes!("../emerald.gba");
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("{}", std::mem::size_of::<cpu::Cpu>());
@@ -185,11 +182,19 @@ mod tests {
     }
 
     #[test]
-    fn test_eeprom_integration() {
+    fn test_eeprom() {
         test_rom_ppu_checksum_matches(
             include_bytes!("../tests/eeprom_test.gba"),
             0x95B774A3A0135B05,
         );
+    }
+
+    #[test]
+    fn test_flash() {
+        test_rom_ppu_checksum_matches(
+            include_bytes!("../tests/flash_test.gba"),
+            0x95B774A3A0135B05,
+        )
     }
 
     #[test]
@@ -210,6 +215,7 @@ mod tests {
         test_rom_ppu_checksum_matches(include_bytes!("../tests/swi_demo.gba"), 0x4DDE194C2C6D8C28);
     }
 
+    #[test]
     fn test_first() {
         test_rom_ppu_checksum_matches(include_bytes!("../tests/first.gba"), 0x410F7ED1ED807064);
     }

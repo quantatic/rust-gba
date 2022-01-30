@@ -966,20 +966,25 @@ impl Lcd {
 
             let base_tile_number = obj.get_tile_number();
 
-            let four_bit_tile_number = match self.get_obj_tile_mapping() {
-                ObjectTileMapping::OneDimensional => {
+            let tile_number = match (self.get_obj_tile_mapping(), obj.get_palette_depth()) {
+                (ObjectTileMapping::OneDimensional, PaletteDepth::FourBit) => {
                     base_tile_number + (sprite_tile_y * sprite_tile_width) + sprite_tile_x
                 }
-                ObjectTileMapping::TwoDimensional => {
+                (ObjectTileMapping::OneDimensional, PaletteDepth::EightBit) => {
+                    base_tile_number + (sprite_tile_y * sprite_tile_width * 2) + (sprite_tile_x * 2)
+                }
+                (ObjectTileMapping::TwoDimensional, PaletteDepth::FourBit) => {
                     base_tile_number + (sprite_tile_y * 32) + sprite_tile_x
                 }
+                (ObjectTileMapping::TwoDimensional, PaletteDepth::EightBit) => {
+                    base_tile_number + (sprite_tile_y * 32) + (sprite_tile_x * 2)
+                }
             };
-            let eight_bit_tile_number = four_bit_tile_number + sprite_tile_x;
 
             let palette_idx = match obj.get_palette_depth() {
                 PaletteDepth::EightBit => {
                     let tile_idx = OBJ_TILE_DATA_VRAM_BASE
-                        + (usize::from(eight_bit_tile_number) * 32)
+                        + (usize::from(tile_number) * 32)
                         + (usize::from(tile_offset_y) * 8)
                         + usize::from(tile_offset_x);
 
@@ -993,7 +998,7 @@ impl Lcd {
                 }
                 PaletteDepth::FourBit => {
                     let tile_idx = OBJ_TILE_DATA_VRAM_BASE
-                        + (usize::from(four_bit_tile_number) * 32)
+                        + (usize::from(tile_number) * 32)
                         + (usize::from(tile_offset_y) * 4)
                         + (usize::from(tile_offset_x) / 2);
 

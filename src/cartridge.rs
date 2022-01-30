@@ -1,4 +1,8 @@
-use std::cell::Cell;
+mod backup_types;
+
+use backup_types::{BackupType, BACKUP_TYPES_MAP};
+
+use std::ops::Range;
 
 use lazy_static::lazy_static;
 use regex::bytes::Regex;
@@ -12,38 +16,94 @@ lazy_static! {
     static ref FLASH_128KB_PATTERN: Regex = Regex::new(r"FLASH1M_V\w\w\w").unwrap();
 }
 
+#[derive(Debug)]
+enum Backup {
+    Eeprom(Eeprom),
+    Flash(Flash),
+    None,
+}
+
 pub struct Cartridge {
     rom: Vec<u8>,
-    eeprom: Option<Eeprom>,
+    backup: Backup,
 }
 
 impl Cartridge {
     pub fn new(data: &[u8]) -> Self {
-        let eeprom_match = EEPROM_PATTERN.is_match(data);
-        let sram_match = SRAM_PATTERN.is_match(data);
-        let flash64kb_match = FLASH_64KB_PATTERN.is_match(data);
-        let flash128kb_match = FLASH_128KB_PATTERN.is_match(data);
+        const GAME_TITLE_BYTE_RANGE: Range<usize> = 0x0A0..0x0AC;
+        const GAME_CODE_BYTE_RANGE: Range<usize> = 0x0AC..0x0B0;
 
-        if eeprom_match {
-            println!("EEPROM detected");
+        if let Some(title_bytes) = data.get(GAME_TITLE_BYTE_RANGE) {
+            let title: String = title_bytes
+                .iter()
+                .copied()
+                .take_while(|val| *val != 0)
+                .map(char::from)
+                .collect();
+            println!("{}", title);
         }
 
-        if sram_match {
-            println!("SRAM detected")
+        if let Some(code_bytes) = data.get(GAME_CODE_BYTE_RANGE) {
+            let code: String = code_bytes
+                .iter()
+                .copied()
+                .take_while(|val| *val != 0)
+                .map(char::from)
+                .collect();
+            println!("{}", code);
+
+            if let Some(backup_type) = BACKUP_TYPES_MAP.get(code_bytes) {
+                println!("{:?}", backup_type);
+            }
         }
 
-        if flash64kb_match {
-            println!("flash64kb detected")
-        }
+        let backup = {
+            let code_bytes = &data[GAME_CODE_BYTE_RANGE];
 
-        if flash128kb_match {
-            println!("flash128kb detected")
-        }
+            match backup_types::BACKUP_TYPES_MAP.get(&code_bytes).copied() {
+                Some(BackupType::Eeprom512B) => todo!(),
+                Some(BackupType::Eeprom8K) => Backup::Eeprom(Eeprom::default()),
+                Some(BackupType::Flash64K {
+                    device_type,
+                    manufacturer,
+                }) => Backup::Flash(Flash::new(device_type, manufacturer)),
+                Some(BackupType::Flash128K {
+                    device_type,
+                    manufacturer,
+                }) => Backup::Flash(Flash::new(device_type, manufacturer)),
+                Some(BackupType::Sram256K) => todo!(),
+                Some(BackupType::None) => todo!(),
+                None => {
+                    println!("falling back to ROM string search for backup detection");
+                    let eeprom_match = EEPROM_PATTERN.is_match(data);
+                    let sram_match = SRAM_PATTERN.is_match(data);
+                    let flash64kb_match = FLASH_64KB_PATTERN.is_match(data);
+                    let flash128kb_match = FLASH_128KB_PATTERN.is_match(data);
+
+                    let num_matches = [eeprom_match, sram_match, flash64kb_match, flash128kb_match]
+                        .into_iter()
+                        .filter(|val| *val)
+                        .count();
+                    assert!(num_matches <= 1);
+
+                    if eeprom_match {
+                        Backup::Eeprom(Eeprom::default())
+                    } else if sram_match {
+                        todo!()
+                    } else if flash64kb_match || flash128kb_match {
+                        Backup::Flash(Flash::default())
+                    } else {
+                        Backup::None
+                    }
+                }
+            }
+        };
+
+        println!("{:?}", backup);
 
         let rom = data.to_vec();
-        let eeprom = eeprom_match.then(Eeprom::default);
 
-        Self { rom, eeprom }
+        Self { rom, backup }
     }
 
     pub fn read_rom_byte(&self, offset: u32) -> u8 {
@@ -57,8 +117,8 @@ impl Cartridge {
     }
 
     pub fn read_rom_hword(&mut self, offset: u32) -> u16 {
-        match &mut self.eeprom {
-            Some(eeprom) if offset > 0x1FFFF00 || (offset as usize) >= self.rom.len() => {
+        match &mut self.backup {
+            Backup::Eeprom(eeprom) if offset > 0x1FFFF00 || (offset as usize) >= self.rom.len() => {
                 eeprom.read_hword()
             }
             _ => {
@@ -82,11 +142,11 @@ impl Cartridge {
     }
 
     pub fn write_rom_byte(&mut self, value: u8, offset: u32) {
-        todo!()
+        unreachable!()
     }
 
     pub fn write_rom_hword(&mut self, value: u16, offset: u32) {
-        if let Some(eeprom) = &mut self.eeprom {
+        if let Backup::Eeprom(eeprom) = &mut self.backup {
             if offset > 0x1FFFF00 || (offset as usize) >= self.rom.len() {
                 eeprom.write_hword(value);
             }
@@ -94,16 +154,13 @@ impl Cartridge {
     }
 
     pub fn write_rom_word(&mut self, value: u32, offset: u32) {
-        todo!()
+        unreachable!()
     }
 
     pub fn read_sram_byte(&self, offset: u32) -> u8 {
-        if offset == 0 {
-            0x62
-        } else if offset == 1 {
-            0x13
-        } else {
-            0x00
+        match &self.backup {
+            Backup::Flash(flash) => flash.read_byte(offset),
+            _ => todo!(),
         }
     }
 
@@ -126,7 +183,10 @@ impl Cartridge {
     }
 
     pub fn write_sram_byte(&mut self, value: u8, offset: u32) {
-        todo!();
+        match &mut self.backup {
+            Backup::Flash(flash) => flash.write_byte(value, offset),
+            _ => unreachable!(),
+        }
     }
 
     pub fn write_sram_hword(&mut self, value: u16, offset: u32) {
@@ -138,19 +198,20 @@ impl Cartridge {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 enum EepromAction {
     SetReadAddress,
     Write,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 enum EepromStatus {
     ReceivingCommand,
     OngoingAction(EepromAction),
     StopBit,
 }
 
+#[derive(Debug)]
 struct Eeprom {
     data: [bool; 0x10000],
     rx_bits: u8,
@@ -261,6 +322,171 @@ impl Eeprom {
             }
         } else {
             1
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FlashCommandState {
+    ReadCommand,
+    BankSwitch,
+    Identification,
+    Erase,
+    WriteSingleByte,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FlashWantedWrite {
+    Write_5555_AA,
+    Write_2AAA_55,
+    CommandData,
+}
+
+// Atmel flash chips are not handled.
+#[derive(Debug)]
+struct Flash {
+    low_bank: [u8; 0x10000],
+    high_bank: [u8; 0x10000],
+    device_type: u8,
+    manufacturer: u8,
+    state: FlashCommandState,
+    wanted_write: FlashWantedWrite,
+    use_high_bank: bool,
+}
+
+impl Default for Flash {
+    fn default() -> Self {
+        Self::new(Self::DEFAULT_DEVICE_TYPE, Self::DEFAULT_MANUFACTURER)
+    }
+}
+
+impl Flash {
+    const DEFAULT_DEVICE_TYPE: u8 = 0xD4;
+    const DEFAULT_MANUFACTURER: u8 = 0xBF;
+
+    const ATMEL_DEVICE_TYPE: u8 = 0x3D;
+    const ATMEL_MANUFACTURER: u8 = 0x1F;
+
+    fn new(device_type: u8, manufacturer: u8) -> Self {
+        assert!(device_type != Self::ATMEL_DEVICE_TYPE);
+        assert!(manufacturer != Self::ATMEL_MANUFACTURER);
+
+        Self {
+            low_bank: [0xFF; 0x10000],
+            high_bank: [0xFF; 0x10000],
+            device_type,
+            manufacturer,
+            state: FlashCommandState::ReadCommand,
+            wanted_write: FlashWantedWrite::Write_5555_AA,
+            use_high_bank: false,
+        }
+    }
+
+    fn read_byte(&self, offset: u32) -> u8 {
+        match self.state {
+            FlashCommandState::Identification if offset == 0x0000 => self.manufacturer,
+            FlashCommandState::Identification if offset == 0x0001 => self.device_type,
+            _ => {
+                if self.use_high_bank {
+                    self.high_bank[offset as usize]
+                } else {
+                    self.low_bank[offset as usize]
+                }
+            }
+        }
+    }
+
+    fn write_byte(&mut self, value: u8, offset: u32) {
+        match self.wanted_write {
+            FlashWantedWrite::Write_5555_AA if offset == 0x5555 && value == 0xAA => {
+                self.wanted_write = FlashWantedWrite::Write_2AAA_55;
+            }
+            FlashWantedWrite::Write_2AAA_55 if offset == 0x2AAA && value == 0x55 => {
+                self.wanted_write = FlashWantedWrite::CommandData;
+            }
+            FlashWantedWrite::Write_5555_AA if offset == 0x5555 && value == 0xF0 => {
+                println!("Macronix force end of command");
+                self.state = FlashCommandState::ReadCommand;
+                self.wanted_write = FlashWantedWrite::Write_5555_AA;
+            }
+            FlashWantedWrite::CommandData => match self.state {
+                FlashCommandState::ReadCommand if offset == 0x5555 => match value {
+                    0x80 => {
+                        self.state = FlashCommandState::Erase;
+                        self.wanted_write = FlashWantedWrite::Write_5555_AA;
+                    }
+                    0x90 => {
+                        self.state = FlashCommandState::Identification;
+                        self.wanted_write = FlashWantedWrite::Write_5555_AA;
+                    }
+                    0xA0 => {
+                        self.state = FlashCommandState::WriteSingleByte;
+                        self.wanted_write = FlashWantedWrite::CommandData;
+                    }
+                    0xB0 => {
+                        self.state = FlashCommandState::BankSwitch;
+                        self.wanted_write = FlashWantedWrite::CommandData;
+                    }
+                    _ => unreachable!(),
+                },
+                FlashCommandState::Identification if offset == 0x5555 && value == 0xF0 => {
+                    self.state = FlashCommandState::ReadCommand;
+                    self.wanted_write = FlashWantedWrite::Write_5555_AA;
+                }
+                FlashCommandState::BankSwitch if offset == 0x0000 => {
+                    self.use_high_bank = value != 0;
+                    self.state = FlashCommandState::ReadCommand;
+                    self.wanted_write = FlashWantedWrite::Write_5555_AA;
+                }
+                FlashCommandState::WriteSingleByte => {
+                    if self.use_high_bank {
+                        self.high_bank[offset as usize] = value;
+                    } else {
+                        self.low_bank[offset as usize] = value;
+                    }
+
+                    self.state = FlashCommandState::ReadCommand;
+                    self.wanted_write = FlashWantedWrite::Write_5555_AA;
+                }
+                FlashCommandState::Erase => {
+                    match value {
+                        0x10 if offset == 0x5555 => {
+                            for val in self.low_bank.iter_mut() {
+                                *val = 0xFF;
+                            }
+
+                            for val in self.high_bank.iter_mut() {
+                                *val = 0xFF;
+                            }
+                        }
+                        0x30 => {
+                            assert!(offset % 0x1000 == 0);
+                            for erase_offset in 0..0x1000 {
+                                if self.use_high_bank {
+                                    self.high_bank[(offset + erase_offset) as usize] = 0xFF;
+                                } else {
+                                    self.low_bank[(offset + erase_offset) as usize] = 0xFF;
+                                }
+                            }
+                        }
+                        _ => unreachable!("erase command {:02X}", value),
+                    }
+
+                    self.state = FlashCommandState::ReadCommand;
+                    self.wanted_write = FlashWantedWrite::Write_5555_AA;
+                }
+                _ => unreachable!(
+                    "{:02X} {:08X} {:?} {:?}",
+                    value, offset, self.state, self.wanted_write
+                ),
+            },
+            _ => todo!(
+                "{:02X} {:08X} {:?} {:?}",
+                value,
+                offset,
+                self.state,
+                self.wanted_write
+            ),
         }
     }
 }
