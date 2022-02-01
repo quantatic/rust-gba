@@ -2,6 +2,7 @@ mod arm;
 mod thumb;
 
 use arm::decode_arm;
+use ringbuffer::RingBufferWrite;
 use thumb::decode_thumb;
 
 use std::fmt::Display;
@@ -506,6 +507,10 @@ impl Cpu {
 impl Cpu {
     pub fn fetch_decode_execute(&mut self, debug: bool) {
         if self.bios_finished && debug {
+            let pc_offset = match self.get_instruction_mode() {
+                InstructionSet::Arm => |pc| pc + 4,
+                InstructionSet::Thumb => |pc| pc + 2,
+            };
             print!("{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} cpsr: {:08X} | ",
                 self.read_register(Register::R0, |_| unreachable!()),
                 self.read_register(Register::R1, |_| unreachable!()),
@@ -522,7 +527,7 @@ impl Cpu {
                 self.read_register(Register::R12, |_| unreachable!()),
                 self.read_register(Register::R13, |_| unreachable!()),
                 self.read_register(Register::R14, |_| unreachable!()),
-                self.read_register(Register::R15, |pc| pc),
+                self.read_register(Register::R15, pc_offset),
                 self.read_register(Register::Cpsr, |_| unreachable!())
             );
         }
@@ -546,6 +551,11 @@ impl Cpu {
                     }
 
                     let instruction = decode_arm(opcode, pc);
+                    crate::INSTRUCTION_BUFFER
+                        .lock()
+                        .unwrap()
+                        .push(Instruction::ArmInstruction(instruction));
+
                     if self.bios_finished && debug {
                         println!("{}", instruction);
                     }
@@ -564,6 +574,10 @@ impl Cpu {
                     }
 
                     let instruction = decode_thumb(opcode, pc);
+                    crate::INSTRUCTION_BUFFER
+                        .lock()
+                        .unwrap()
+                        .push(Instruction::ThumbInstruction(instruction));
                     if self.bios_finished && debug {
                         println!("{}", instruction);
                     }

@@ -109,6 +109,12 @@ pub struct ArmInstruction {
     address: u32,
 }
 
+impl ArmInstruction {
+    pub fn get_address(&self) -> u32 {
+        self.address
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum SingleDataTransferIndexType {
     PostIndex { non_privileged: bool },

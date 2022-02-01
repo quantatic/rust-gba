@@ -134,6 +134,12 @@ pub struct ThumbInstruction {
     address: u32,
 }
 
+impl ThumbInstruction {
+    pub fn get_address(&self) -> u32 {
+        self.address
+    }
+}
+
 pub fn decode_thumb(opcode: u16, address: u32) -> ThumbInstruction {
     let maybe_instruction_type = None
         .or_else(|| try_decode_thumb_register_operation(opcode))

@@ -556,11 +556,9 @@ impl Bus {
     const GAME_PAK_SRAM_BASE: u32 = 0x0E000000;
     const GAME_PAK_SRAM_END: u32 = 0x0FFFFFFF;
 
-    const MEMORY_SIZE: u32 = 0x10000000;
-
     pub fn read_byte_address(&self, address: u32) -> u8 {
-        match address % Self::MEMORY_SIZE {
-            Self::BIOS_BASE..=Self::BIOS_END => BIOS[(address % Self::MEMORY_SIZE) as usize],
+        match address {
+            Self::BIOS_BASE..=Self::BIOS_END => BIOS[address as usize],
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
                 let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
                 self.board_wram[actual_offset as usize]
@@ -657,37 +655,37 @@ impl Bus {
                 self.lcd.read_layer3_affine_param_d(address & 0b1)
             }
 
-            Self::WINDOW_0_HORIZONTAL_BASE..=Self::WINDOW_0_HORIZONTAL_END => self
-                .lcd
-                .read_window_0_horizontal(address.get_bit_range(0..=0)),
-            Self::WINDOW_1_HORIZONTAL_BASE..=Self::WINDOW_1_HORIZONTAL_END => self
-                .lcd
-                .read_window_1_horizontal(address.get_bit_range(0..=0)),
-            Self::WINDOW_0_VERTICAL_BASE..=Self::WINDOW_0_VERTICAL_END => self
-                .lcd
-                .read_window_0_vertical(address.get_bit_range(0..=0)),
-            Self::WINDOW_1_VERTICAL_BASE..=Self::WINDOW_1_VERTICAL_END => self
-                .lcd
-                .read_window_1_vertical(address.get_bit_range(0..=0)),
-            Self::WINDOW_IN_CONTROL_BASE..=Self::WINDOW_IN_CONTROL_END => self
-                .lcd
-                .read_window_in_control(address.get_bit_range(0..=0)),
-            Self::WINDOW_OUT_CONTROL_BASE..=Self::WINDOW_OUT_CONTROL_END => self
-                .lcd
-                .read_window_out_control(address.get_bit_range(0..=0)),
+            Self::WINDOW_0_HORIZONTAL_BASE..=Self::WINDOW_0_HORIZONTAL_END => {
+                self.lcd.read_window_0_horizontal(address & 0b1)
+            }
+            Self::WINDOW_1_HORIZONTAL_BASE..=Self::WINDOW_1_HORIZONTAL_END => {
+                self.lcd.read_window_1_horizontal(address & 0b1)
+            }
+            Self::WINDOW_0_VERTICAL_BASE..=Self::WINDOW_0_VERTICAL_END => {
+                self.lcd.read_window_0_vertical(address & 0b1)
+            }
+            Self::WINDOW_1_VERTICAL_BASE..=Self::WINDOW_1_VERTICAL_END => {
+                self.lcd.read_window_1_vertical(address & 0b1)
+            }
+            Self::WINDOW_IN_CONTROL_BASE..=Self::WINDOW_IN_CONTROL_END => {
+                self.lcd.read_window_in_control(address & 0b1)
+            }
+            Self::WINDOW_OUT_CONTROL_BASE..=Self::WINDOW_OUT_CONTROL_END => {
+                self.lcd.read_window_out_control(address & 0b1)
+            }
 
             Self::MOSAIC_SIZE_BASE..=Self::MOSAIC_SIZE_END => {
-                self.lcd.read_mosaic_size(address.get_bit_range(0..=1))
+                self.lcd.read_mosaic_size(address & 0b1)
             }
-            Self::BLEND_CONTROL_BASE..=Self::BLEND_CONTROL_END => self
-                .lcd
-                .read_color_effects_selection(address.get_bit_range(0..=0)),
-            Self::BLEND_ALPHA_BASE..=Self::BLEND_ALPHA_END => self
-                .lcd
-                .read_alpha_blending_coefficients(address.get_bit_range(0..=0)),
-            Self::BLEND_BRIGHTNESS_BASE..=Self::BLEND_BRIGHTNESS_END => self
-                .lcd
-                .read_brightness_coefficient(address.get_bit_range(0..=0)),
+            Self::BLEND_CONTROL_BASE..=Self::BLEND_CONTROL_END => {
+                self.lcd.read_color_effects_selection(address & 0b1)
+            }
+            Self::BLEND_ALPHA_BASE..=Self::BLEND_ALPHA_END => {
+                self.lcd.read_alpha_blending_coefficients(address & 0b1)
+            }
+            Self::BLEND_BRIGHTNESS_BASE..=Self::BLEND_BRIGHTNESS_END => {
+                self.lcd.read_brightness_coefficient(address & 0b1)
+            }
 
             Self::SOUND_PWM_CONTROL_BASE..=Self::SOUND_PWM_CONTROL_END => {
                 self.apu.read_sound_bias(address & 0b1)
@@ -848,7 +846,7 @@ impl Bus {
                 // println!("read from stubbed serial {:08X}", address);
                 0
             }
-            _ => todo!("byte read 0x{:08x}", address),
+            _ => 0xFF,
         }
     }
 
@@ -907,7 +905,7 @@ impl Bus {
     }
 
     pub fn write_byte_address(&mut self, value: u8, address: u32) {
-        match address % Self::MEMORY_SIZE {
+        match address {
             Self::BIOS_BASE..=Self::BIOS_END => {} // println!("{:02X} -> ignored BIOS write", value),
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
                 let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
@@ -1404,13 +1402,15 @@ impl Bus {
 
                     match original_dma_info.get_dma_transfer_type() {
                         DmaTransferType::Bit16 => {
-                            let source_data = self.read_halfword_address(dma_source);
-                            self.write_halfword_address(source_data, dma_dest);
+                            let align_addr = |address| address & (!0b1);
+                            let source_data = self.read_halfword_address(align_addr(dma_source));
+                            self.write_halfword_address(source_data, align_addr(dma_dest));
                             // println!("u16 {:04X} -> [{:08X}]", source_data, dma_dest)
                         }
                         DmaTransferType::Bit32 => {
-                            let source_data = self.read_word_address(dma_source);
-                            self.write_word_address(source_data, dma_dest);
+                            let align_addr = |address| address & (!0b11);
+                            let source_data = self.read_word_address(align_addr(dma_source));
+                            self.write_word_address(source_data, align_addr(dma_dest));
                             // println!("u32 {:08X} -> [{:08X}]", source_data, dma_dest)
                         }
                     }

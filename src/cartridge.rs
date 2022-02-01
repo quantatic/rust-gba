@@ -20,6 +20,7 @@ lazy_static! {
 enum Backup {
     Eeprom(Eeprom),
     Flash(Flash),
+    Sram(Sram),
     None,
 }
 
@@ -60,18 +61,16 @@ impl Cartridge {
         let backup = {
             let code_bytes = &data[GAME_CODE_BYTE_RANGE];
 
+            println!("{:?}", backup_types::BACKUP_TYPES_MAP.get(&code_bytes));
             match backup_types::BACKUP_TYPES_MAP.get(&code_bytes).copied() {
                 Some(BackupType::Eeprom512B) => todo!(),
                 Some(BackupType::Eeprom8K) => Backup::Eeprom(Eeprom::default()),
-                Some(BackupType::Flash64K {
-                    device_type,
-                    manufacturer,
-                }) => Backup::Flash(Flash::new(device_type, manufacturer)),
+                Some(BackupType::Flash64K { .. }) => todo!(),
                 Some(BackupType::Flash128K {
                     device_type,
                     manufacturer,
                 }) => Backup::Flash(Flash::new(device_type, manufacturer)),
-                Some(BackupType::Sram256K) => todo!(),
+                Some(BackupType::Sram) => Backup::Sram(Sram::default()),
                 Some(BackupType::None) => todo!(),
                 None => {
                     println!("falling back to ROM string search for backup detection");
@@ -89,7 +88,7 @@ impl Cartridge {
                     if eeprom_match {
                         Backup::Eeprom(Eeprom::default())
                     } else if sram_match {
-                        todo!()
+                        Backup::Sram(Sram::default())
                     } else if flash64kb_match || flash128kb_match {
                         Backup::Flash(Flash::default())
                     } else {
@@ -142,59 +141,52 @@ impl Cartridge {
     }
 
     pub fn write_rom_byte(&mut self, value: u8, offset: u32) {
-        unreachable!()
+        // ROM byte writes ignored
     }
 
     pub fn write_rom_hword(&mut self, value: u16, offset: u32) {
-        if let Backup::Eeprom(eeprom) = &mut self.backup {
-            if offset > 0x1FFFF00 || (offset as usize) >= self.rom.len() {
+        match &mut self.backup {
+            Backup::Eeprom(eeprom) if offset > 0x1FFFF00 || (offset as usize) >= self.rom.len() => {
                 eeprom.write_hword(value);
             }
+            _ => {} // ignore all other ROM hword writes
         }
     }
 
     pub fn write_rom_word(&mut self, value: u32, offset: u32) {
-        unreachable!()
+        // ROM word writes ignored
     }
 
     pub fn read_sram_byte(&self, offset: u32) -> u8 {
         match &self.backup {
             Backup::Flash(flash) => flash.read_byte(offset),
+            Backup::Sram(sram) => sram.read_byte(offset),
             _ => todo!(),
         }
     }
 
     pub fn read_sram_hword(&self, offset: u32) -> u16 {
-        let low_byte = self.read_sram_byte(offset);
-        let high_byte = self.read_sram_byte(offset + 1);
-
-        u16::from_le_bytes([low_byte, high_byte])
+        unreachable!()
     }
 
     pub fn read_sram_word(&self, offset: u32) -> u32 {
-        let le_bytes = [
-            self.read_sram_byte(offset),
-            self.read_sram_byte(offset + 1),
-            self.read_sram_byte(offset + 2),
-            self.read_sram_byte(offset + 3),
-        ];
-
-        u32::from_le_bytes(le_bytes)
+        unreachable!()
     }
 
     pub fn write_sram_byte(&mut self, value: u8, offset: u32) {
         match &mut self.backup {
             Backup::Flash(flash) => flash.write_byte(value, offset),
+            Backup::Sram(sram) => sram.write_byte(value, offset),
             _ => unreachable!(),
         }
     }
 
     pub fn write_sram_hword(&mut self, value: u16, offset: u32) {
-        todo!()
+        unreachable!()
     }
 
     pub fn write_sram_word(&mut self, value: u32, offset: u32) {
-        todo!()
+        unreachable!()
     }
 }
 
@@ -488,5 +480,26 @@ impl Flash {
                 self.wanted_write
             ),
         }
+    }
+}
+
+#[derive(Debug)]
+struct Sram {
+    data: [u8; 0x8000],
+}
+
+impl Default for Sram {
+    fn default() -> Self {
+        Self { data: [0; 0x8000] }
+    }
+}
+
+impl Sram {
+    fn read_byte(&self, offset: u32) -> u8 {
+        self.data[offset as usize]
+    }
+
+    fn write_byte(&mut self, value: u8, offset: u32) {
+        self.data[offset as usize] = value;
     }
 }

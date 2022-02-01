@@ -8,11 +8,12 @@ mod keypad;
 mod lcd;
 mod timer;
 
-use std::{error::Error, hash::Hasher, time::Instant};
+use std::{error::Error, hash::Hasher, panic::PanicInfo, sync::Mutex, time::Instant};
 
-use cpu::Cpu;
 use fasthash::{xx::Hasher64, FastHasher};
+use lazy_static::lazy_static;
 use pixels::{wgpu::TextureFormat, PixelsBuilder, SurfaceTexture};
+use ringbuffer::{ConstGenericRingBuffer, RingBufferExt};
 use winit::{
     event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -22,6 +23,7 @@ use winit::{
 use bit_manipulation::BitManipulation;
 use data_access::DataAccess;
 
+use crate::cpu::{Cpu, Instruction};
 use crate::keypad::Key;
 
 #[cfg(target_pointer_width = "16")]
@@ -31,9 +33,33 @@ const DEBUG_AND_PANIC_ON_LOOP: bool = false;
 
 const CYCLES_PER_SECOND: u64 = 16_777_216;
 
-const ROM: &[u8] = include_bytes!("../emerald.gba");
+const ROM: &[u8] = include_bytes!("../metroid_fusion.gba");
+
+lazy_static! {
+    pub static ref INSTRUCTION_BUFFER: Mutex<ConstGenericRingBuffer<Instruction, 1024>> =
+        Mutex::default();
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // std::panic::set_hook(Box::new(|info: &PanicInfo| {
+    //     for instruction in INSTRUCTION_BUFFER.lock().unwrap().iter() {
+    //         match instruction {
+    //             Instruction::ArmInstruction(arm_instruction) => {
+    //                 println!("{:08X}: {}", arm_instruction.get_address(), arm_instruction)
+    //             }
+    //             Instruction::ThumbInstruction(thumb_instruction) => {
+    //                 println!(
+    //                     "{:08X}: {}",
+    //                     thumb_instruction.get_address(),
+    //                     thumb_instruction
+    //                 )
+    //             }
+    //         }
+    //     }
+
+    //     println!("{}", info);
+    // }));
+
     println!("{}", std::mem::size_of::<cpu::Cpu>());
 
     let event_loop = EventLoop::new();
