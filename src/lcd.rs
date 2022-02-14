@@ -447,13 +447,13 @@ pub struct Lcd {
     window_in_control: u16,
     window_out_control: u16,
     state: LcdState,
-    bg_palette_ram: [Rgb555; 0x100],
-    obj_palette_ram: [Rgb555; 0x100],
-    vram: [u8; 0x18000],
-    obj_attributes: [ObjectAttributeInfo; 0x80],
-    obj_rotations: [ObjectRotationScalingInfo; 0x20],
-    buffer: [[Rgb555; LCD_WIDTH]; LCD_HEIGHT], // access as buffer[y][x]
-    back_buffer: [[Rgb555; LCD_WIDTH]; LCD_HEIGHT],
+    bg_palette_ram: Box<[Rgb555; 0x100]>,
+    obj_palette_ram: Box<[Rgb555; 0x100]>,
+    vram: Box<[u8; 0x18000]>,
+    obj_attributes: Box<[ObjectAttributeInfo; 0x80]>,
+    obj_rotations: Box<[ObjectRotationScalingInfo; 0x20]>,
+    buffer: Box<[[Rgb555; LCD_WIDTH]; LCD_HEIGHT]>, // access as buffer[y][x]
+    back_buffer: Box<[[Rgb555; LCD_WIDTH]; LCD_HEIGHT]>,
     layer_0: Layer0,
     layer_1: Layer1,
     layer_2: Layer2,
@@ -495,13 +495,13 @@ impl Default for Lcd {
             window_in_control: 0,
             window_out_control: 0,
             state: LcdState::Visible,
-            bg_palette_ram: [Rgb555::default(); 0x100],
-            obj_palette_ram: [Rgb555::default(); 0x100],
-            vram: [0; 0x18000],
-            obj_attributes: [ObjectAttributeInfo::default(); 0x80],
-            obj_rotations: [ObjectRotationScalingInfo::default(); 0x20],
-            buffer: [[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT],
-            back_buffer: [[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT],
+            bg_palette_ram: Box::new([Rgb555::default(); 0x100]),
+            obj_palette_ram: Box::new([Rgb555::default(); 0x100]),
+            vram: Box::new([0; 0x18000]),
+            obj_attributes: Box::new([ObjectAttributeInfo::default(); 0x80]),
+            obj_rotations: Box::new([ObjectRotationScalingInfo::default(); 0x20]),
+            buffer: Box::new([[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT]),
+            back_buffer: Box::new([[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT]),
             layer_0: Layer0::default(),
             layer_1: Layer1::default(),
             layer_2: Layer2::default(),
@@ -859,14 +859,11 @@ impl Lcd {
                 let base_corner_offset_x = (pixel_x + WORLD_WIDTH - sprite_x) % WORLD_WIDTH;
                 let base_corner_offset_y = (pixel_y + WORLD_HEIGHT - sprite_y) % WORLD_HEIGHT;
 
-                if obj.get_double_size_flag() {
-                    if base_corner_offset_x > (sprite_width * 2)
-                        || base_corner_offset_y > (sprite_height * 2)
-                    {
-                        continue;
-                    }
-                } else if base_corner_offset_x > sprite_width
-                    || base_corner_offset_y > sprite_height
+                if (!obj.get_double_size_flag()
+                    && (base_corner_offset_x >= sprite_width
+                        || base_corner_offset_y >= sprite_height))
+                    || base_corner_offset_x >= (sprite_width * 2)
+                    || base_corner_offset_y >= (sprite_height * 2)
                 {
                     continue;
                 }
@@ -929,7 +926,10 @@ impl Lcd {
                 let mut base_corner_offset_x = (pixel_x + WORLD_WIDTH - sprite_x) % WORLD_WIDTH;
                 let mut base_corner_offset_y = (pixel_y + WORLD_HEIGHT - sprite_y) % WORLD_HEIGHT;
 
-                if base_corner_offset_x >= sprite_width || base_corner_offset_y >= sprite_height {
+                if obj.get_obj_disable_flag()
+                    || base_corner_offset_x >= sprite_width
+                    || base_corner_offset_y >= sprite_height
+                {
                     continue;
                 }
 

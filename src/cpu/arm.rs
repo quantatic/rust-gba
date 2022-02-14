@@ -1274,30 +1274,7 @@ impl Cpu {
                     dest_register,
                     source_register,
                 } => {
-                    let base_address = self.read_register(base_register, |_| unreachable!());
-                    match access_size {
-                        SwpAccessSize::Byte => {
-                            let old_base_value = self.bus.read_byte_address(base_address);
-                            let new_base_value =
-                                self.read_register(source_register, |_| unreachable!()) as u8;
-
-                            self.write_register(u32::from(old_base_value), dest_register);
-                            self.bus.write_byte_address(new_base_value, base_address);
-                        }
-                        SwpAccessSize::Word => {
-                            let rotate = (base_address & 0b11) * 8;
-                            let old_base_value = self
-                                .bus
-                                .read_word_address(base_address & (!0b11))
-                                .rotate_right(rotate);
-                            let new_base_value =
-                                self.read_register(source_register, |_| unreachable!());
-
-                            self.write_register(old_base_value, dest_register);
-                            self.bus
-                                .write_word_address(new_base_value, base_address & (!0b11));
-                        }
-                    }
+                    self.execute_arm_swp(access_size, base_register, dest_register, source_register)
                 }
                 _ => todo!("{:#08x?}", instruction),
             }
@@ -2141,6 +2118,37 @@ impl Cpu {
             _ => todo!("multiply impl for {:?}", operation),
         }
     }
+
+    fn execute_arm_swp(
+        &mut self,
+        access_size: SwpAccessSize,
+        base_register: Register,
+        dest_register: Register,
+        source_register: Register,
+    ) {
+        let base_address = self.read_register(base_register, |_| unreachable!());
+        match access_size {
+            SwpAccessSize::Byte => {
+                let old_base_value = self.bus.read_byte_address(base_address);
+                let new_base_value = self.read_register(source_register, |_| unreachable!()) as u8;
+
+                self.write_register(u32::from(old_base_value), dest_register);
+                self.bus.write_byte_address(new_base_value, base_address);
+            }
+            SwpAccessSize::Word => {
+                let rotate = (base_address & 0b11) * 8;
+                let old_base_value = self
+                    .bus
+                    .read_word_address(base_address & (!0b11))
+                    .rotate_right(rotate);
+                let new_base_value = self.read_register(source_register, |_| unreachable!());
+
+                self.write_register(old_base_value, dest_register);
+                self.bus
+                    .write_word_address(new_base_value, base_address & (!0b11));
+            }
+        }
+    }
 }
 
 impl Display for OffsetModifierType {
@@ -2199,7 +2207,6 @@ impl Display for ArmInstruction {
                         "{}{}{} {}, {}",
                         operation, set_string, self.condition, destination_operand, second_operand
                     ),
-                    _ => todo!(),
                 }
             }
             ArmInstructionType::B { offset } => write!(f, "b{} 0x{:08X}", self.condition, offset),

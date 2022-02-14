@@ -230,7 +230,7 @@ fn try_decode_thumb_add_subtract(opcode: u16) -> Option<ThumbInstructionType> {
                 destination_register: dest_register,
                 operation: ThumbRegisterOperation::Add,
                 source: source_register,
-                second_operand: second_operand,
+                second_operand,
             }
         }
         SUB_REGISTER_OPCODE_VALUE => {
@@ -240,7 +240,7 @@ fn try_decode_thumb_add_subtract(opcode: u16) -> Option<ThumbInstructionType> {
                 destination_register: dest_register,
                 operation: ThumbRegisterOperation::Sub,
                 source: source_register,
-                second_operand: second_operand,
+                second_operand,
             }
         }
         ADD_IMMEDIATE_OPCODE_VALUE => {
@@ -250,7 +250,7 @@ fn try_decode_thumb_add_subtract(opcode: u16) -> Option<ThumbInstructionType> {
                 destination_register: dest_register,
                 operation: ThumbRegisterOperation::Add,
                 source: source_register,
-                second_operand: second_operand,
+                second_operand,
             }
         }
         SUB_IMMEDIATE_OPCODE_VALUE => {
@@ -260,7 +260,7 @@ fn try_decode_thumb_add_subtract(opcode: u16) -> Option<ThumbInstructionType> {
                 destination_register: dest_register,
                 operation: ThumbRegisterOperation::Sub,
                 source: source_register,
-                second_operand: second_operand,
+                second_operand,
             }
         }
         _ => unreachable!(),
@@ -1285,7 +1285,6 @@ impl Cpu {
                 let result = first_operand_value.wrapping_mul(second_operand_value);
                 (result, None, result as i32, None)
             }
-            _ => todo!("{:?}", operation),
         };
 
         if let Some(carry_flag) = carry_flag {

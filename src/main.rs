@@ -10,15 +10,14 @@ mod timer;
 
 use std::{error::Error, hash::Hasher, panic::PanicInfo, sync::Mutex, time::Instant};
 
-use fasthash::{xx::Hasher64, FastHasher};
-use lazy_static::lazy_static;
 use pixels::{wgpu::TextureFormat, PixelsBuilder, SurfaceTexture};
-use ringbuffer::{ConstGenericRingBuffer, RingBufferExt};
+use winit::event_loop::EventLoop;
 use winit::{
     event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
+    event_loop::ControlFlow,
     window::WindowBuilder,
 };
+use xxhash_rust::xxh3::Xxh3;
 
 use bit_manipulation::BitManipulation;
 use data_access::DataAccess;
@@ -33,35 +32,9 @@ const DEBUG_AND_PANIC_ON_LOOP: bool = false;
 
 const CYCLES_PER_SECOND: u64 = 16_777_216;
 
-const ROM: &[u8] = include_bytes!("../metroid_fusion.gba");
-
-lazy_static! {
-    pub static ref INSTRUCTION_BUFFER: Mutex<ConstGenericRingBuffer<Instruction, 1024>> =
-        Mutex::default();
-}
+const ROM: &[u8] = include_bytes!("../super_circuit.gba");
 
 fn main() -> Result<(), Box<dyn Error>> {
-    // std::panic::set_hook(Box::new(|info: &PanicInfo| {
-    //     for instruction in INSTRUCTION_BUFFER.lock().unwrap().iter() {
-    //         match instruction {
-    //             Instruction::ArmInstruction(arm_instruction) => {
-    //                 println!("{:08X}: {}", arm_instruction.get_address(), arm_instruction)
-    //             }
-    //             Instruction::ThumbInstruction(thumb_instruction) => {
-    //                 println!(
-    //                     "{:08X}: {}",
-    //                     thumb_instruction.get_address(),
-    //                     thumb_instruction
-    //                 )
-    //             }
-    //         }
-    //     }
-
-    //     println!("{}", info);
-    // }));
-
-    println!("{}", std::mem::size_of::<cpu::Cpu>());
-
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("Quantatic's GBA Emulator")
@@ -82,20 +55,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let cartridge = cartridge::Cartridge::new(ROM);
     let mut cpu = cpu::Cpu::new(cartridge);
-
-    // for _ in 0..74_000_000 {
-    //     cpu.fetch_decode_execute(false);
-    // }
-
-    // let mut enter_pressed = false;
-    // loop {
-    //     for _ in 0..100_000 {
-    //         cpu.fetch_decode_execute(true);
-    //     }
-
-    //     cpu.bus.keypad.set_pressed(Key::Start, enter_pressed);
-    //     enter_pressed = !enter_pressed;
-    // }
 
     let mut i = 0;
     let mut last_step = Instant::now();
@@ -178,7 +137,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn calculate_lcd_checksum(cpu: &Cpu) -> u64 {
-    let mut hasher = Hasher64::new();
+    let mut hasher = Xxh3::default();
 
     for pixel in cpu.bus.lcd.get_buffer().iter().flatten() {
         hasher.write_u8(pixel.red);
@@ -211,7 +170,7 @@ mod tests {
     fn test_eeprom() {
         test_rom_ppu_checksum_matches(
             include_bytes!("../tests/eeprom_test.gba"),
-            0x95B774A3A0135B05,
+            0x7AD21BBF19367764,
         );
     }
 
@@ -219,7 +178,7 @@ mod tests {
     fn test_flash() {
         test_rom_ppu_checksum_matches(
             include_bytes!("../tests/flash_test.gba"),
-            0x95B774A3A0135B05,
+            0x7AD21BBF19367764,
         )
     }
 
@@ -227,22 +186,22 @@ mod tests {
     fn test_mandelbrot() {
         test_rom_ppu_checksum_matches(
             include_bytes!("../tests/mandelbrot.gba"),
-            0xF03FB6C8A3297764,
+            0x643CD59EBF90FAA9,
         )
     }
 
     #[test]
     fn test_memory() {
-        test_rom_ppu_checksum_matches(include_bytes!("../tests/memory.gba"), 0x88920F69912EB5BF)
+        test_rom_ppu_checksum_matches(include_bytes!("../tests/memory.gba"), 0x740626E6CC2D204A)
     }
 
     #[test]
     fn test_swi_demo() {
-        test_rom_ppu_checksum_matches(include_bytes!("../tests/swi_demo.gba"), 0x4DDE194C2C6D8C28);
+        test_rom_ppu_checksum_matches(include_bytes!("../tests/swi_demo.gba"), 0xD55A7769AD7F9392);
     }
 
     #[test]
     fn test_first() {
-        test_rom_ppu_checksum_matches(include_bytes!("../tests/first.gba"), 0x410F7ED1ED807064);
+        test_rom_ppu_checksum_matches(include_bytes!("../tests/first.gba"), 0x36B520E8A096B03C);
     }
 }

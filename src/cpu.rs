@@ -2,7 +2,6 @@ mod arm;
 mod thumb;
 
 use arm::decode_arm;
-use ringbuffer::RingBufferWrite;
 use thumb::decode_thumb;
 
 use std::fmt::Display;
@@ -551,10 +550,6 @@ impl Cpu {
                     }
 
                     let instruction = decode_arm(opcode, pc);
-                    crate::INSTRUCTION_BUFFER
-                        .lock()
-                        .unwrap()
-                        .push(Instruction::ArmInstruction(instruction));
 
                     if self.bios_finished && debug {
                         println!("{}", instruction);
@@ -574,13 +569,11 @@ impl Cpu {
                     }
 
                     let instruction = decode_thumb(opcode, pc);
-                    crate::INSTRUCTION_BUFFER
-                        .lock()
-                        .unwrap()
-                        .push(Instruction::ThumbInstruction(instruction));
+
                     if self.bios_finished && debug {
                         println!("{}", instruction);
                     }
+
                     self.write_register(pc + 2, Register::R15);
                     self.execute_thumb(instruction);
                 }

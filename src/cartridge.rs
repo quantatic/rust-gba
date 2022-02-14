@@ -61,12 +61,10 @@ impl Cartridge {
         let backup = {
             let code_bytes = &data[GAME_CODE_BYTE_RANGE];
 
-            println!("{:?}", backup_types::BACKUP_TYPES_MAP.get(&code_bytes));
-            match backup_types::BACKUP_TYPES_MAP.get(&code_bytes).copied() {
+            match backup_types::BACKUP_TYPES_MAP.get(code_bytes).copied() {
                 Some(BackupType::Eeprom512B) => todo!(),
                 Some(BackupType::Eeprom8K) => Backup::Eeprom(Eeprom::default()),
-                Some(BackupType::Flash64K { .. }) => todo!(),
-                Some(BackupType::Flash128K {
+                Some(BackupType::Flash {
                     device_type,
                     manufacturer,
                 }) => Backup::Flash(Flash::new(device_type, manufacturer)),
@@ -97,8 +95,6 @@ impl Cartridge {
                 }
             }
         };
-
-        println!("{:?}", backup);
 
         let rom = data.to_vec();
 
@@ -205,7 +201,7 @@ enum EepromStatus {
 
 #[derive(Debug)]
 struct Eeprom {
-    data: [bool; 0x10000],
+    data: Box<[bool; 0x10000]>,
     rx_bits: u8,
     rx_buffer: u64,
     rx_offset: u16,
@@ -217,7 +213,7 @@ struct Eeprom {
 impl Default for Eeprom {
     fn default() -> Self {
         Self {
-            data: [true; 0x10000],
+            data: Box::new([true; 0x10000]),
             rx_bits: 0,
             rx_buffer: 0,
             rx_offset: 0,
@@ -337,8 +333,8 @@ enum FlashWantedWrite {
 // Atmel flash chips are not handled.
 #[derive(Debug)]
 struct Flash {
-    low_bank: [u8; 0x10000],
-    high_bank: [u8; 0x10000],
+    low_bank: Box<[u8; 0x10000]>,
+    high_bank: Box<[u8; 0x10000]>,
     device_type: u8,
     manufacturer: u8,
     state: FlashCommandState,
@@ -364,8 +360,8 @@ impl Flash {
         assert!(manufacturer != Self::ATMEL_MANUFACTURER);
 
         Self {
-            low_bank: [0xFF; 0x10000],
-            high_bank: [0xFF; 0x10000],
+            low_bank: Box::new([0xFF; 0x10000]),
+            high_bank: Box::new([0xFF; 0x10000]),
             device_type,
             manufacturer,
             state: FlashCommandState::ReadCommand,

@@ -12,8 +12,8 @@ use crate::DataAccess;
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
 
 pub struct Bus {
-    chip_wram: [u8; 0x8000],
-    board_wram: [u8; 0x40000],
+    chip_wram: Box<[u8; 0x8000]>,
+    board_wram: Box<[u8; 0x40000]>,
     cycle_count: usize,
     interrupt_master_enable: u16,
     interrupt_enable: u16,
@@ -29,8 +29,8 @@ pub struct Bus {
 impl Bus {
     pub fn new(cartridge: Cartridge) -> Self {
         Self {
-            chip_wram: [0; 0x8000],
-            board_wram: [0; 0x40000],
+            chip_wram: Box::new([0; 0x8000]),
+            board_wram: Box::new([0; 0x40000]),
             cycle_count: 0,
             interrupt_master_enable: 0,
             interrupt_enable: 0,
@@ -291,6 +291,8 @@ impl Bus {
 }
 
 impl Bus {
+    const MEMORY_SIZE: u32 = 0x10000000;
+
     const BIOS_BASE: u32 = 0x00000000;
     const BIOS_END: u32 = 0x00003FFF;
 
@@ -555,6 +557,7 @@ impl Bus {
 
     const GAME_PAK_SRAM_BASE: u32 = 0x0E000000;
     const GAME_PAK_SRAM_END: u32 = 0x0FFFFFFF;
+    const GAME_PAK_SRAM_SIZE: u32 = 0x00010000;
 
     pub fn read_byte_address(&self, address: u32) -> u8 {
         match address {
@@ -839,9 +842,10 @@ impl Bus {
             Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => self
                 .cartridge
                 .read_rom_byte(address - Self::WAIT_STATE_3_ROM_BASE),
-            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => self
-                .cartridge
-                .read_sram_byte(address - Self::GAME_PAK_SRAM_BASE),
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
+                let offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
+                self.cartridge.read_sram_byte(offset)
+            }
             Self::SERIAL_BASE..=Self::SERIAL_END => {
                 // println!("read from stubbed serial {:08X}", address);
                 0
@@ -853,7 +857,13 @@ impl Bus {
     pub fn read_halfword_address(&mut self, address: u32) -> u16 {
         assert!(address & 0b1 == 0);
 
-        match address {
+        match address % Self::MEMORY_SIZE {
+            Self::BIOS_BASE..=Self::BIOS_END => {
+                let low_byte = BIOS[address as usize];
+                let high_byte = BIOS[(address + 1) as usize];
+
+                u16::from_le_bytes([low_byte, high_byte])
+            }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => self
                 .cartridge
                 .read_rom_hword(address - Self::WAIT_STATE_1_ROM_BASE),
@@ -863,9 +873,10 @@ impl Bus {
             Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => self
                 .cartridge
                 .read_rom_hword(address - Self::WAIT_STATE_3_ROM_BASE),
-            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => self
-                .cartridge
-                .read_sram_hword(address - Self::GAME_PAK_SRAM_BASE),
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
+                let offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
+                self.cartridge.read_sram_hword(offset)
+            }
             _ => {
                 let low_byte = self.read_byte_address(address);
                 let high_byte = self.read_byte_address(address + 1);
@@ -878,7 +889,17 @@ impl Bus {
     pub fn read_word_address(&self, address: u32) -> u32 {
         assert!(address & 0b11 == 0);
 
-        match address {
+        match address % Self::MEMORY_SIZE {
+            Self::BIOS_BASE..=Self::BIOS_END => {
+                let le_bytes = [
+                    BIOS[address as usize],
+                    BIOS[(address + 1) as usize],
+                    BIOS[(address + 2) as usize],
+                    BIOS[(address + 3) as usize],
+                ];
+
+                u32::from_le_bytes(le_bytes)
+            }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => self
                 .cartridge
                 .read_rom_word(address - Self::WAIT_STATE_1_ROM_BASE),
@@ -888,9 +909,10 @@ impl Bus {
             Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => self
                 .cartridge
                 .read_rom_word(address - Self::WAIT_STATE_3_ROM_BASE),
-            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => self
-                .cartridge
-                .read_sram_word(address - Self::GAME_PAK_SRAM_BASE),
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
+                let offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
+                self.cartridge.read_sram_word(offset)
+            }
             _ => {
                 let le_bytes = [
                     self.read_byte_address(address),
@@ -1182,8 +1204,8 @@ impl Bus {
                     .write_rom_byte(value, address - Self::WAIT_STATE_3_ROM_BASE);
             }
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
-                self.cartridge
-                    .write_sram_byte(value, address - Self::GAME_PAK_SRAM_BASE);
+                let offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
+                self.cartridge.write_sram_byte(value, offset);
             }
             _ => todo!("0x{:02x} -> 0x{:08x}", value, address),
         }
@@ -1192,7 +1214,7 @@ impl Bus {
     pub fn write_halfword_address(&mut self, value: u16, address: u32) {
         assert!(address & 0b1 == 0);
 
-        match address {
+        match address % Self::MEMORY_SIZE {
             Self::OAM_BASE..=Self::OAM_END => {
                 let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
 
@@ -1227,8 +1249,8 @@ impl Bus {
                     .write_rom_hword(value, address - Self::WAIT_STATE_3_ROM_BASE);
             }
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
-                self.cartridge
-                    .write_sram_hword(value, address - Self::GAME_PAK_SRAM_BASE);
+                let offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
+                self.cartridge.write_sram_hword(value, offset);
             }
             _ => {
                 let [low_byte, high_byte] = value.to_le_bytes();
@@ -1242,7 +1264,7 @@ impl Bus {
     pub fn write_word_address(&mut self, value: u32, address: u32) {
         assert!(address & 0b11 == 0);
 
-        match address {
+        match address % Self::MEMORY_SIZE {
             Self::OAM_BASE..=Self::OAM_END => {
                 let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
 
@@ -1277,8 +1299,8 @@ impl Bus {
                     .write_rom_word(value, address - Self::WAIT_STATE_3_ROM_BASE);
             }
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
-                self.cartridge
-                    .write_sram_word(value, address - Self::GAME_PAK_SRAM_BASE);
+                let offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
+                self.cartridge.write_sram_word(value, offset);
             }
             _ => {
                 for (offset, byte) in value.to_le_bytes().into_iter().enumerate() {
@@ -1360,47 +1382,45 @@ impl Bus {
 
     fn step_dma(&mut self, state_changes: Option<LcdStateChangeInfo>) {
         for dma_idx in 0..self.dma_infos.len() {
-            let original_dma_info = self.dma_infos[dma_idx];
-
-            let dma_triggered = if original_dma_info.get_dma_enable() {
-                match original_dma_info.get_dma_start_timing() {
-                    DmaStartTiming::Immediately => false,
-                    DmaStartTiming::VBlank => {
-                        state_changes.map(|s| s.vblank_entered).unwrap_or(false)
-                    }
-                    DmaStartTiming::HBlank => {
-                        state_changes.map(|s| s.hblank_entered).unwrap_or(false)
-                    }
-                    DmaStartTiming::Special => false,
-                }
-            } else {
-                false
-            };
-
             let dma = &mut self.dma_infos[dma_idx];
+
+            let dma_triggered = state_changes.map_or(false, |s| {
+                if dma.get_dma_enable() {
+                    match dma.get_dma_start_timing() {
+                        DmaStartTiming::Immediately => false,
+                        DmaStartTiming::VBlank => s.vblank_entered,
+                        DmaStartTiming::HBlank => s.hblank_entered,
+                        DmaStartTiming::Special => false,
+                    }
+                } else {
+                    false
+                }
+            });
+
             if dma_triggered {
                 dma.set_dma_ongoing(true);
             }
 
-            if original_dma_info.get_dma_ongoing() {
+            if dma.get_dma_ongoing() {
                 // println!("{:?}", original_dma_info.get_dma_start_timing());
                 // println!("performing dma transfer");
                 // println!("{:#08X?}", original_dma_info);
                 // println!("dma idx: {}", dma_idx);
                 // println!("---------------");
 
-                let mut dma_source = original_dma_info.source_addr;
-                let mut dma_dest = original_dma_info.dest_addr;
+                let mut dma_source = dma.source_addr;
+                let mut dma_dest = dma.dest_addr;
                 let original_dest = dma_dest;
-                let dma_length = usize::from(original_dma_info.word_count);
+                let dma_length = usize::from(dma.word_count);
+
+                let transfer_type = dma.get_dma_transfer_type();
+                let transfer_size = match transfer_type {
+                    DmaTransferType::Bit16 => 2,
+                    DmaTransferType::Bit32 => 4,
+                };
 
                 for _ in 0..dma_length {
-                    let transfer_size = match original_dma_info.get_dma_transfer_type() {
-                        DmaTransferType::Bit16 => 2,
-                        DmaTransferType::Bit32 => 4,
-                    };
-
-                    match original_dma_info.get_dma_transfer_type() {
+                    match transfer_type {
                         DmaTransferType::Bit16 => {
                             let align_addr = |address| address & (!0b1);
                             let source_data = self.read_halfword_address(align_addr(dma_source));
@@ -1415,7 +1435,8 @@ impl Bus {
                         }
                     }
 
-                    match original_dma_info.get_source_addr_control() {
+                    let dma = &mut self.dma_infos[dma_idx];
+                    match dma.get_source_addr_control() {
                         DmaAddrControl::Fixed => {}
                         DmaAddrControl::Decrement => dma_source -= transfer_size,
                         DmaAddrControl::Increment | DmaAddrControl::IncrementReload => {
@@ -1423,7 +1444,7 @@ impl Bus {
                         }
                     };
 
-                    match original_dma_info.get_dest_addr_control() {
+                    match dma.get_dest_addr_control() {
                         DmaAddrControl::Fixed => {}
                         DmaAddrControl::Decrement => dma_dest -= transfer_size,
                         DmaAddrControl::Increment | DmaAddrControl::IncrementReload => {
@@ -1432,14 +1453,11 @@ impl Bus {
                     };
                 }
 
-                if matches!(
-                    original_dma_info.get_dest_addr_control(),
-                    DmaAddrControl::IncrementReload
-                ) {
+                let dma = &mut self.dma_infos[dma_idx];
+                if matches!(dma.get_dest_addr_control(), DmaAddrControl::IncrementReload) {
                     dma_dest = original_dest;
                 }
 
-                let dma = &mut self.dma_infos[dma_idx];
                 dma.source_addr = dma_source;
                 dma.dest_addr = dma_dest;
 
