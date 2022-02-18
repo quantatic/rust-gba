@@ -380,10 +380,10 @@ pub fn decode_arm(opcode: u32, address: u32) -> ArmInstruction {
 
     let maybe_instruction_type = None
         .or_else(|| try_decode_arm_branch(opcode))
+        .or_else(|| try_decode_arm_single_data_transfer(opcode))
         .or_else(|| try_decode_arm_data_process(opcode))
         .or_else(|| try_decode_arm_multiply(opcode))
         .or_else(|| try_decode_arm_psr_transfer(opcode))
-        .or_else(|| try_decode_arm_single_data_transfer(opcode))
         .or_else(|| try_decode_arm_block_data_transfer(opcode))
         .or_else(|| try_decode_arm_single_data_swap(opcode));
 

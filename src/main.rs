@@ -32,7 +32,7 @@ const DEBUG_AND_PANIC_ON_LOOP: bool = false;
 
 const CYCLES_PER_SECOND: u64 = 16_777_216;
 
-const ROM: &[u8] = include_bytes!("../super_circuit.gba");
+const ROM: &[u8] = include_bytes!("../emerald.gba");
 
 fn main() -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new();

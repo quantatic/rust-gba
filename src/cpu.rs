@@ -1,9 +1,6 @@
 mod arm;
 mod thumb;
 
-use arm::decode_arm;
-use thumb::decode_thumb;
-
 use std::fmt::Display;
 use std::{fmt::Debug, ops::RangeInclusive};
 
@@ -71,7 +68,6 @@ pub struct Cpu {
     spsr_und: u32,
     cycle_count: u64,
     pub bus: Bus,
-    pub bios_finished: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -128,7 +124,6 @@ impl Cpu {
             spsr_und: 0,
             cycle_count: 0,
             bus: Bus::new(cartridge),
-            bios_finished: false,
         }
     }
 }
@@ -505,7 +500,7 @@ impl Cpu {
 
 impl Cpu {
     pub fn fetch_decode_execute(&mut self, debug: bool) {
-        if self.bios_finished && debug {
+        if debug {
             let pc_offset = match self.get_instruction_mode() {
                 InstructionSet::Arm => |pc| pc + 4,
                 InstructionSet::Thumb => |pc| pc + 2,
@@ -534,9 +529,6 @@ impl Cpu {
 
         if !self.get_irq_disable() && self.bus.get_irq_pending() {
             self.handle_exception(ExceptionType::InterruptRequest);
-            if self.bios_finished && debug {
-                println!("{:?}", ExceptionType::InterruptRequest);
-            }
         } else {
             let pc = self.read_register(Register::R15, |pc| pc);
             match self.get_instruction_mode() {
@@ -544,16 +536,9 @@ impl Cpu {
                     if pc % 4 != 0 {
                         unreachable!("unaligned ARM pc");
                     }
+
                     let opcode = self.bus.read_word_address(pc);
-                    if self.bios_finished && debug {
-                        print!("{:08X}: ", opcode);
-                    }
-
-                    let instruction = decode_arm(opcode, pc);
-
-                    if self.bios_finished && debug {
-                        println!("{}", instruction);
-                    }
+                    let instruction = arm::decode_arm(opcode, pc);
 
                     self.write_register(pc + 4, Register::R15);
                     self.execute_arm(instruction);
@@ -564,25 +549,11 @@ impl Cpu {
                     }
 
                     let opcode = self.bus.read_halfword_address(pc);
-                    if self.bios_finished && debug {
-                        print!("    {:04X}: ", opcode);
-                    }
-
-                    let instruction = decode_thumb(opcode, pc);
-
-                    if self.bios_finished && debug {
-                        println!("{}", instruction);
-                    }
+                    let instruction = thumb::decode_thumb(opcode, pc);
 
                     self.write_register(pc + 2, Register::R15);
                     self.execute_thumb(instruction);
                 }
-            }
-
-            if pc == 0x08000000 || pc == 0x0A000000 || pc == 0x0C000000 {
-                self.bios_finished = true;
-            } else if pc == 0x00000000 {
-                self.bios_finished = false;
             }
         }
 

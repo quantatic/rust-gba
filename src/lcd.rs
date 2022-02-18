@@ -855,18 +855,21 @@ impl Lcd {
             let sprite_x = obj.get_x_coordinate();
             let sprite_y = obj.get_y_coordinate();
 
-            let (sprite_offset_x, sprite_offset_y) = if obj.get_rotation_scaling_flag() {
-                let base_corner_offset_x = (pixel_x + WORLD_WIDTH - sprite_x) % WORLD_WIDTH;
-                let base_corner_offset_y = (pixel_y + WORLD_HEIGHT - sprite_y) % WORLD_HEIGHT;
+            let mut base_corner_offset_x = (pixel_x + WORLD_WIDTH - sprite_x) % WORLD_WIDTH;
+            let mut base_corner_offset_y = (pixel_y + WORLD_HEIGHT - sprite_y) % WORLD_HEIGHT;
 
-                if (!obj.get_double_size_flag()
+            if base_corner_offset_x >= (sprite_width * 2)
+                || base_corner_offset_y >= (sprite_height * 2)
+                || ((!obj.get_rotation_scaling_flag() || !obj.get_double_size_flag())
                     && (base_corner_offset_x >= sprite_width
                         || base_corner_offset_y >= sprite_height))
-                    || base_corner_offset_x >= (sprite_width * 2)
-                    || base_corner_offset_y >= (sprite_height * 2)
-                {
-                    continue;
-                }
+            {
+                continue;
+            }
+
+            let (sprite_offset_x, sprite_offset_y) = if obj.get_rotation_scaling_flag() {
+                let base_corner_offset_x = base_corner_offset_x;
+                let base_corner_offset_y = base_corner_offset_y;
 
                 let rotation_info_idx = obj.get_rotation_scaling_index();
                 let rotation_info = self.obj_rotations[usize::from(rotation_info_idx)];
@@ -923,20 +926,13 @@ impl Lcd {
                     continue;
                 }
 
-                let mut base_corner_offset_x = (pixel_x + WORLD_WIDTH - sprite_x) % WORLD_WIDTH;
-                let mut base_corner_offset_y = (pixel_y + WORLD_HEIGHT - sprite_y) % WORLD_HEIGHT;
-
-                if obj.get_obj_disable_flag()
-                    || base_corner_offset_x >= sprite_width
-                    || base_corner_offset_y >= sprite_height
-                {
-                    continue;
-                }
-
                 if obj.get_obj_mosaic() {
                     base_corner_offset_x -= base_corner_offset_x % obj_mosaic_horizontal;
                     base_corner_offset_y -= base_corner_offset_y % obj_mosaic_vertical;
                 }
+                let base_corner_offset_x = base_corner_offset_x;
+                let base_corner_offset_y = base_corner_offset_y;
+
                 let base_corner_offset_x = base_corner_offset_x;
                 let base_corner_offset_y = base_corner_offset_y;
 
@@ -966,23 +962,19 @@ impl Lcd {
 
             let base_tile_number = obj.get_tile_number();
 
-            let tile_number = match (self.get_obj_tile_mapping(), obj.get_palette_depth()) {
-                (ObjectTileMapping::OneDimensional, PaletteDepth::FourBit) => {
-                    base_tile_number + (sprite_tile_y * sprite_tile_width) + sprite_tile_x
-                }
-                (ObjectTileMapping::OneDimensional, PaletteDepth::EightBit) => {
-                    base_tile_number + (sprite_tile_y * sprite_tile_width * 2) + (sprite_tile_x * 2)
-                }
-                (ObjectTileMapping::TwoDimensional, PaletteDepth::FourBit) => {
-                    base_tile_number + (sprite_tile_y * 32) + sprite_tile_x
-                }
-                (ObjectTileMapping::TwoDimensional, PaletteDepth::EightBit) => {
-                    base_tile_number + (sprite_tile_y * 32) + (sprite_tile_x * 2)
-                }
-            };
-
             let palette_idx = match obj.get_palette_depth() {
                 PaletteDepth::EightBit => {
+                    let tile_number = match self.get_obj_tile_mapping() {
+                        ObjectTileMapping::OneDimensional => {
+                            base_tile_number
+                                + (sprite_tile_y * sprite_tile_width * 2)
+                                + (sprite_tile_x * 2)
+                        }
+                        ObjectTileMapping::TwoDimensional => {
+                            base_tile_number + (sprite_tile_y * 32) + (sprite_tile_x * 2)
+                        }
+                    };
+
                     let tile_idx = OBJ_TILE_DATA_VRAM_BASE
                         + (usize::from(tile_number) * 32)
                         + (usize::from(tile_offset_y) * 8)
@@ -997,6 +989,15 @@ impl Lcd {
                     palette_idx
                 }
                 PaletteDepth::FourBit => {
+                    let tile_number = match self.get_obj_tile_mapping() {
+                        ObjectTileMapping::OneDimensional => {
+                            base_tile_number + (sprite_tile_y * sprite_tile_width) + sprite_tile_x
+                        }
+                        ObjectTileMapping::TwoDimensional => {
+                            base_tile_number + (sprite_tile_y * 32) + sprite_tile_x
+                        }
+                    };
+
                     let tile_idx = OBJ_TILE_DATA_VRAM_BASE
                         + (usize::from(tile_number) * 32)
                         + (usize::from(tile_offset_y) * 4)
