@@ -1,8 +1,10 @@
-use std::{fmt::Display, ops::RangeInclusive};
-
 use crate::BitManipulation;
 
 use super::{Cpu, ExceptionType, InstructionCondition, Register, ShiftType};
+
+use cached::proc_macro::cached;
+
+use std::{fmt::Display, ops::RangeInclusive};
 
 #[derive(Clone, Copy, Debug)]
 pub enum ThumbRegisterOperation {
@@ -131,16 +133,10 @@ pub enum ThumbInstructionType {
 #[derive(Clone, Copy, Debug)]
 pub struct ThumbInstruction {
     instruction_type: ThumbInstructionType,
-    address: u32,
 }
 
-impl ThumbInstruction {
-    pub fn get_address(&self) -> u32 {
-        self.address
-    }
-}
-
-pub fn decode_thumb(opcode: u16, address: u32) -> ThumbInstruction {
+#[cached(size = 1024)]
+pub fn decode_thumb(opcode: u16) -> ThumbInstruction {
     let maybe_instruction_type = None
         .or_else(|| try_decode_thumb_register_operation(opcode))
         .or_else(|| try_decode_thumb_memory_load_store(opcode))
@@ -154,10 +150,7 @@ pub fn decode_thumb(opcode: u16, address: u32) -> ThumbInstruction {
         todo!("unrecognized Thumb opcode {:04X}", opcode)
     };
 
-    ThumbInstruction {
-        instruction_type,
-        address,
-    }
+    ThumbInstruction { instruction_type }
 }
 
 fn try_decode_thumb_register_operation(opcode: u16) -> Option<ThumbInstructionType> {

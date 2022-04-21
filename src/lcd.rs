@@ -537,276 +537,265 @@ impl Lcd {
             let pixel_x = self.dot;
             let pixel_y = self.vcount;
 
-            if true {
-                let current_mode = self.get_bg_mode();
-                let display_frame = self.get_display_frame();
+            let current_mode = self.get_bg_mode();
+            let display_frame = self.get_display_frame();
 
-                // if pixel_x == 0 && pixel_y == 0 {
-                //     println!("{:?}", current_mode);
-                //     println!(
-                //         "{}, {}, {}, {}",
-                //         self.get_screen_display_bg_0(),
-                //         self.get_screen_display_bg_1(),
-                //         self.get_screen_display_bg_2(),
-                //         self.get_screen_display_bg_3()
-                //     );
-                // }
+            // if pixel_x == 0 && pixel_y == 0 {
+            //     println!("{:?}", current_mode);
+            //     println!(
+            //         "{}, {}, {}, {}",
+            //         self.get_screen_display_bg_0(),
+            //         self.get_screen_display_bg_1(),
+            //         self.get_screen_display_bg_2(),
+            //         self.get_screen_display_bg_3()
+            //     );
+            // }
 
-                let obj_mosaic_horizontal = self.get_obj_mosaic_horizontal();
-                let obj_mosaic_vertical = self.get_obj_mosaic_vertical();
-                let sprite_pixel_query_info = self.get_sprite_pixel(
-                    pixel_x,
-                    pixel_y,
-                    obj_mosaic_horizontal,
-                    obj_mosaic_vertical,
-                );
-                let displayed_selection = self.get_displayed_selection(
-                    pixel_x,
-                    pixel_y,
-                    sprite_pixel_query_info.obj_window,
-                );
+            let obj_mosaic_horizontal = self.get_obj_mosaic_horizontal();
+            let obj_mosaic_vertical = self.get_obj_mosaic_vertical();
+            let sprite_pixel_query_info =
+                self.get_sprite_pixel(pixel_x, pixel_y, obj_mosaic_horizontal, obj_mosaic_vertical);
+            let displayed_selection =
+                self.get_displayed_selection(pixel_x, pixel_y, sprite_pixel_query_info.obj_window);
 
-                let bg_mosaic_horizontal = self.get_bg_mosaic_horizontal();
-                let bg_mosaic_vertical = self.get_bg_mosaic_vertical();
+            let bg_mosaic_horizontal = self.get_bg_mosaic_horizontal();
+            let bg_mosaic_vertical = self.get_bg_mosaic_vertical();
 
-                let layer_0_pixel_info = if displayed_selection.bg0_displayed {
-                    self.layer_0
-                        .get_pixel(
-                            pixel_x,
-                            pixel_y,
-                            bg_mosaic_horizontal,
-                            bg_mosaic_vertical,
-                            current_mode,
-                            self.vram.as_slice(),
-                            self.bg_palette_ram.as_slice(),
+            let layer_0_pixel_info = if displayed_selection.bg0_displayed {
+                self.layer_0
+                    .get_pixel(
+                        pixel_x,
+                        pixel_y,
+                        bg_mosaic_horizontal,
+                        bg_mosaic_vertical,
+                        current_mode,
+                        self.vram.as_slice(),
+                        self.bg_palette_ram.as_slice(),
+                    )
+                    .map(|color| PixelInfo {
+                        color,
+                        priority: self.layer_0.get_priority(),
+                        pixel_type: PixelType::Layer0,
+                    })
+            } else {
+                None
+            };
+
+            let layer_1_pixel_info = if displayed_selection.bg1_displayed {
+                self.layer_1
+                    .get_pixel(
+                        pixel_x,
+                        pixel_y,
+                        bg_mosaic_horizontal,
+                        bg_mosaic_vertical,
+                        current_mode,
+                        self.vram.as_slice(),
+                        self.bg_palette_ram.as_slice(),
+                    )
+                    .map(|color| PixelInfo {
+                        color,
+                        priority: self.layer_1.get_priority(),
+                        pixel_type: PixelType::Layer1,
+                    })
+            } else {
+                None
+            };
+
+            let layer_2_pixel_info = if displayed_selection.bg2_displayed {
+                self.layer_2
+                    .get_pixel(
+                        pixel_x,
+                        pixel_y,
+                        bg_mosaic_horizontal,
+                        bg_mosaic_vertical,
+                        current_mode,
+                        display_frame,
+                        self.vram.as_slice(),
+                        self.bg_palette_ram.as_slice(),
+                    )
+                    .map(|color| PixelInfo {
+                        color,
+                        priority: self.layer_2.get_priority(),
+                        pixel_type: PixelType::Layer2,
+                    })
+            } else {
+                None
+            };
+
+            let layer_3_pixel_info = if displayed_selection.bg3_displayed {
+                self.layer_3
+                    .get_pixel(
+                        pixel_x,
+                        pixel_y,
+                        bg_mosaic_horizontal,
+                        bg_mosaic_vertical,
+                        current_mode,
+                        self.vram.as_slice(),
+                        self.bg_palette_ram.as_slice(),
+                    )
+                    .map(|color| PixelInfo {
+                        color,
+                        priority: self.layer_3.get_priority(),
+                        pixel_type: PixelType::Layer3,
+                    })
+            } else {
+                None
+            };
+
+            let sprite_pixel_info = if displayed_selection.obj_displayed {
+                sprite_pixel_query_info
+                    .sprite_pixel_info
+                    .map(|sprite_pixel_info| sprite_pixel_info.pixel_info)
+            } else {
+                None
+            };
+
+            let mut pixels = [
+                sprite_pixel_info,
+                layer_0_pixel_info,
+                layer_1_pixel_info,
+                layer_2_pixel_info,
+                layer_3_pixel_info,
+            ];
+            pixels.sort_by(|pixel_one, pixel_two| match (pixel_one, pixel_two) {
+                (
+                    Some(PixelInfo {
+                        priority: priority_one,
+                        ..
+                    }),
+                    Some(PixelInfo {
+                        priority: priority_two,
+                        ..
+                    }),
+                ) => Ord::cmp(&priority_one, &priority_two),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            });
+            let pixels = pixels;
+
+            let drawn_pixel = match (
+                displayed_selection.effects_displayed,
+                self.get_color_special_effect(),
+            ) {
+                (true, ColorSpecialEffect::AlphaBlending) => {
+                    let first_pixel = pixels[0];
+                    let second_pixel = pixels[1];
+
+                    // sanity check to ensure array was properly sorted.
+                    assert!(first_pixel.is_some() || second_pixel.is_none());
+
+                    let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
+
+                    let first_pixel_info = if let Some(PixelInfo {
+                        color, pixel_type, ..
+                    }) = first_pixel
+                    {
+                        (color, pixel_type)
+                    } else {
+                        backdrop_info
+                    };
+
+                    let second_pixel_info = if let Some(PixelInfo {
+                        color, pixel_type, ..
+                    }) = second_pixel
+                    {
+                        (color, pixel_type)
+                    } else {
+                        backdrop_info
+                    };
+
+                    if self.special_effect_first_pixel(first_pixel_info.1)
+                        && self.special_effect_second_pixel(second_pixel_info.1)
+                    {
+                        first_pixel_info.0.blend(
+                            self.get_alpha_first_target_coefficient(),
+                            second_pixel_info.0,
+                            self.get_alpha_second_target_coefficient(),
                         )
-                        .map(|color| PixelInfo {
-                            color,
-                            priority: self.layer_0.get_priority(),
-                            pixel_type: PixelType::Layer0,
-                        })
-                } else {
-                    None
-                };
+                    } else {
+                        first_pixel_info.0
+                    }
+                }
+                (true, ColorSpecialEffect::BrightnessIncrease) => {
+                    let pixel = pixels[0];
 
-                let layer_1_pixel_info = if displayed_selection.bg1_displayed {
-                    self.layer_1
-                        .get_pixel(
-                            pixel_x,
-                            pixel_y,
-                            bg_mosaic_horizontal,
-                            bg_mosaic_vertical,
-                            current_mode,
-                            self.vram.as_slice(),
-                            self.bg_palette_ram.as_slice(),
-                        )
-                        .map(|color| PixelInfo {
-                            color,
-                            priority: self.layer_1.get_priority(),
-                            pixel_type: PixelType::Layer1,
-                        })
-                } else {
-                    None
-                };
+                    let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
 
-                let layer_2_pixel_info = if displayed_selection.bg2_displayed {
-                    self.layer_2
-                        .get_pixel(
-                            pixel_x,
-                            pixel_y,
-                            bg_mosaic_horizontal,
-                            bg_mosaic_vertical,
-                            current_mode,
-                            display_frame,
-                            self.vram.as_slice(),
-                            self.bg_palette_ram.as_slice(),
-                        )
-                        .map(|color| PixelInfo {
-                            color,
-                            priority: self.layer_2.get_priority(),
-                            pixel_type: PixelType::Layer2,
-                        })
-                } else {
-                    None
-                };
-
-                let layer_3_pixel_info = if displayed_selection.bg3_displayed {
-                    self.layer_3
-                        .get_pixel(
-                            pixel_x,
-                            pixel_y,
-                            bg_mosaic_horizontal,
-                            bg_mosaic_vertical,
-                            current_mode,
-                            self.vram.as_slice(),
-                            self.bg_palette_ram.as_slice(),
-                        )
-                        .map(|color| PixelInfo {
-                            color,
-                            priority: self.layer_3.get_priority(),
-                            pixel_type: PixelType::Layer3,
-                        })
-                } else {
-                    None
-                };
-
-                let sprite_pixel_info = if displayed_selection.obj_displayed {
-                    sprite_pixel_query_info
-                        .sprite_pixel_info
-                        .map(|sprite_pixel_info| sprite_pixel_info.pixel_info)
-                } else {
-                    None
-                };
-
-                let mut pixels = [
-                    sprite_pixel_info,
-                    layer_0_pixel_info,
-                    layer_1_pixel_info,
-                    layer_2_pixel_info,
-                    layer_3_pixel_info,
-                ];
-                pixels.sort_by(|pixel_one, pixel_two| match (pixel_one, pixel_two) {
-                    (
-                        Some(PixelInfo {
-                            priority: priority_one,
-                            ..
-                        }),
-                        Some(PixelInfo {
-                            priority: priority_two,
-                            ..
-                        }),
-                    ) => Ord::cmp(&priority_one, &priority_two),
-                    (Some(_), None) => Ordering::Less,
-                    (None, Some(_)) => Ordering::Greater,
-                    (None, None) => Ordering::Equal,
-                });
-                let pixels = pixels;
-
-                let drawn_pixel = match (
-                    displayed_selection.effects_displayed,
-                    self.get_color_special_effect(),
-                ) {
-                    (true, ColorSpecialEffect::AlphaBlending) => {
-                        let first_pixel = pixels[0];
-                        let second_pixel = pixels[1];
-
-                        // sanity check to ensure array was properly sorted.
-                        assert!(first_pixel.is_some() || second_pixel.is_none());
-
-                        let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
-
-                        let first_pixel_info = if let Some(PixelInfo {
+                    let (pixel_color, pixel_type) =
+                        if let Some(PixelInfo {
                             color, pixel_type, ..
-                        }) = first_pixel
+                        }) = pixel
                         {
                             (color, pixel_type)
                         } else {
                             backdrop_info
                         };
 
-                        let second_pixel_info = if let Some(PixelInfo {
+                    if self.special_effect_first_pixel(pixel_type) {
+                        let new_red = pixel_color.red
+                            + ((f64::from(31 - pixel_color.red) * self.get_brightness_coefficient())
+                                as u8);
+                        let new_green = pixel_color.green
+                            + ((f64::from(31 - pixel_color.green)
+                                * self.get_brightness_coefficient())
+                                as u8);
+                        let new_blue = pixel_color.blue
+                            + ((f64::from(31 - pixel_color.blue)
+                                * self.get_brightness_coefficient())
+                                as u8);
+
+                        Rgb555 {
+                            red: new_red,
+                            green: new_green,
+                            blue: new_blue,
+                        }
+                    } else {
+                        pixel_color
+                    }
+                }
+                (true, ColorSpecialEffect::BrightnessDecrease) => {
+                    let pixel = pixels[0];
+
+                    let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
+
+                    let (pixel_color, pixel_type) =
+                        if let Some(PixelInfo {
                             color, pixel_type, ..
-                        }) = second_pixel
+                        }) = pixel
                         {
                             (color, pixel_type)
                         } else {
                             backdrop_info
                         };
 
-                        if self.special_effect_first_pixel(first_pixel_info.1)
-                            && self.special_effect_second_pixel(second_pixel_info.1)
-                        {
-                            first_pixel_info.0.blend(
-                                self.get_alpha_first_target_coefficient(),
-                                second_pixel_info.0,
-                                self.get_alpha_second_target_coefficient(),
-                            )
-                        } else {
-                            first_pixel_info.0
+                    if self.special_effect_first_pixel(pixel_type) {
+                        let new_red = pixel_color.red
+                            - ((f64::from(pixel_color.red) * self.get_brightness_coefficient())
+                                as u8);
+                        let new_green = pixel_color.green
+                            - ((f64::from(pixel_color.green) * self.get_brightness_coefficient())
+                                as u8);
+                        let new_blue = pixel_color.blue
+                            - ((f64::from(pixel_color.blue) * self.get_brightness_coefficient())
+                                as u8);
+
+                        Rgb555 {
+                            red: new_red,
+                            green: new_green,
+                            blue: new_blue,
                         }
+                    } else {
+                        pixel_color
                     }
-                    (true, ColorSpecialEffect::BrightnessIncrease) => {
-                        let pixel = pixels[0];
+                }
+                (true, ColorSpecialEffect::None) | (false, _) => match pixels[0] {
+                    Some(PixelInfo { color, .. }) => color,
+                    None => self.bg_palette_ram[0],
+                },
+            };
 
-                        let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
-
-                        let (pixel_color, pixel_type) =
-                            if let Some(PixelInfo {
-                                color, pixel_type, ..
-                            }) = pixel
-                            {
-                                (color, pixel_type)
-                            } else {
-                                backdrop_info
-                            };
-
-                        if self.special_effect_first_pixel(pixel_type) {
-                            let new_red = pixel_color.red
-                                + ((f64::from(31 - pixel_color.red)
-                                    * self.get_brightness_coefficient())
-                                    as u8);
-                            let new_green = pixel_color.green
-                                + ((f64::from(31 - pixel_color.green)
-                                    * self.get_brightness_coefficient())
-                                    as u8);
-                            let new_blue = pixel_color.blue
-                                + ((f64::from(31 - pixel_color.blue)
-                                    * self.get_brightness_coefficient())
-                                    as u8);
-
-                            Rgb555 {
-                                red: new_red,
-                                green: new_green,
-                                blue: new_blue,
-                            }
-                        } else {
-                            pixel_color
-                        }
-                    }
-                    (true, ColorSpecialEffect::BrightnessDecrease) => {
-                        let pixel = pixels[0];
-
-                        let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
-
-                        let (pixel_color, pixel_type) =
-                            if let Some(PixelInfo {
-                                color, pixel_type, ..
-                            }) = pixel
-                            {
-                                (color, pixel_type)
-                            } else {
-                                backdrop_info
-                            };
-
-                        if self.special_effect_first_pixel(pixel_type) {
-                            let new_red = pixel_color.red
-                                - ((f64::from(pixel_color.red) * self.get_brightness_coefficient())
-                                    as u8);
-                            let new_green = pixel_color.green
-                                - ((f64::from(pixel_color.green)
-                                    * self.get_brightness_coefficient())
-                                    as u8);
-                            let new_blue = pixel_color.blue
-                                - ((f64::from(pixel_color.blue) * self.get_brightness_coefficient())
-                                    as u8);
-
-                            Rgb555 {
-                                red: new_red,
-                                green: new_green,
-                                blue: new_blue,
-                            }
-                        } else {
-                            pixel_color
-                        }
-                    }
-                    (true, ColorSpecialEffect::None) | (false, _) => match pixels[0] {
-                        Some(PixelInfo { color, .. }) => color,
-                        None => self.bg_palette_ram[0],
-                    },
-                };
-
-                self.back_buffer[usize::from(pixel_y)][usize::from(pixel_x)] = drawn_pixel;
-            }
+            self.back_buffer[usize::from(pixel_y)][usize::from(pixel_x)] = drawn_pixel;
         }
 
         self.dot += 1;

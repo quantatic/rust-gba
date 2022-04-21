@@ -2,6 +2,8 @@ use super::{Cpu, ExceptionType, InstructionCondition, Register, ShiftType};
 
 use crate::{BitManipulation, DataAccess, DEBUG_AND_PANIC_ON_LOOP};
 
+use cached::proc_macro::cached;
+
 use std::fmt::Display;
 use std::ops::RangeInclusive;
 
@@ -106,13 +108,6 @@ enum ArmInstructionType {
 pub struct ArmInstruction {
     instruction_type: ArmInstructionType,
     condition: InstructionCondition,
-    address: u32,
-}
-
-impl ArmInstruction {
-    pub fn get_address(&self) -> u32 {
-        self.address
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -375,17 +370,46 @@ pub enum MsrSourceInfo {
     Immediate { value: u32 },
 }
 
-pub fn decode_arm(opcode: u32, address: u32) -> ArmInstruction {
+#[cached]
+pub fn decode_arm(opcode: u32) -> ArmInstruction {
     let condition = opcode.get_condition();
 
-    let maybe_instruction_type = None
-        .or_else(|| try_decode_arm_branch(opcode))
-        .or_else(|| try_decode_arm_single_data_transfer(opcode))
-        .or_else(|| try_decode_arm_data_process(opcode))
-        .or_else(|| try_decode_arm_multiply(opcode))
-        .or_else(|| try_decode_arm_psr_transfer(opcode))
-        .or_else(|| try_decode_arm_block_data_transfer(opcode))
-        .or_else(|| try_decode_arm_single_data_swap(opcode));
+    const OPCODE_MASK: u32 = 0b00001110_00000000_00000000_00000000;
+    const MUST_BE_000: u32 = 0b00000000_00000000_00000000_00000000;
+    const MUST_BE_001: u32 = 0b00000010_00000000_00000000_00000000;
+    const MUST_BE_010: u32 = 0b00000100_00000000_00000000_00000000;
+    const MUST_BE_011: u32 = 0b00000110_00000000_00000000_00000000;
+    const MUST_BE_100: u32 = 0b00001000_00000000_00000000_00000000;
+    const MUST_BE_101: u32 = 0b00001010_00000000_00000000_00000000;
+    const MUST_BE_110: u32 = 0b00001100_00000000_00000000_00000000;
+    const MUST_BE_111: u32 = 0b00001110_00000000_00000000_00000000;
+
+    let mask_result = opcode & OPCODE_MASK;
+    let maybe_instruction_type = if mask_result == MUST_BE_000 {
+        None.or_else(|| try_decode_arm_branch_exchange(opcode))
+            .or_else(|| try_decode_arm_data_process(opcode))
+            .or_else(|| try_decode_arm_multiply(opcode))
+            .or_else(|| try_decode_arm_psr_transfer(opcode))
+            .or_else(|| try_decode_arm_special_single_data_transfer(opcode))
+            .or_else(|| try_decode_arm_single_data_swap(opcode))
+    } else if mask_result == MUST_BE_001 {
+        None.or_else(|| try_decode_arm_data_process(opcode))
+            .or_else(|| try_decode_arm_psr_transfer(opcode))
+    } else if mask_result == MUST_BE_010 {
+        try_decode_arm_single_data_transfer(opcode)
+    } else if mask_result == MUST_BE_011 {
+        try_decode_arm_single_data_transfer(opcode)
+    } else if mask_result == MUST_BE_100 {
+        try_decode_arm_block_data_transfer(opcode)
+    } else if mask_result == MUST_BE_101 {
+        try_decode_arm_branch_basic(opcode)
+    } else if mask_result == MUST_BE_110 {
+        unreachable!()
+    } else if mask_result == MUST_BE_111 {
+        try_decode_arm_swi(opcode)
+    } else {
+        unreachable!()
+    };
 
     let instruction_type = if let Some(instruction_type) = maybe_instruction_type {
         instruction_type
@@ -396,7 +420,6 @@ pub fn decode_arm(opcode: u32, address: u32) -> ArmInstruction {
     ArmInstruction {
         condition,
         instruction_type,
-        address,
     }
 }
 

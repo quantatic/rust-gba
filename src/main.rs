@@ -25,9 +25,6 @@ use data_access::DataAccess;
 use crate::cpu::{Cpu, Instruction};
 use crate::keypad::Key;
 
-#[cfg(target_pointer_width = "16")]
-compile_error!("architecture with pointer size >= 32 required");
-
 const DEBUG_AND_PANIC_ON_LOOP: bool = false;
 
 const CYCLES_PER_SECOND: u64 = 16_777_216;
@@ -56,7 +53,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cartridge = cartridge::Cartridge::new(ROM);
     let mut cpu = cpu::Cpu::new(cartridge);
 
-    let mut i = 0;
     let mut last_step = Instant::now();
     event_loop.run(move |event, _, control_flow| {
         match event {
