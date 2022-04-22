@@ -8,7 +8,7 @@ mod keypad;
 mod lcd;
 mod timer;
 
-use std::{error::Error, hash::Hasher, panic::PanicInfo, sync::Mutex, time::Instant};
+use std::{error::Error, hash::Hasher, time::Instant};
 
 use pixels::{wgpu::TextureFormat, PixelsBuilder, SurfaceTexture};
 use winit::event_loop::EventLoop;
@@ -22,7 +22,7 @@ use xxhash_rust::xxh3::Xxh3;
 use bit_manipulation::BitManipulation;
 use data_access::DataAccess;
 
-use crate::cpu::{Cpu, Instruction};
+use crate::cpu::Cpu;
 use crate::keypad::Key;
 
 const DEBUG_AND_PANIC_ON_LOOP: bool = false;
@@ -53,7 +53,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cartridge = cartridge::Cartridge::new(ROM);
     let mut cpu = cpu::Cpu::new(cartridge);
 
+    let mut init = Instant::now();
     let mut last_step = Instant::now();
+    let mut i = 0;
     event_loop.run(move |event, _, control_flow| {
         match event {
             Event::MainEventsCleared => {
@@ -76,6 +78,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 window.set_title(format!("FPS: {}", fps).as_str());
 
                 last_step = Instant::now();
+                i += 1;
+                if i >= 1000 {
+                    *control_flow = ControlFlow::Exit;
+                    println!("took: {:?}", init.elapsed());
+                }
             }
             Event::WindowEvent {
                 event: WindowEvent::Resized(new_size),

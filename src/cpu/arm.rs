@@ -370,7 +370,6 @@ pub enum MsrSourceInfo {
     Immediate { value: u32 },
 }
 
-#[cached]
 pub fn decode_arm(opcode: u32) -> ArmInstruction {
     let condition = opcode.get_condition();
 

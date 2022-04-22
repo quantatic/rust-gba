@@ -1,6 +1,7 @@
 mod arm;
 mod thumb;
 
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::{fmt::Debug, ops::RangeInclusive};
 
@@ -13,20 +14,7 @@ use crate::DEBUG_AND_PANIC_ON_LOOP;
 pub use self::arm::ArmInstruction;
 pub use self::thumb::ThumbInstruction;
 
-#[derive(Debug)]
-pub enum Instruction {
-    ArmInstruction(ArmInstruction),
-    ThumbInstruction(ThumbInstruction),
-}
-
-impl Display for Instruction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Instruction::ArmInstruction(instruction) => write!(f, "{}", instruction),
-            Instruction::ThumbInstruction(instruction) => write!(f, "{}", instruction),
-        }
-    }
-}
+type InstructionCache<T, U> = BTreeMap<T, U>;
 
 pub struct Cpu {
     r0: u32,
@@ -68,6 +56,8 @@ pub struct Cpu {
     spsr_und: u32,
     cycle_count: u64,
     pub bus: Bus,
+    arm_cache: InstructionCache<u32, ArmInstruction>,
+    thumb_cache: InstructionCache<u16, ThumbInstruction>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -124,6 +114,8 @@ impl Cpu {
             spsr_und: 0,
             cycle_count: 0,
             bus: Bus::new(cartridge),
+            arm_cache: Default::default(),
+            thumb_cache: Default::default(),
         }
     }
 }
@@ -399,30 +391,6 @@ impl Cpu {
         }
     }
 
-    fn write_register_double(&mut self, values: (u32, u32), first_register: Register) {
-        let second_register = match first_register {
-            Register::R0 => Register::R1,
-            Register::R1 => Register::R2,
-            Register::R2 => Register::R3,
-            Register::R3 => Register::R4,
-            Register::R4 => Register::R5,
-            Register::R5 => Register::R6,
-            Register::R6 => Register::R7,
-            Register::R7 => Register::R8,
-            Register::R8 => Register::R9,
-            Register::R9 => Register::R10,
-            Register::R10 => Register::R11,
-            Register::R11 => Register::R12,
-            Register::R12 => Register::R13,
-            Register::R13 => Register::R14,
-            Register::R14 => Register::R15,
-            _ => unreachable!("double register write to {}", first_register),
-        };
-
-        self.write_register(values.0, first_register);
-        self.write_register(values.1, second_register);
-    }
-
     fn read_register(&self, register: Register, pc_calculation: fn(u32) -> u32) -> u32 {
         match (self.get_cpu_mode(), register) {
             (_, Register::R0) => self.r0,
@@ -539,7 +507,14 @@ impl Cpu {
 
                     let opcode = self.bus.read_word_address(pc);
 
-                    let instruction = arm::decode_arm(opcode);
+                    let instruction = match self.arm_cache.get(&opcode) {
+                        Some(&cached) => cached,
+                        None => {
+                            let decoded = arm::decode_arm(opcode);
+                            self.arm_cache.insert(opcode, decoded);
+                            decoded
+                        }
+                    };
 
                     self.write_register(pc + 4, Register::R15);
                     self.execute_arm(instruction);
@@ -551,7 +526,14 @@ impl Cpu {
 
                     let opcode = self.bus.read_halfword_address(pc);
 
-                    let instruction = thumb::decode_thumb(opcode);
+                    let instruction = match self.thumb_cache.get(&opcode) {
+                        Some(&cached) => cached,
+                        None => {
+                            let decoded = thumb::decode_thumb(opcode);
+                            self.thumb_cache.insert(opcode, decoded);
+                            decoded
+                        }
+                    };
 
                     self.write_register(pc + 2, Register::R15);
                     self.execute_thumb(instruction);

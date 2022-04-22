@@ -18,6 +18,6 @@ xxhash-rust = { version = "0.8.3", features = ["xxh3"] }
 [profile.release]
 opt-level = 3
 debug = 2
-overflow-checks = true
+# overflow-checks = true
 # lto = true
 # codegen-units = 1

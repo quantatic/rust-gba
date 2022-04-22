@@ -135,7 +135,6 @@ pub struct ThumbInstruction {
     instruction_type: ThumbInstructionType,
 }
 
-#[cached(size = 1024)]
 pub fn decode_thumb(opcode: u16) -> ThumbInstruction {
     let maybe_instruction_type = None
         .or_else(|| try_decode_thumb_register_operation(opcode))

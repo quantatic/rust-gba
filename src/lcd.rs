@@ -540,17 +540,6 @@ impl Lcd {
             let current_mode = self.get_bg_mode();
             let display_frame = self.get_display_frame();
 
-            // if pixel_x == 0 && pixel_y == 0 {
-            //     println!("{:?}", current_mode);
-            //     println!(
-            //         "{}, {}, {}, {}",
-            //         self.get_screen_display_bg_0(),
-            //         self.get_screen_display_bg_1(),
-            //         self.get_screen_display_bg_2(),
-            //         self.get_screen_display_bg_3()
-            //     );
-            // }
-
             let obj_mosaic_horizontal = self.get_obj_mosaic_horizontal();
             let obj_mosaic_vertical = self.get_obj_mosaic_vertical();
             let sprite_pixel_query_info =
@@ -832,7 +821,7 @@ impl Lcd {
         const WORLD_WIDTH: u16 = 512;
         const WORLD_HEIGHT: u16 = 256;
 
-        let mut sprite_pixel_info = None;
+        let mut sprite_pixel_info: Option<SpritePixelInfo> = None;
 
         let mut obj_window = false;
 
@@ -919,8 +908,6 @@ impl Lcd {
                     base_corner_offset_x -= base_corner_offset_x % obj_mosaic_horizontal;
                     base_corner_offset_y -= base_corner_offset_y % obj_mosaic_vertical;
                 }
-                let base_corner_offset_x = base_corner_offset_x;
-                let base_corner_offset_y = base_corner_offset_y;
 
                 let base_corner_offset_x = base_corner_offset_x;
                 let base_corner_offset_y = base_corner_offset_y;
@@ -1017,9 +1004,20 @@ impl Lcd {
                 }
             };
 
+            let priority = obj.get_bg_priority();
+
+            // If we've already found a pixel and our new pixel has lower priority (keeping)
+            // in mind that values closer to zero are considered higher priority, then don't
+            // bother recording this pixel.
+            if let Some(info) = sprite_pixel_info {
+                if info.pixel_info.priority <= priority {
+                    continue;
+                };
+            }
+
             let new_pixel_info = PixelInfo {
                 color: self.obj_palette_ram[usize::from(palette_idx)],
-                priority: obj.get_bg_priority(),
+                priority,
                 pixel_type: PixelType::Sprite,
             };
 
@@ -1028,23 +1026,7 @@ impl Lcd {
                 semi_transparent,
             };
 
-            sprite_pixel_info = match sprite_pixel_info {
-                Some(SpritePixelInfo {
-                    pixel_info:
-                        PixelInfo {
-                            priority: old_priority,
-                            ..
-                        },
-                    ..
-                }) => {
-                    if old_priority <= new_pixel_info.priority {
-                        sprite_pixel_info
-                    } else {
-                        Some(new_sprite_pixel_info)
-                    }
-                }
-                None => Some(new_sprite_pixel_info),
-            }
+            sprite_pixel_info = Some(new_sprite_pixel_info);
         }
 
         SpritePixelQueryInfo {
