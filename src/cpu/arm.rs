@@ -2,8 +2,6 @@ use super::{Cpu, ExceptionType, InstructionCondition, Register, ShiftType};
 
 use crate::{BitManipulation, DataAccess, DEBUG_AND_PANIC_ON_LOOP};
 
-use cached::proc_macro::cached;
-
 use std::fmt::Display;
 use std::ops::RangeInclusive;
 

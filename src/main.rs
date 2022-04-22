@@ -8,8 +8,9 @@ mod keypad;
 mod lcd;
 mod timer;
 
-use std::{error::Error, hash::Hasher, time::Instant};
+use std::{error::Error, fs::File, hash::Hasher, time::Instant};
 
+use clap::Parser;
 use pixels::{wgpu::TextureFormat, PixelsBuilder, SurfaceTexture};
 use winit::event_loop::EventLoop;
 use winit::{
@@ -29,9 +30,20 @@ const DEBUG_AND_PANIC_ON_LOOP: bool = false;
 
 const CYCLES_PER_SECOND: u64 = 16_777_216;
 
-const ROM: &[u8] = include_bytes!("../emerald.gba");
+#[derive(Debug, Parser)]
+struct Args {
+    rom: String,
+
+    #[clap(short, long)]
+    frames: Option<u64>,
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let args = Args::parse();
+
+    let rom_file =
+        File::open(&args.rom).expect(format!("failed to open ROM file \"{}\"", args.rom).as_str());
+
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("Quantatic's GBA Emulator")
@@ -46,14 +58,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             surface_texture,
         )
         .texture_format(TextureFormat::Rgba8UnormSrgb)
-        .enable_vsync(false)
+        .enable_vsync(true)
         .build()?
     };
 
-    let cartridge = cartridge::Cartridge::new(ROM);
+    let cartridge = cartridge::Cartridge::new(rom_file);
     let mut cpu = cpu::Cpu::new(cartridge);
 
-    let mut init = Instant::now();
+    let init = Instant::now();
     let mut last_step = Instant::now();
     let mut i = 0;
     event_loop.run(move |event, _, control_flow| {
@@ -78,11 +90,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 window.set_title(format!("FPS: {}", fps).as_str());
 
                 last_step = Instant::now();
+                match args.frames {
+                    Some(frames) if i >= frames => *control_flow = ControlFlow::Exit,
+                    _ => {}
+                };
+
                 i += 1;
-                if i >= 1000 {
-                    *control_flow = ControlFlow::Exit;
-                    println!("took: {:?}", init.elapsed());
-                }
             }
             Event::WindowEvent {
                 event: WindowEvent::Resized(new_size),
@@ -134,6 +147,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 window_id,
                 ..
             } if window_id == window.id() => *control_flow = ControlFlow::Exit,
+            Event::LoopDestroyed => println!("ran for {:?}", init.elapsed()),
             _ => {}
         };
     });

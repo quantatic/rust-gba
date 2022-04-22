@@ -2,8 +2,6 @@ use crate::BitManipulation;
 
 use super::{Cpu, ExceptionType, InstructionCondition, Register, ShiftType};
 
-use cached::proc_macro::cached;
-
 use std::{fmt::Display, ops::RangeInclusive};
 
 #[derive(Clone, Copy, Debug)]

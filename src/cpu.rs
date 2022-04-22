@@ -507,14 +507,15 @@ impl Cpu {
 
                     let opcode = self.bus.read_word_address(pc);
 
-                    let instruction = match self.arm_cache.get(&opcode) {
-                        Some(&cached) => cached,
-                        None => {
-                            let decoded = arm::decode_arm(opcode);
-                            self.arm_cache.insert(opcode, decoded);
-                            decoded
-                        }
-                    };
+                    // let instruction = match self.arm_cache.get(&opcode) {
+                    //     Some(&cached) => cached,
+                    //     None => {
+                    //         let decoded = arm::decode_arm(opcode);
+                    //         self.arm_cache.insert(opcode, decoded);
+                    //         decoded
+                    //     }
+                    // };
+                    let instruction = arm::decode_arm(opcode);
 
                     self.write_register(pc + 4, Register::R15);
                     self.execute_arm(instruction);
@@ -526,14 +527,15 @@ impl Cpu {
 
                     let opcode = self.bus.read_halfword_address(pc);
 
-                    let instruction = match self.thumb_cache.get(&opcode) {
-                        Some(&cached) => cached,
-                        None => {
-                            let decoded = thumb::decode_thumb(opcode);
-                            self.thumb_cache.insert(opcode, decoded);
-                            decoded
-                        }
-                    };
+                    // let instruction = match self.thumb_cache.get(&opcode) {
+                    //     Some(&cached) => cached,
+                    //     None => {
+                    //         let decoded = thumb::decode_thumb(opcode);
+                    //         self.thumb_cache.insert(opcode, decoded);
+                    //         decoded
+                    //     }
+                    // };
+                    let instruction = thumb::decode_thumb(opcode);
 
                     self.write_register(pc + 2, Register::R15);
                     self.execute_thumb(instruction);

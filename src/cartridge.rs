@@ -2,7 +2,7 @@ mod backup_types;
 
 use backup_types::{BackupType, BACKUP_TYPES_MAP};
 
-use std::ops::Range;
+use std::{io::Read, ops::Range};
 
 use lazy_static::lazy_static;
 use regex::bytes::Regex;
@@ -30,7 +30,12 @@ pub struct Cartridge {
 }
 
 impl Cartridge {
-    pub fn new(data: &[u8]) -> Self {
+    pub fn new<T: Read>(mut input: T) -> Self {
+        let mut data = Vec::new();
+        input
+            .read_to_end(&mut data)
+            .expect("failed to read cartridge input data");
+
         const GAME_TITLE_BYTE_RANGE: Range<usize> = 0x0A0..0x0AC;
         const GAME_CODE_BYTE_RANGE: Range<usize> = 0x0AC..0x0B0;
 
@@ -72,10 +77,10 @@ impl Cartridge {
                 Some(BackupType::None) => todo!(),
                 None => {
                     println!("falling back to ROM string search for backup detection");
-                    let eeprom_match = EEPROM_PATTERN.is_match(data);
-                    let sram_match = SRAM_PATTERN.is_match(data);
-                    let flash64kb_match = FLASH_64KB_PATTERN.is_match(data);
-                    let flash128kb_match = FLASH_128KB_PATTERN.is_match(data);
+                    let eeprom_match = EEPROM_PATTERN.is_match(&data);
+                    let sram_match = SRAM_PATTERN.is_match(&data);
+                    let flash64kb_match = FLASH_64KB_PATTERN.is_match(&data);
+                    let flash128kb_match = FLASH_128KB_PATTERN.is_match(&data);
 
                     let num_matches = [eeprom_match, sram_match, flash64kb_match, flash128kb_match]
                         .into_iter()
@@ -96,7 +101,7 @@ impl Cartridge {
             }
         };
 
-        let rom = data.to_vec();
+        let rom = data;
 
         Self { rom, backup }
     }
