@@ -10,12 +10,25 @@ enum PrescalerInterval {
     Div1024,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Timer {
     tick: u64,
     counter: u16,
     reload: u16,
     control: u16,
+    prescaler_interval: PrescalerInterval,
+}
+
+impl Default for Timer {
+    fn default() -> Self {
+        Self {
+            tick: 0,
+            counter: 0,
+            reload: 0,
+            control: 0,
+            prescaler_interval: PrescalerInterval::Div1,
+        }
+    }
 }
 
 impl Timer {
@@ -82,21 +95,25 @@ impl Timer {
     where
         u16: DataAccess<T>,
     {
-        self.control = self.control.set_data(value, index);
-    }
-}
-
-impl Timer {
-    fn get_prescaler_interval(&self) -> PrescalerInterval {
         const PRESCALER_SELECTION_BIT_RANGE: RangeInclusive<usize> = 0..=1;
+        const COUNT_UP_TIMING_BIT_INDEX: usize = 2;
+        const TIMER_IRQ_ENABLE_BIT_INDEX: usize = 6;
+        const TIMER_START_STOP_BIT_INDEX: usize = 7;
 
-        match self.control.get_bit_range(PRESCALER_SELECTION_BIT_RANGE) {
+        self.control = self.control.set_data(value, index);
+        self.prescaler_interval = match self.control.get_bit_range(PRESCALER_SELECTION_BIT_RANGE) {
             0 => PrescalerInterval::Div1,
             1 => PrescalerInterval::Div64,
             2 => PrescalerInterval::Div256,
             3 => PrescalerInterval::Div1024,
             _ => unreachable!(),
-        }
+        };
+    }
+}
+
+impl Timer {
+    fn get_prescaler_interval(&self) -> PrescalerInterval {
+        return self.prescaler_interval;
     }
 
     fn get_count_up_timing(&self) -> bool {

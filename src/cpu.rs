@@ -103,7 +103,6 @@ impl Cpu {
         let r13_und = Rc::default();
         let r14_und = Rc::default();
 
-
         let user_registers = ModeRegisters {
             r0: Rc::clone(&r0),
             r1: Rc::clone(&r1),
@@ -493,7 +492,7 @@ impl Cpu {
                     }
                     registers.r15.set(value & !0b11);
                 }
-            },
+            }
             Register::Spsr => registers.spsr.set(value),
             Register::Cpsr => self.cpsr = value,
         }
@@ -527,10 +526,9 @@ impl Cpu {
             Register::R14 => registers.r14.get(),
             Register::R15 => pc_calculation(registers.r15.get()),
             Register::Spsr => registers.spsr.get(),
-            Register::Cpsr => self.cpsr
+            Register::Cpsr => self.cpsr,
         }
     }
-
 }
 
 impl Cpu {

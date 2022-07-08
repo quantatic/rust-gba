@@ -1482,6 +1482,13 @@ impl Bus {
         }
     }
 
+    const INTERRUPT_TYPE_LOOKUP: [InterruptType; 4] = [
+        InterruptType::Timer0,
+        InterruptType::Timer1,
+        InterruptType::Timer2,
+        InterruptType::Timer3,
+    ];
+
     fn step_timers(&mut self) {
         let mut timer_overflow = false;
         let mut interrupt_requests = [false; 4];
