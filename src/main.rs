@@ -172,53 +172,27 @@ mod tests {
 
     use super::*;
 
-    fn test_rom_ppu_checksum_matches(rom: &[u8], checksum: u64) {
-        let cartridge = Cartridge::new(rom);
-        let mut cpu = Cpu::new(cartridge);
+    macro_rules! test_ppu_checksum {
+        ($name:ident, $path:literal, $checksum:literal) => {
+            #[test]
+            fn $name() {
+                let source = include_bytes!($path);
+                let cartridge = Cartridge::new(source.as_slice());
+                let mut cpu = Cpu::new(cartridge);
 
-        for _ in 0..100_000_000 {
-            cpu.fetch_decode_execute(false);
-        }
+                for _ in 0..100_000_000 {
+                    cpu.fetch_decode_execute(false);
+                }
 
-        assert_eq!(calculate_lcd_checksum(&cpu), checksum);
+                assert_eq!(calculate_lcd_checksum(&cpu), $checksum);
+            }
+        };
     }
 
-    #[test]
-    fn test_eeprom() {
-        test_rom_ppu_checksum_matches(
-            include_bytes!("../tests/eeprom_test.gba"),
-            0x7AD21BBF19367764,
-        );
-    }
-
-    #[test]
-    fn test_flash() {
-        test_rom_ppu_checksum_matches(
-            include_bytes!("../tests/flash_test.gba"),
-            0x7AD21BBF19367764,
-        )
-    }
-
-    #[test]
-    fn test_mandelbrot() {
-        test_rom_ppu_checksum_matches(
-            include_bytes!("../tests/mandelbrot.gba"),
-            0x643CD59EBF90FAA9,
-        )
-    }
-
-    #[test]
-    fn test_memory() {
-        test_rom_ppu_checksum_matches(include_bytes!("../tests/memory.gba"), 0x740626E6CC2D204A)
-    }
-
-    #[test]
-    fn test_swi_demo() {
-        test_rom_ppu_checksum_matches(include_bytes!("../tests/swi_demo.gba"), 0xD55A7769AD7F9392);
-    }
-
-    #[test]
-    fn test_first() {
-        test_rom_ppu_checksum_matches(include_bytes!("../tests/first.gba"), 0x36B520E8A096B03C);
-    }
+    test_ppu_checksum!(eeprom, "../tests/eeprom_test.gba", 0x7AD21BBF19367764);
+    test_ppu_checksum!(flash, "../tests/flash_test.gba", 0x7AD21BBF19367764);
+    test_ppu_checksum!(mandelbrot, "../tests/mandelbrot.gba", 0x643CD59EBF90FAA9);
+    test_ppu_checksum!(memory, "../tests/memory.gba", 0x740626E6CC2D204A);
+    test_ppu_checksum!(swi_demo, "../tests/swi_demo.gba", 0xD55A7769AD7F9392);
+    test_ppu_checksum!(first, "../tests/first.gba", 0x36B520E8A096B03C);
 }
