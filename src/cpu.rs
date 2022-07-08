@@ -1,8 +1,10 @@
 mod arm;
 mod thumb;
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt::Display;
+use std::rc::Rc;
 use std::{fmt::Debug, ops::RangeInclusive};
 
 use crate::bus::Bus;
@@ -16,44 +18,34 @@ pub use self::thumb::ThumbInstruction;
 
 type InstructionCache<T, U> = BTreeMap<T, U>;
 
+struct ModeRegisters {
+    r0: Rc<Cell<u32>>,
+    r1: Rc<Cell<u32>>,
+    r2: Rc<Cell<u32>>,
+    r3: Rc<Cell<u32>>,
+    r4: Rc<Cell<u32>>,
+    r5: Rc<Cell<u32>>,
+    r6: Rc<Cell<u32>>,
+    r7: Rc<Cell<u32>>,
+    r8: Rc<Cell<u32>>,
+    r9: Rc<Cell<u32>>,
+    r10: Rc<Cell<u32>>,
+    r11: Rc<Cell<u32>>,
+    r12: Rc<Cell<u32>>,
+    r13: Rc<Cell<u32>>, // SP
+    r14: Rc<Cell<u32>>, // LR
+    r15: Rc<Cell<u32>>, // PC
+    spsr: Rc<Cell<u32>>,
+}
+
 pub struct Cpu {
-    r0: u32,
-    r1: u32,
-    r2: u32,
-    r3: u32,
-    r4: u32,
-    r5: u32,
-    r6: u32,
-    r7: u32,
-    r8: u32,
-    r9: u32,
-    r10: u32,
-    r11: u32,
-    r12: u32,
-    r13: u32, // SP
-    r14: u32, // LR
-    r15: u32, // PC
+    user_registers: ModeRegisters,
+    fiq_registers: ModeRegisters,
+    svc_registers: ModeRegisters,
+    abt_registers: ModeRegisters,
+    irq_registers: ModeRegisters,
+    und_registers: ModeRegisters,
     cpsr: u32,
-    r8_fiq: u32,
-    r9_fiq: u32,
-    r10_fiq: u32,
-    r11_fiq: u32,
-    r12_fiq: u32,
-    r13_fiq: u32,
-    r14_fiq: u32,
-    spsr_fiq: u32,
-    r13_svc: u32,
-    r14_svc: u32,
-    spsr_svc: u32,
-    r13_abt: u32,
-    r14_abt: u32,
-    spsr_abt: u32,
-    r13_irq: u32,
-    r14_irq: u32,
-    spsr_irq: u32,
-    r13_und: u32,
-    r14_und: u32,
-    spsr_und: u32,
     cycle_count: u64,
     pub bus: Bus,
     arm_cache: InstructionCache<u32, ArmInstruction>,
@@ -74,44 +66,172 @@ enum ExceptionType {
 
 impl Cpu {
     pub fn new(cartridge: Cartridge) -> Self {
+        let r0 = Rc::default();
+        let r1 = Rc::default();
+        let r2 = Rc::default();
+        let r3 = Rc::default();
+        let r4 = Rc::default();
+        let r5 = Rc::default();
+        let r6 = Rc::default();
+        let r7 = Rc::default();
+        let r8 = Rc::default();
+        let r9 = Rc::default();
+        let r10 = Rc::default();
+        let r11 = Rc::default();
+        let r12 = Rc::default();
+        let r13 = Rc::default();
+        let r14 = Rc::default();
+        let r15 = Rc::default();
+
+        let r8_fiq = Rc::default();
+        let r9_fiq = Rc::default();
+        let r10_fiq = Rc::default();
+        let r11_fiq = Rc::default();
+        let r12_fiq = Rc::default();
+        let r13_fiq = Rc::default();
+        let r14_fiq = Rc::default();
+
+        let r13_svc = Rc::default();
+        let r14_svc = Rc::default();
+
+        let r13_abt = Rc::default();
+        let r14_abt = Rc::default();
+
+        let r13_irq = Rc::default();
+        let r14_irq = Rc::default();
+
+        let r13_und = Rc::default();
+        let r14_und = Rc::default();
+
+
+        let user_registers = ModeRegisters {
+            r0: Rc::clone(&r0),
+            r1: Rc::clone(&r1),
+            r2: Rc::clone(&r2),
+            r3: Rc::clone(&r3),
+            r4: Rc::clone(&r4),
+            r5: Rc::clone(&r5),
+            r6: Rc::clone(&r6),
+            r7: Rc::clone(&r7),
+            r8: Rc::clone(&r8),
+            r9: Rc::clone(&r9),
+            r10: Rc::clone(&r10),
+            r11: Rc::clone(&r11),
+            r12: Rc::clone(&r12),
+            r13: Rc::clone(&r13),
+            r14: Rc::clone(&r14),
+            r15: Rc::clone(&r15),
+            spsr: Rc::default(),
+        };
+
+        let fiq_registers = ModeRegisters {
+            r0: Rc::clone(&r0),
+            r1: Rc::clone(&r1),
+            r2: Rc::clone(&r2),
+            r3: Rc::clone(&r3),
+            r4: Rc::clone(&r4),
+            r5: Rc::clone(&r5),
+            r6: Rc::clone(&r6),
+            r7: Rc::clone(&r7),
+            r8: Rc::clone(&r8_fiq),
+            r9: Rc::clone(&r9_fiq),
+            r10: Rc::clone(&r10_fiq),
+            r11: Rc::clone(&r11_fiq),
+            r12: Rc::clone(&r12_fiq),
+            r13: Rc::clone(&r13_fiq),
+            r14: Rc::clone(&r14_fiq),
+            r15: Rc::clone(&r15),
+            spsr: Rc::default(),
+        };
+
+        let svc_registers = ModeRegisters {
+            r0: Rc::clone(&r0),
+            r1: Rc::clone(&r1),
+            r2: Rc::clone(&r2),
+            r3: Rc::clone(&r3),
+            r4: Rc::clone(&r4),
+            r5: Rc::clone(&r5),
+            r6: Rc::clone(&r6),
+            r7: Rc::clone(&r7),
+            r8: Rc::clone(&r8),
+            r9: Rc::clone(&r9),
+            r10: Rc::clone(&r10),
+            r11: Rc::clone(&r11),
+            r12: Rc::clone(&r12),
+            r13: Rc::clone(&r13_svc),
+            r14: Rc::clone(&r14_svc),
+            r15: Rc::clone(&r15),
+            spsr: Rc::default(),
+        };
+
+        let abt_registers = ModeRegisters {
+            r0: Rc::clone(&r0),
+            r1: Rc::clone(&r1),
+            r2: Rc::clone(&r2),
+            r3: Rc::clone(&r3),
+            r4: Rc::clone(&r4),
+            r5: Rc::clone(&r5),
+            r6: Rc::clone(&r6),
+            r7: Rc::clone(&r7),
+            r8: Rc::clone(&r8),
+            r9: Rc::clone(&r9),
+            r10: Rc::clone(&r10),
+            r11: Rc::clone(&r11),
+            r12: Rc::clone(&r12),
+            r13: Rc::clone(&r13_abt),
+            r14: Rc::clone(&r14_abt),
+            r15: Rc::clone(&r15),
+            spsr: Rc::default(),
+        };
+
+        let irq_registers = ModeRegisters {
+            r0: Rc::clone(&r0),
+            r1: Rc::clone(&r1),
+            r2: Rc::clone(&r2),
+            r3: Rc::clone(&r3),
+            r4: Rc::clone(&r4),
+            r5: Rc::clone(&r5),
+            r6: Rc::clone(&r6),
+            r7: Rc::clone(&r7),
+            r8: Rc::clone(&r8),
+            r9: Rc::clone(&r9),
+            r10: Rc::clone(&r10),
+            r11: Rc::clone(&r11),
+            r12: Rc::clone(&r12),
+            r13: Rc::clone(&r13_irq),
+            r14: Rc::clone(&r14_irq),
+            r15: Rc::clone(&r15),
+            spsr: Rc::default(),
+        };
+
+        let und_registers = ModeRegisters {
+            r0: Rc::clone(&r0),
+            r1: Rc::clone(&r1),
+            r2: Rc::clone(&r2),
+            r3: Rc::clone(&r3),
+            r4: Rc::clone(&r4),
+            r5: Rc::clone(&r5),
+            r6: Rc::clone(&r6),
+            r7: Rc::clone(&r7),
+            r8: Rc::clone(&r8),
+            r9: Rc::clone(&r9),
+            r10: Rc::clone(&r10),
+            r11: Rc::clone(&r11),
+            r12: Rc::clone(&r12),
+            r13: Rc::clone(&r13_und),
+            r14: Rc::clone(&r14_und),
+            r15: Rc::clone(&r15),
+            spsr: Rc::default(),
+        };
+
         Self {
-            r0: 0,
-            r1: 0,
-            r2: 0,
-            r3: 0,
-            r4: 0,
-            r5: 0,
-            r6: 0,
-            r7: 0,
-            r8: 0,
-            r9: 0,
-            r10: 0,
-            r11: 0,
-            r12: 0,
-            r13: 0,
-            r14: 0,
-            r15: 0,
+            user_registers,
+            fiq_registers,
+            svc_registers,
+            abt_registers,
+            irq_registers,
+            und_registers,
             cpsr: Self::SYSTEM_MODE_BITS,
-            r8_fiq: 0,
-            r9_fiq: 0,
-            r10_fiq: 0,
-            r11_fiq: 0,
-            r12_fiq: 0,
-            r13_fiq: 0,
-            r14_fiq: 0,
-            spsr_fiq: 0,
-            r13_svc: 0,
-            r14_svc: 0,
-            spsr_svc: 0,
-            r13_abt: 0,
-            r14_abt: 0,
-            spsr_abt: 0,
-            r13_irq: 0,
-            r14_irq: 0,
-            spsr_irq: 0,
-            r13_und: 0,
-            r14_und: 0,
-            spsr_und: 0,
             cycle_count: 0,
             bus: Bus::new(cartridge),
             arm_cache: Default::default(),
@@ -330,38 +450,32 @@ impl Display for ShiftType {
 
 impl Cpu {
     fn write_register(&mut self, value: u32, register: Register) {
-        match (self.get_cpu_mode(), register) {
-            (_, Register::R0) => self.r0 = value,
-            (_, Register::R1) => self.r1 = value,
-            (_, Register::R2) => self.r2 = value,
-            (_, Register::R3) => self.r3 = value,
-            (_, Register::R4) => self.r4 = value,
-            (_, Register::R5) => self.r5 = value,
-            (_, Register::R6) => self.r6 = value,
-            (_, Register::R7) => self.r7 = value,
-            (CpuMode::Fiq, Register::R8) => self.r8_fiq = value,
-            (_, Register::R8) => self.r8 = value,
-            (CpuMode::Fiq, Register::R9) => self.r9_fiq = value,
-            (_, Register::R9) => self.r9 = value,
-            (CpuMode::Fiq, Register::R10) => self.r10_fiq = value,
-            (_, Register::R10) => self.r10 = value,
-            (CpuMode::Fiq, Register::R11) => self.r11_fiq = value,
-            (_, Register::R11) => self.r11 = value,
-            (CpuMode::Fiq, Register::R12) => self.r12_fiq = value,
-            (_, Register::R12) => self.r12 = value,
-            (CpuMode::User | CpuMode::System, Register::R13) => self.r13 = value,
-            (CpuMode::Fiq, Register::R13) => self.r13_fiq = value,
-            (CpuMode::Supervisor, Register::R13) => self.r13_svc = value,
-            (CpuMode::Abort, Register::R13) => self.r13_abt = value,
-            (CpuMode::Irq, Register::R13) => self.r13_irq = value,
-            (CpuMode::Undefined, Register::R13) => self.r13_und = value,
-            (CpuMode::User | CpuMode::System, Register::R14) => self.r14 = value,
-            (CpuMode::Fiq, Register::R14) => self.r14_fiq = value,
-            (CpuMode::Supervisor, Register::R14) => self.r14_svc = value,
-            (CpuMode::Abort, Register::R14) => self.r14_abt = value,
-            (CpuMode::Irq, Register::R14) => self.r14_irq = value,
-            (CpuMode::Undefined, Register::R14) => self.r14_und = value,
-            (_, Register::R15) => {
+        let registers = match self.get_cpu_mode() {
+            CpuMode::User | CpuMode::System => &self.user_registers,
+            CpuMode::Fiq => &self.fiq_registers,
+            CpuMode::Supervisor => &self.svc_registers,
+            CpuMode::Abort => &self.abt_registers,
+            CpuMode::Irq => &self.irq_registers,
+            CpuMode::Undefined => &self.und_registers,
+        };
+
+        match register {
+            Register::R0 => registers.r0.set(value),
+            Register::R1 => registers.r1.set(value),
+            Register::R2 => registers.r2.set(value),
+            Register::R3 => registers.r3.set(value),
+            Register::R4 => registers.r4.set(value),
+            Register::R5 => registers.r5.set(value),
+            Register::R6 => registers.r6.set(value),
+            Register::R7 => registers.r7.set(value),
+            Register::R8 => registers.r8.set(value),
+            Register::R9 => registers.r9.set(value),
+            Register::R10 => registers.r10.set(value),
+            Register::R11 => registers.r11.set(value),
+            Register::R12 => registers.r12.set(value),
+            Register::R13 => registers.r13.set(value),
+            Register::R14 => registers.r14.set(value),
+            Register::R15 => {
                 if self.get_cpu_state_bit() {
                     if value & 0b1 != 0 {
                         println!(
@@ -369,7 +483,7 @@ impl Cpu {
                             value
                         );
                     }
-                    self.r15 = value & !0b1;
+                    registers.r15.set(value & !0b1);
                 } else {
                     if value & 0b11 != 0 {
                         println!(
@@ -377,93 +491,46 @@ impl Cpu {
                             value
                         );
                     }
-                    self.r15 = value & !0b11;
+                    registers.r15.set(value & !0b11);
                 }
-            }
-            (_, Register::Cpsr) => self.cpsr = value,
-            // if current mode has no spsr, value is written to cpsr instead
-            (CpuMode::User | CpuMode::System, Register::Spsr) => self.cpsr = value,
-            (CpuMode::Fiq, Register::Spsr) => self.spsr_fiq = value,
-            (CpuMode::Supervisor, Register::Spsr) => self.spsr_svc = value,
-            (CpuMode::Abort, Register::Spsr) => self.spsr_abt = value,
-            (CpuMode::Irq, Register::Spsr) => self.spsr_irq = value,
-            (CpuMode::Undefined, Register::Spsr) => self.spsr_und = value,
+            },
+            Register::Spsr => registers.spsr.set(value),
+            Register::Cpsr => self.cpsr = value,
         }
     }
 
     fn read_register(&self, register: Register, pc_calculation: fn(u32) -> u32) -> u32 {
-        match (self.get_cpu_mode(), register) {
-            (_, Register::R0) => self.r0,
-            (_, Register::R1) => self.r1,
-            (_, Register::R2) => self.r2,
-            (_, Register::R3) => self.r3,
-            (_, Register::R4) => self.r4,
-            (_, Register::R5) => self.r5,
-            (_, Register::R6) => self.r6,
-            (_, Register::R7) => self.r7,
-            (CpuMode::Fiq, Register::R8) => self.r8_fiq,
-            (_, Register::R8) => self.r8,
-            (CpuMode::Fiq, Register::R9) => self.r9_fiq,
-            (_, Register::R9) => self.r9,
-            (CpuMode::Fiq, Register::R10) => self.r10_fiq,
-            (_, Register::R10) => self.r10,
-            (CpuMode::Fiq, Register::R11) => self.r11_fiq,
-            (_, Register::R11) => self.r11,
-            (CpuMode::Fiq, Register::R12) => self.r12_fiq,
-            (_, Register::R12) => self.r12,
-            (CpuMode::User | CpuMode::System, Register::R13) => self.r13,
-            (CpuMode::Fiq, Register::R13) => self.r13_fiq,
-            (CpuMode::Supervisor, Register::R13) => self.r13_svc,
-            (CpuMode::Abort, Register::R13) => self.r13_abt,
-            (CpuMode::Irq, Register::R13) => self.r13_irq,
-            (CpuMode::Undefined, Register::R13) => self.r13_und,
-            (CpuMode::User | CpuMode::System, Register::R14) => self.r14,
-            (CpuMode::Fiq, Register::R14) => self.r14_fiq,
-            (CpuMode::Supervisor, Register::R14) => self.r14_svc,
-            (CpuMode::Abort, Register::R14) => self.r14_abt,
-            (CpuMode::Irq, Register::R14) => self.r14_irq,
-            (CpuMode::Undefined, Register::R14) => self.r14_und,
-            (_, Register::R15) => pc_calculation(self.r15),
-            (_, Register::Cpsr) => self.cpsr,
-            // if current mode has no spsr, value read is cpsr
-            (CpuMode::User | CpuMode::System, Register::Spsr) => self.cpsr,
-            (CpuMode::Fiq, Register::Spsr) => self.spsr_fiq,
-            (CpuMode::Supervisor, Register::Spsr) => self.spsr_svc,
-            (CpuMode::Abort, Register::Spsr) => self.spsr_abt,
-            (CpuMode::Irq, Register::Spsr) => self.spsr_irq,
-            (CpuMode::Undefined, Register::Spsr) => self.spsr_und,
+        let registers = match self.get_cpu_mode() {
+            CpuMode::User | CpuMode::System => &self.user_registers,
+            CpuMode::Fiq => &self.fiq_registers,
+            CpuMode::Supervisor => &self.svc_registers,
+            CpuMode::Abort => &self.abt_registers,
+            CpuMode::Irq => &self.irq_registers,
+            CpuMode::Undefined => &self.und_registers,
+        };
+
+        match register {
+            Register::R0 => registers.r0.get(),
+            Register::R1 => registers.r1.get(),
+            Register::R2 => registers.r2.get(),
+            Register::R3 => registers.r3.get(),
+            Register::R4 => registers.r4.get(),
+            Register::R5 => registers.r5.get(),
+            Register::R6 => registers.r6.get(),
+            Register::R7 => registers.r7.get(),
+            Register::R8 => registers.r8.get(),
+            Register::R9 => registers.r9.get(),
+            Register::R10 => registers.r10.get(),
+            Register::R11 => registers.r11.get(),
+            Register::R12 => registers.r12.get(),
+            Register::R13 => registers.r13.get(),
+            Register::R14 => registers.r14.get(),
+            Register::R15 => pc_calculation(registers.r15.get()),
+            Register::Spsr => registers.spsr.get(),
+            Register::Cpsr => self.cpsr
         }
     }
 
-    fn read_register_double(
-        &self,
-        first_register: Register,
-        pc_calculation: fn(u32) -> u32,
-    ) -> (u32, u32) {
-        let second_register = match first_register {
-            Register::R0 => Register::R1,
-            Register::R1 => Register::R2,
-            Register::R2 => Register::R3,
-            Register::R3 => Register::R4,
-            Register::R4 => Register::R5,
-            Register::R5 => Register::R6,
-            Register::R6 => Register::R7,
-            Register::R7 => Register::R8,
-            Register::R8 => Register::R9,
-            Register::R9 => Register::R10,
-            Register::R10 => Register::R11,
-            Register::R11 => Register::R12,
-            Register::R12 => Register::R13,
-            Register::R13 => Register::R14,
-            Register::R14 => Register::R15,
-            _ => unreachable!("double register write to {}", first_register),
-        };
-
-        let value_1 = self.read_register(first_register, pc_calculation);
-        let value_2 = self.read_register(second_register, pc_calculation);
-
-        (value_1, value_2)
-    }
 }
 
 impl Cpu {
@@ -565,28 +632,22 @@ impl Cpu {
         };
 
         let old_pc = self.read_register(Register::R15, pc_offset);
-
-        // save old pc in new mode lr
-        match new_mode {
-            CpuMode::Abort => self.r14_abt = old_pc,
-            CpuMode::Fiq => self.r14_fiq = old_pc,
-            CpuMode::Irq => self.r14_irq = old_pc,
-            CpuMode::Supervisor => self.r14_svc = old_pc,
-            CpuMode::Undefined => self.r14_und = old_pc,
-            _ => unreachable!(),
-        };
-
         let old_flags = self.read_register(Register::Cpsr, |_| unreachable!());
 
-        // save old cpsr in new mode spsr
-        match new_mode {
-            CpuMode::Abort => self.spsr_abt = old_flags,
-            CpuMode::Fiq => self.spsr_fiq = old_flags,
-            CpuMode::Irq => self.spsr_irq = old_flags,
-            CpuMode::Supervisor => self.spsr_svc = old_flags,
-            CpuMode::Undefined => self.spsr_und = old_flags,
+        let new_registers = match new_mode {
+            CpuMode::Abort => &mut self.abt_registers,
+            CpuMode::Fiq => &mut self.fiq_registers,
+            CpuMode::Irq => &mut self.irq_registers,
+            CpuMode::Supervisor => &mut self.svc_registers,
+            CpuMode::Undefined => &mut self.und_registers,
             _ => unreachable!(),
         };
+
+        // save old pc in new mode lr
+        new_registers.r14.set(old_pc);
+
+        // save old cpsr in new mode spsr
+        new_registers.spsr.set(old_flags);
 
         self.set_cpu_state_bit(false);
         self.set_cpu_mode(new_mode);
