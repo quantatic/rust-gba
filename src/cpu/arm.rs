@@ -368,8 +368,49 @@ pub enum MsrSourceInfo {
     Immediate { value: u32 },
 }
 
+fn get_condition(opcode: u32) -> InstructionCondition {
+    const CONDITION_SHIFT: usize = 28;
+    const CONDITION_MASK: u32 = 0b1111 << CONDITION_SHIFT;
+
+    match (opcode & CONDITION_MASK) >> CONDITION_SHIFT {
+        0 => InstructionCondition::Equal,
+        1 => InstructionCondition::NotEqual,
+        2 => InstructionCondition::UnsignedHigherOrSame,
+        3 => InstructionCondition::UnsignedLower,
+        4 => InstructionCondition::SignedNegative,
+        5 => InstructionCondition::SignedPositiveOrZero,
+        6 => InstructionCondition::SignedOverflow,
+        7 => InstructionCondition::SignedNoOverflow,
+        8 => InstructionCondition::UnsignedHigher,
+        9 => InstructionCondition::UnsignedLowerOrSame,
+        10 => InstructionCondition::SignedGreaterOrEqual,
+        11 => InstructionCondition::SignedLessThan,
+        12 => InstructionCondition::SignedGreaterThan,
+        13 => InstructionCondition::SignedLessOrEqual,
+        14 => InstructionCondition::Always,
+        15 => InstructionCondition::Never,
+        _ => unreachable!(),
+    }
+}
+
+fn get_register_at_offset(opcode: u32, offset: usize) -> Register {
+    let mask = 0b1111 << offset;
+    let register_index = (opcode & mask) >> offset;
+    Register::from_index(register_index)
+}
+
+fn get_shift_type(opcode: u32) -> ShiftType {
+    match opcode.get_bit_range(5..=6) {
+        0 => ShiftType::Lsl,
+        1 => ShiftType::Lsr,
+        2 => ShiftType::Asr,
+        3 => ShiftType::Ror,
+        _ => unreachable!(),
+    }
+}
+
 pub fn decode_arm(opcode: u32) -> ArmInstruction {
-    let condition = opcode.get_condition();
+    let condition = get_condition(opcode);
 
     const OPCODE_MASK: u32 = 0b00001110_00000000_00000000_00000000;
     const MUST_BE_000: u32 = 0b00000000_00000000_00000000_00000000;
@@ -458,7 +499,7 @@ fn try_decode_arm_branch_exchange(opcode: u32) -> Option<ArmInstructionType> {
 
             const OPERAND_REGISTER_OFFSET: usize = 0;
 
-            let operand = opcode.get_register_at_offset(OPERAND_REGISTER_OFFSET);
+            let operand = get_register_at_offset(opcode, OPERAND_REGISTER_OFFSET);
 
             match opcode.get_bit_range(OPCODE_BIT_RANGE) {
                 0b0001 => ArmInstructionType::Bx { operand },
@@ -518,9 +559,9 @@ fn try_decode_arm_data_process(opcode: u32) -> Option<ArmInstructionType> {
 
         let opcode_value = opcode.get_bit_range(ALU_OPCODE_BIT_RANGE);
         let set_condition_codes_bit = opcode.get_bit(SET_CONDITION_CODES_BIT_INDEX);
-        let first_operand = opcode.get_register_at_offset(FIRST_OPERATION_REGISTER_OFFSET);
+        let first_operand = get_register_at_offset(opcode, FIRST_OPERATION_REGISTER_OFFSET);
         let destination_operand =
-            opcode.get_register_at_offset(DESTINATION_OPERATION_REGISTER_OFFSET);
+            get_register_at_offset(opcode, DESTINATION_OPERATION_REGISTER_OFFSET);
 
         // set condition code "Must be 1 for opcode 8-B".
         if (0x8..=0xB).contains(&opcode_value) && !set_condition_codes_bit {
@@ -564,17 +605,17 @@ fn try_decode_arm_data_process(opcode: u32) -> Option<ArmInstructionType> {
             const SHIFT_BY_REGISTER_BIT_INDEX: usize = 4;
             const SECOND_OPERAND_REGISTER_OFFSET: usize = 0;
 
-            let shift_type = opcode.get_shift_type();
+            let shift_type = get_shift_type(opcode);
             let shift_by_register_bit = opcode.get_bit(SHIFT_BY_REGISTER_BIT_INDEX);
             let second_operand_register =
-                opcode.get_register_at_offset(SECOND_OPERAND_REGISTER_OFFSET);
+                get_register_at_offset(opcode, SECOND_OPERAND_REGISTER_OFFSET);
 
             let shift_info = if shift_by_register_bit {
                 // Shift by Register
                 const SHIFT_REGISTER_OFFSET: usize = 8;
                 const MUST_BE_0_BIT_RANGE: RangeInclusive<usize> = 7..=7;
 
-                let shift_register = opcode.get_register_at_offset(SHIFT_REGISTER_OFFSET);
+                let shift_register = get_register_at_offset(opcode, SHIFT_REGISTER_OFFSET);
 
                 // This bit "must be zero  (otherwise multiply or LDREX or undefined)".
                 if opcode.get_bit_range(MUST_BE_0_BIT_RANGE) != 0 {
@@ -640,10 +681,10 @@ fn try_decode_arm_multiply(opcode: u32) -> Option<ArmInstructionType> {
     };
 
     let set_condition_codes_bit = opcode.get_bit(SET_CONDITION_CODES_BIT_INDEX);
-    let destination_register = opcode.get_register_at_offset(DESTINATION_REGISTER_OFFSET);
-    let accumulate_register = opcode.get_register_at_offset(ACCUMULATE_REGISTER_OFFSET);
-    let operand_rs = opcode.get_register_at_offset(OPERAND_REGISTER_RS_OFFSET);
-    let operand_rm = opcode.get_register_at_offset(OPERAND_REGISTER_RM_OFFSET);
+    let destination_register = get_register_at_offset(opcode, DESTINATION_REGISTER_OFFSET);
+    let accumulate_register = get_register_at_offset(opcode, ACCUMULATE_REGISTER_OFFSET);
+    let operand_rs = get_register_at_offset(opcode, OPERAND_REGISTER_RS_OFFSET);
+    let operand_rm = get_register_at_offset(opcode, OPERAND_REGISTER_RM_OFFSET);
 
     Some(ArmInstructionType::Mul {
         operation: operation_type,
@@ -712,7 +753,7 @@ fn try_decode_arm_mrs(opcode: u32) -> Option<ArmInstructionType> {
         PsrTransferPsr::Cpsr
     };
 
-    let destination_register = opcode.get_register_at_offset(DEST_REGISTER_OFFSET);
+    let destination_register = get_register_at_offset(opcode, DEST_REGISTER_OFFSET);
 
     Some(ArmInstructionType::Mrs {
         source_psr: source_dest_psr,
@@ -789,7 +830,7 @@ fn try_decode_arm_msr(opcode: u32) -> Option<ArmInstructionType> {
             return None;
         }
 
-        let source_register = opcode.get_register_at_offset(SOURCE_REGISTER_OFFSET);
+        let source_register = get_register_at_offset(opcode, SOURCE_REGISTER_OFFSET);
 
         MsrSourceInfo::Register(source_register)
     };
@@ -856,9 +897,9 @@ fn try_decode_arm_basic_single_data_transfer(opcode: u32) -> Option<ArmInstructi
             SingleDataMemoryAccessSize::Word
         };
 
-        let base_register = opcode.get_register_at_offset(BASE_REGISTER_OFFSET);
+        let base_register = get_register_at_offset(opcode, BASE_REGISTER_OFFSET);
         let source_destination_register =
-            opcode.get_register_at_offset(SOURCE_DEST_REGISTER_OFFSET);
+            get_register_at_offset(opcode, SOURCE_DEST_REGISTER_OFFSET);
 
         let offset_value = if immediate_offset_bit {
             // register shifted by immediate
@@ -872,8 +913,8 @@ fn try_decode_arm_basic_single_data_transfer(opcode: u32) -> Option<ArmInstructi
             }
 
             let shift_amount = opcode.get_bit_range(SHIFT_AMOUNT_BIT_RANGE);
-            let shift_type = opcode.get_shift_type();
-            let offset_register = opcode.get_register_at_offset(OFFSET_REGISTER_OFFSET);
+            let shift_type = get_shift_type(opcode);
+            let offset_register = get_register_at_offset(opcode, OFFSET_REGISTER_OFFSET);
 
             SingleDataTransferOffsetValue::RegisterImmediate {
                 shift_amount,
@@ -946,8 +987,8 @@ fn try_decode_arm_special_single_data_transfer(opcode: u32) -> Option<ArmInstruc
     let immediate_offset_flag = opcode.get_bit(IMMEDIATE_OFFSET_FLAG_INDEX);
     let write_back_memory_management_flag = opcode.get_bit(WRITE_BACK_MEMORY_MANAGEMENT_BIT_INDEX);
     let load_store_flag = opcode.get_bit(LOAD_STORE_BIT_INDEX);
-    let base_register = opcode.get_register_at_offset(BASE_REGISTER_OFFSET);
-    let source_dest_register = opcode.get_register_at_offset(SOURCE_DEST_REGISTER_OFFSET);
+    let base_register = get_register_at_offset(opcode, BASE_REGISTER_OFFSET);
+    let source_dest_register = get_register_at_offset(opcode, SOURCE_DEST_REGISTER_OFFSET);
     let opcode_value = opcode.get_bit_range(OPCODE_VALUE_BIT_RANGE);
     let offset_upper_4_bits = opcode.get_bit_range(OFFSET_UPPER_4_BITS);
     let offset_lower_4_bits = opcode.get_bit_range(OFFSET_LOWER_4_BITS);
@@ -1099,7 +1140,7 @@ fn try_decode_arm_block_data_transfer(opcode: u32) -> Option<ArmInstructionType>
             BlockDataTransferType::Stm
         };
 
-        let base_register = opcode.get_register_at_offset(BASE_REGISTER_OFFSET);
+        let base_register = get_register_at_offset(opcode, BASE_REGISTER_OFFSET);
 
         let register_list_raw = opcode.get_bit_range(REGISTER_LIST_BIT_RANGE);
 
@@ -1155,9 +1196,9 @@ fn try_decode_arm_single_data_swap(opcode: u32) -> Option<ArmInstructionType> {
     }
 
     let byte_word_bit_value = opcode.get_bit(BYTE_WORD_BIT_INDEX);
-    let base_register = opcode.get_register_at_offset(BASE_REGISTER_OFFSET);
-    let dest_register = opcode.get_register_at_offset(DEST_REGISTER_OFFSET);
-    let source_register = opcode.get_register_at_offset(SOURCE_REGISTER_OFFSET);
+    let base_register = get_register_at_offset(opcode, BASE_REGISTER_OFFSET);
+    let dest_register = get_register_at_offset(opcode, DEST_REGISTER_OFFSET);
+    let source_register = get_register_at_offset(opcode, SOURCE_REGISTER_OFFSET);
 
     let access_size = if byte_word_bit_value {
         // swap 8bit/byte

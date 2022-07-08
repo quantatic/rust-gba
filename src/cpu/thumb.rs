@@ -133,6 +133,12 @@ pub struct ThumbInstruction {
     instruction_type: ThumbInstructionType,
 }
 
+fn get_register_at_offset(opcode: u16, offset: usize) -> Register {
+    let mask = 0b111 << offset;
+    let register_index = (opcode & mask) >> offset;
+    Register::from_index(u32::from(register_index))
+}
+
 pub fn decode_thumb(opcode: u16) -> ThumbInstruction {
     let maybe_instruction_type = None
         .or_else(|| try_decode_thumb_register_operation(opcode))
@@ -179,9 +185,9 @@ fn try_decode_thumb_move_shifted_register(opcode: u16) -> Option<ThumbInstructio
 
     let offset = u32::from(opcode.get_bit_range(OFFSET_BIT_RANGE));
 
-    let source_register = opcode.get_register_at_offset(SOURCE_REGISTER_OFFSET);
+    let source_register = get_register_at_offset(opcode, SOURCE_REGISTER_OFFSET);
 
-    let dest_register = opcode.get_register_at_offset(DEST_REGISTER_OFFSET);
+    let dest_register = get_register_at_offset(opcode, DEST_REGISTER_OFFSET);
 
     Some(ThumbInstructionType::Register {
         operation: operation_type,
@@ -209,12 +215,12 @@ fn try_decode_thumb_add_subtract(opcode: u16) -> Option<ThumbInstructionType> {
     }
 
     let opcode_value = opcode.get_bit_range(OPCODE_VALUE_BIT_RANGE);
-    let source_register = opcode.get_register_at_offset(SOURCE_REGISTER_OFFSET);
-    let dest_register = opcode.get_register_at_offset(DEST_REGISTER_OFFSET);
+    let source_register = get_register_at_offset(opcode, SOURCE_REGISTER_OFFSET);
+    let dest_register = get_register_at_offset(opcode, DEST_REGISTER_OFFSET);
 
     Some(match opcode_value {
         ADD_REGISTER_OPCODE_VALUE => {
-            let register_operand = opcode.get_register_at_offset(REGISTER_OPERAND_OFFSET);
+            let register_operand = get_register_at_offset(opcode, REGISTER_OPERAND_OFFSET);
             let second_operand = ThumbRegisterOrImmediate::Register(register_operand);
             ThumbInstructionType::Register {
                 destination_register: dest_register,
@@ -224,7 +230,7 @@ fn try_decode_thumb_add_subtract(opcode: u16) -> Option<ThumbInstructionType> {
             }
         }
         SUB_REGISTER_OPCODE_VALUE => {
-            let register_operand = opcode.get_register_at_offset(REGISTER_OPERAND_OFFSET);
+            let register_operand = get_register_at_offset(opcode, REGISTER_OPERAND_OFFSET);
             let second_operand = ThumbRegisterOrImmediate::Register(register_operand);
             ThumbInstructionType::Register {
                 destination_register: dest_register,
@@ -270,7 +276,7 @@ fn try_decode_thumb_move_compare_add_subtract_immediate(
     }
 
     let opcode_value = opcode.get_bit_range(OPCODE_VALUE_BIT_RANGE);
-    let dest_register = opcode.get_register_at_offset(DEST_REGISTER_OFFSET);
+    let dest_register = get_register_at_offset(opcode, DEST_REGISTER_OFFSET);
     let immediate = u32::from(opcode.get_bit_range(IMMEDIATE_BIT_RANGE));
 
     let operation = match opcode_value {
@@ -300,8 +306,8 @@ fn try_decode_thumb_alu_operations(opcode: u16) -> Option<ThumbInstructionType> 
     }
 
     let opcode_value = opcode.get_bit_range(OPCODE_VALUE_BIT_RANGE);
-    let source_register = opcode.get_register_at_offset(SOURCE_REGISTER_OFFSET);
-    let dest_register = opcode.get_register_at_offset(DEST_REGISTER_OFFSET);
+    let source_register = get_register_at_offset(opcode, SOURCE_REGISTER_OFFSET);
+    let dest_register = get_register_at_offset(opcode, DEST_REGISTER_OFFSET);
 
     let operation_type = match opcode_value {
         0x0 => ThumbRegisterOperation::And,
@@ -407,7 +413,7 @@ fn try_decode_thumb_load_pc_relative(opcode: u16) -> Option<ThumbInstructionType
         return None;
     }
 
-    let dest_register = opcode.get_register_at_offset(DEST_REGISTER_OFFSET);
+    let dest_register = get_register_at_offset(opcode, DEST_REGISTER_OFFSET);
     let offset = u32::from(opcode.get_bit_range(OFFSET_BIT_RANGE)) * 4;
 
     Some(ThumbInstructionType::Ldr {
@@ -440,10 +446,10 @@ fn try_decode_thumb_load_store_register_offset(opcode: u16) -> Option<ThumbInstr
         return None;
     }
 
-    let offset_register = opcode.get_register_at_offset(OFFSET_REGISTER_OFFSET);
+    let offset_register = get_register_at_offset(opcode, OFFSET_REGISTER_OFFSET);
     let offset = ThumbRegisterOrImmediate::Register(offset_register);
-    let base_register = opcode.get_register_at_offset(BASE_REGISTER_OFFSET);
-    let source_dest_register = opcode.get_register_at_offset(SOURCE_DEST_REGISTER_OFFSET);
+    let base_register = get_register_at_offset(opcode, BASE_REGISTER_OFFSET);
+    let source_dest_register = get_register_at_offset(opcode, SOURCE_DEST_REGISTER_OFFSET);
 
     let opcode_value = opcode.get_bit_range(OPCODE_VALUE_BIT_RANGE);
     Some(match opcode_value {
@@ -501,9 +507,9 @@ fn try_decode_thumb_load_store_sign_extended_byte_halfword(
     }
 
     let opcode_value = opcode.get_bit_range(OPCODE_VALUE_BIT_RANGE);
-    let offset_register = opcode.get_register_at_offset(OFFSET_REGISTER_OFFSET);
-    let base_register = opcode.get_register_at_offset(BASE_REGISTER_OFFSET);
-    let source_dest_register = opcode.get_register_at_offset(SOURCE_DEST_REGISTER_OFFSET);
+    let offset_register = get_register_at_offset(opcode, OFFSET_REGISTER_OFFSET);
+    let base_register = get_register_at_offset(opcode, BASE_REGISTER_OFFSET);
+    let source_dest_register = get_register_at_offset(opcode, SOURCE_DEST_REGISTER_OFFSET);
 
     Some(match opcode_value {
         // STRH Rd,[Rb,Ro]  ;store 16bit data          HALFWORD[Rb+Ro] = Rd
@@ -563,8 +569,8 @@ fn try_decode_thumb_load_store_immediate_offset(opcode: u16) -> Option<ThumbInst
         // word access
         (ThumbLoadStoreDataSize::Word, u32::from(raw_offset * 4))
     };
-    let base_register = opcode.get_register_at_offset(BASE_REGISTER_OFFSET);
-    let source_dest_register = opcode.get_register_at_offset(SOURCE_DEST_REGISTER_OFFSET);
+    let base_register = get_register_at_offset(opcode, BASE_REGISTER_OFFSET);
+    let source_dest_register = get_register_at_offset(opcode, SOURCE_DEST_REGISTER_OFFSET);
 
     Some(if operation_type_bit {
         // ldr
@@ -599,8 +605,8 @@ fn try_decode_thumb_load_store_halfword(opcode: u16) -> Option<ThumbInstructionT
 
     let opcode_value_bit = opcode.get_bit(OPCODE_VALUE_BIT_INDEX);
     let offset = opcode.get_bit_range(OFFSET_BIT_RANGE) * 2;
-    let base_register = opcode.get_register_at_offset(BASE_REGISTER_OFFSET);
-    let source_dest_register = opcode.get_register_at_offset(SOURCE_DEST_REGISTER_OFFSET);
+    let base_register = get_register_at_offset(opcode, BASE_REGISTER_OFFSET);
+    let source_dest_register = get_register_at_offset(opcode, SOURCE_DEST_REGISTER_OFFSET);
 
     Some(if opcode_value_bit {
         // LDRH Rd,[Rb,#nn]  ;load  16bit data   Rd = HALFWORD[Rb+nn]
@@ -634,7 +640,7 @@ fn try_decode_thumb_load_store_sp_relative(opcode: u16) -> Option<ThumbInstructi
 
     let opcode_value_bit = opcode.get_bit(OPCODE_VALUE_BIT_INDEX);
 
-    let source_dest_register = opcode.get_register_at_offset(SOURCE_DEST_REGISTER_OFFSET);
+    let source_dest_register = get_register_at_offset(opcode, SOURCE_DEST_REGISTER_OFFSET);
     let offset = u32::from(opcode.get_bit_range(OFFSET_BIT_RANGE) * 4);
 
     Some(if opcode_value_bit {
@@ -673,7 +679,7 @@ fn try_decode_thumb_get_relative_address(opcode: u16) -> Option<ThumbInstruction
     }
 
     let opcode_value_bit = opcode.get_bit(OPCODE_VALUE_BIT_INDEX);
-    let dest_register = opcode.get_register_at_offset(DEST_REGISTER_OFFSET);
+    let dest_register = get_register_at_offset(opcode, DEST_REGISTER_OFFSET);
     let offset = opcode.get_bit_range(OFFSET_BIT_RANGE) * 4;
 
     Some(if opcode_value_bit {
@@ -771,7 +777,7 @@ fn try_decode_thumb_multiple_load_store(opcode: u16) -> Option<ThumbInstructionT
     }
 
     let opcode_value_bit = opcode.get_bit(OPCODE_VALUE_BIT_INDEX);
-    let base_register = opcode.get_register_at_offset(BASE_REGISTER_OFFSET);
+    let base_register = get_register_at_offset(opcode, BASE_REGISTER_OFFSET);
     let register_bit_list_raw = opcode.get_bit_range(REGISTER_LIST_BIT_RANGE);
 
     let mut register_bit_list = [false; 8];
