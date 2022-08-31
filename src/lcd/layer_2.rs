@@ -23,10 +23,8 @@ pub(super) struct Layer2 {
 impl Layer2 {
     pub fn get_pixel(
         &self,
-        pixel_x: u16,
-        pixel_y: u16,
-        mosaic_horizontal: u16,
-        mosaic_vertical: u16,
+        (pixel_x, pixel_y): (u16, u16),
+        (mosaic_horizontal, mosaic_vertical): (u16, u16),
         mode: BgMode,
         frame: DisplayFrame,
         vram: &[u8],
@@ -78,7 +76,7 @@ impl Layer2 {
                     }
                 };
 
-                let map_data_idx = map_data_base + (usize::from(map_data_offset) * 2);
+                let map_data_idx = map_data_base + (map_data_offset * 2);
 
                 let map_data_low = vram[map_data_idx];
                 let map_data_high = vram[map_data_idx + 1];

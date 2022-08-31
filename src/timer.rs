@@ -113,7 +113,7 @@ impl Timer {
 
 impl Timer {
     fn get_prescaler_interval(&self) -> PrescalerInterval {
-        return self.prescaler_interval;
+        self.prescaler_interval
     }
 
     fn get_count_up_timing(&self) -> bool {

@@ -14,10 +14,8 @@ pub(super) struct Layer1 {
 impl Layer1 {
     pub fn get_pixel(
         &self,
-        pixel_x: u16,
-        pixel_y: u16,
-        mosaic_horizontal: u16,
-        mosaic_vertical: u16,
+        (pixel_x, pixel_y): (u16, u16),
+        (mosaic_horizontal, mosaic_vertical): (u16, u16),
         mode: BgMode,
         vram: &[u8],
         bg_palette: &[Rgb555],
@@ -66,7 +64,7 @@ impl Layer1 {
                     }
                 };
 
-                let map_data_idx = map_data_base + (usize::from(map_data_offset) * 2);
+                let map_data_idx = map_data_base + (map_data_offset * 2);
 
                 let map_data_low = vram[map_data_idx];
                 let map_data_high = vram[map_data_idx + 1];
@@ -144,7 +142,9 @@ impl Layer1 {
     where
         u16: DataAccess<T>,
     {
-        self.bg_control = self.bg_control.set_data(value, index)
+        const BG1_CONTROL_WRITE_MASK: u16 = 0b11011111_11111111;
+        self.bg_control = self.bg_control.set_data(value, index);
+        self.bg_control &= BG1_CONTROL_WRITE_MASK;
     }
 
     pub fn read_x_offset<T>(&self, index: u32) -> T

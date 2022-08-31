@@ -23,10 +23,8 @@ pub(super) struct Layer3 {
 impl Layer3 {
     pub fn get_pixel(
         &self,
-        pixel_x: u16,
-        pixel_y: u16,
-        mosaic_horizontal: u16,
-        mosaic_vertical: u16,
+        (pixel_x, pixel_y): (u16, u16),
+        (mosaic_horizontal, mosaic_vertical): (u16, u16),
         mode: BgMode,
         vram: &[u8],
         bg_palette: &[Rgb555],
@@ -77,7 +75,7 @@ impl Layer3 {
                     }
                 };
 
-                let map_data_idx = map_data_base + (usize::from(map_data_offset) * 2);
+                let map_data_idx = map_data_base + (map_data_offset * 2);
 
                 let map_data_low = vram[map_data_idx];
                 let map_data_high = vram[map_data_idx + 1];

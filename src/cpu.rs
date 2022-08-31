@@ -16,7 +16,10 @@ use crate::DEBUG_AND_PANIC_ON_LOOP;
 pub use self::arm::ArmInstruction;
 pub use self::thumb::ThumbInstruction;
 
-type InstructionCache<T, U> = BTreeMap<T, U>;
+enum Instruction {
+    ArmInstruction(ArmInstruction),
+    ThumbInstruction(ThumbInstruction),
+}
 
 struct ModeRegisters {
     r0: Rc<Cell<u32>>,
@@ -48,8 +51,8 @@ pub struct Cpu {
     cpsr: u32,
     cycle_count: u64,
     pub bus: Bus,
-    arm_cache: InstructionCache<u32, ArmInstruction>,
-    thumb_cache: InstructionCache<u16, ThumbInstruction>,
+    pre_fetch: Option<u32>,
+    pre_decode: Option<Instruction>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -233,8 +236,8 @@ impl Cpu {
             cpsr: Self::SYSTEM_MODE_BITS,
             cycle_count: 0,
             bus: Bus::new(cartridge),
-            arm_cache: Default::default(),
-            thumb_cache: Default::default(),
+            pre_decode: None,
+            pre_fetch: None,
         }
     }
 }
@@ -572,14 +575,6 @@ impl Cpu {
 
                     let opcode = self.bus.read_word_address(pc);
 
-                    // let instruction = match self.arm_cache.get(&opcode) {
-                    //     Some(&cached) => cached,
-                    //     None => {
-                    //         let decoded = arm::decode_arm(opcode);
-                    //         self.arm_cache.insert(opcode, decoded);
-                    //         decoded
-                    //     }
-                    // };
                     let instruction = arm::decode_arm(opcode);
 
                     self.write_register(pc + 4, Register::R15);
@@ -592,14 +587,6 @@ impl Cpu {
 
                     let opcode = self.bus.read_halfword_address(pc);
 
-                    // let instruction = match self.thumb_cache.get(&opcode) {
-                    //     Some(&cached) => cached,
-                    //     None => {
-                    //         let decoded = thumb::decode_thumb(opcode);
-                    //         self.thumb_cache.insert(opcode, decoded);
-                    //         decoded
-                    //     }
-                    // };
                     let instruction = thumb::decode_thumb(opcode);
 
                     self.write_register(pc + 2, Register::R15);
@@ -609,6 +596,11 @@ impl Cpu {
         }
 
         self.cycle_count += 1;
+    }
+
+    fn flush_prefetch(&mut self) {
+        self.pre_fetch = None;
+        self.pre_decode = None;
     }
 
     fn handle_exception(&mut self, exception_type: ExceptionType) {

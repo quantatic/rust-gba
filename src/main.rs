@@ -10,6 +10,7 @@ mod timer;
 
 use std::{error::Error, fs::File, hash::Hasher, time::Instant};
 
+use anyhow::{anyhow, Result};
 use clap::Parser;
 use pixels::{wgpu::TextureFormat, PixelsBuilder, SurfaceTexture};
 use winit::event_loop::EventLoop;
@@ -38,11 +39,11 @@ struct Args {
     frames: Option<u64>,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<()> {
     let args = Args::parse();
 
     let rom_file =
-        File::open(&args.rom).expect(format!("failed to open ROM file \"{}\"", args.rom).as_str());
+        File::open(&args.rom).map_err(|_| anyhow!("failed to open ROM file \"{}\"", args.rom))?;
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()

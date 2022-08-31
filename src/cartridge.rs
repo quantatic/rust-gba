@@ -183,11 +183,11 @@ impl Cartridge {
     }
 
     pub fn write_sram_hword(&mut self, value: u16, offset: u32) {
-        unreachable!()
+        // unreachable!()
     }
 
     pub fn write_sram_word(&mut self, value: u32, offset: u32) {
-        unreachable!()
+        // unreachable!()
     }
 }
 
@@ -486,12 +486,14 @@ impl Flash {
 
 #[derive(Debug)]
 struct Sram {
-    data: [u8; 0x8000],
+    data: Box<[u8; 0x8000]>,
 }
 
 impl Default for Sram {
     fn default() -> Self {
-        Self { data: [0; 0x8000] }
+        Self {
+            data: Box::new([0; 0x8000]),
+        }
     }
 }
 

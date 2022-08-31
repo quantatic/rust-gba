@@ -2,7 +2,11 @@ use crate::BitManipulation;
 
 use super::{Cpu, ExceptionType, InstructionCondition, Register, ShiftType};
 
-use std::{fmt::Display, ops::RangeInclusive};
+use std::{
+    cmp::{self, Ordering},
+    fmt::Display,
+    ops::RangeInclusive,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub enum ThumbRegisterOperation {
@@ -1903,19 +1907,23 @@ impl Display for ThumbInstruction {
                 for (register_idx, register_used) in register_bit_list.into_iter().enumerate() {
                     if !register_used {
                         let idx_delta = register_idx - start_idx;
-                        if idx_delta == 1 {
-                            if printed_register {
-                                f.write_str(", ")?;
+                        match idx_delta.cmp(&1) {
+                            Ordering::Equal => {
+                                if printed_register {
+                                    f.write_str(", ")?;
+                                }
+                                write!(f, "r{}", start_idx)?;
+                                printed_register = true;
                             }
-                            write!(f, "r{}", start_idx)?;
-                            printed_register = true;
-                        } else if idx_delta > 1 {
-                            if printed_register {
-                                f.write_str(", ")?;
-                            }
+                            Ordering::Greater => {
+                                if printed_register {
+                                    f.write_str(", ")?;
+                                }
 
-                            write!(f, "r{}-r{}", start_idx, register_idx - 1)?;
-                            printed_register = true;
+                                write!(f, "r{}-r{}", start_idx, register_idx - 1)?;
+                                printed_register = true;
+                            }
+                            _ => {}
                         }
 
                         start_idx = register_idx + 1;
@@ -1923,17 +1931,22 @@ impl Display for ThumbInstruction {
                 }
 
                 let idx_delta = register_bit_list.len() - start_idx;
-                if idx_delta == 1 {
-                    if printed_register {
-                        f.write_str(", ")?;
+                match idx_delta.cmp(&1) {
+                    Ordering::Equal => {
+                        if printed_register {
+                            f.write_str(", ")?;
+                        }
+                        printed_register = true;
                     }
-                    write!(f, "r{}", start_idx)?;
-                } else if idx_delta > 1 {
-                    if printed_register {
-                        f.write_str(", ")?;
-                    }
+                    Ordering::Greater => {
+                        if printed_register {
+                            f.write_str(", ")?;
+                        }
+                        printed_register = true;
 
-                    write!(f, "r{}-r{}", start_idx, register_bit_list.len() - 1)?;
+                        write!(f, "r{}-r{}", start_idx, register_bit_list.len() - 1)?;
+                    }
+                    _ => {}
                 }
 
                 f.write_str("}")?;

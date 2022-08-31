@@ -433,9 +433,7 @@ pub fn decode_arm(opcode: u32) -> ArmInstruction {
     } else if mask_result == MUST_BE_001 {
         None.or_else(|| try_decode_arm_data_process(opcode))
             .or_else(|| try_decode_arm_psr_transfer(opcode))
-    } else if mask_result == MUST_BE_010 {
-        try_decode_arm_single_data_transfer(opcode)
-    } else if mask_result == MUST_BE_011 {
+    } else if mask_result == MUST_BE_010 || mask_result == MUST_BE_011 {
         try_decode_arm_single_data_transfer(opcode)
     } else if mask_result == MUST_BE_100 {
         try_decode_arm_block_data_transfer(opcode)

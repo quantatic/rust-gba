@@ -1,7 +1,5 @@
 use std::ops::RangeInclusive;
 
-use crate::cpu::{InstructionCondition, Register, ShiftType};
-
 pub trait BitManipulation {
     fn match_mask(self, mask: Self, result: Self) -> bool;
 
@@ -68,3 +66,4 @@ macro_rules! bit_manipulation_impl {
 bit_manipulation_impl!(u8);
 bit_manipulation_impl!(u16);
 bit_manipulation_impl!(u32);
+bit_manipulation_impl!(u64);

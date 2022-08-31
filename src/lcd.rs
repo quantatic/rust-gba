@@ -10,7 +10,7 @@ use layer_3::Layer3;
 
 use crate::{BitManipulation, DataAccess};
 
-use std::{cmp::Ordering, default, ops::RangeInclusive};
+use std::{cmp::Ordering, default, fmt::Debug, ops::RangeInclusive};
 
 pub const LCD_WIDTH: usize = 240;
 pub const LCD_HEIGHT: usize = 160;
@@ -553,10 +553,8 @@ impl Lcd {
             let layer_0_pixel_info = if displayed_selection.bg0_displayed {
                 self.layer_0
                     .get_pixel(
-                        pixel_x,
-                        pixel_y,
-                        bg_mosaic_horizontal,
-                        bg_mosaic_vertical,
+                        (pixel_x, pixel_y),
+                        (bg_mosaic_horizontal, bg_mosaic_vertical),
                         current_mode,
                         self.vram.as_slice(),
                         self.bg_palette_ram.as_slice(),
@@ -573,10 +571,8 @@ impl Lcd {
             let layer_1_pixel_info = if displayed_selection.bg1_displayed {
                 self.layer_1
                     .get_pixel(
-                        pixel_x,
-                        pixel_y,
-                        bg_mosaic_horizontal,
-                        bg_mosaic_vertical,
+                        (pixel_x, pixel_y),
+                        (bg_mosaic_horizontal, bg_mosaic_vertical),
                         current_mode,
                         self.vram.as_slice(),
                         self.bg_palette_ram.as_slice(),
@@ -593,10 +589,8 @@ impl Lcd {
             let layer_2_pixel_info = if displayed_selection.bg2_displayed {
                 self.layer_2
                     .get_pixel(
-                        pixel_x,
-                        pixel_y,
-                        bg_mosaic_horizontal,
-                        bg_mosaic_vertical,
+                        (pixel_x, pixel_y),
+                        (bg_mosaic_horizontal, bg_mosaic_vertical),
                         current_mode,
                         display_frame,
                         self.vram.as_slice(),
@@ -614,10 +608,8 @@ impl Lcd {
             let layer_3_pixel_info = if displayed_selection.bg3_displayed {
                 self.layer_3
                     .get_pixel(
-                        pixel_x,
-                        pixel_y,
-                        bg_mosaic_horizontal,
-                        bg_mosaic_vertical,
+                        (pixel_x, pixel_y),
+                        (bg_mosaic_horizontal, bg_mosaic_vertical),
                         current_mode,
                         self.vram.as_slice(),
                         self.bg_palette_ram.as_slice(),
@@ -1265,7 +1257,9 @@ impl Lcd {
     where
         u16: DataAccess<T>,
     {
-        self.window_in_control = self.window_in_control.set_data(value, index)
+        const WIN_IN_WRITE_MASK: u16 = 0b00111111_00111111;
+        self.window_in_control = self.window_in_control.set_data(value, index);
+        self.window_in_control &= WIN_IN_WRITE_MASK;
     }
 
     pub fn read_window_out_control<T>(&self, index: u32) -> T
@@ -1279,7 +1273,9 @@ impl Lcd {
     where
         u16: DataAccess<T>,
     {
+        const WIN_OUT_WRITE_MASK: u16 = 0b00111111_00111111;
         self.window_out_control = self.window_out_control.set_data(value, index);
+        self.window_out_control &= WIN_OUT_WRITE_MASK;
     }
 
     const BG_PALETTE_RAM_OFFSET_START: u32 = 0x000;
