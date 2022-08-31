@@ -141,7 +141,7 @@ impl Cartridge {
         u32::from_le_bytes(le_bytes)
     }
 
-    pub fn write_rom_byte(&mut self, value: u8, offset: u32) {
+    pub fn write_rom_byte(&mut self, _value: u8, _offset: u32) {
         // ROM byte writes ignored
     }
 
@@ -154,7 +154,7 @@ impl Cartridge {
         }
     }
 
-    pub fn write_rom_word(&mut self, value: u32, offset: u32) {
+    pub fn write_rom_word(&mut self, _value: u32, _offset: u32) {
         // ROM word writes ignored
     }
 
@@ -166,11 +166,11 @@ impl Cartridge {
         }
     }
 
-    pub fn read_sram_hword(&self, offset: u32) -> u16 {
+    pub fn read_sram_hword(&self, _offset: u32) -> u16 {
         unreachable!()
     }
 
-    pub fn read_sram_word(&self, offset: u32) -> u32 {
+    pub fn read_sram_word(&self, _offset: u32) -> u32 {
         unreachable!()
     }
 
@@ -182,11 +182,11 @@ impl Cartridge {
         }
     }
 
-    pub fn write_sram_hword(&mut self, value: u16, offset: u32) {
+    pub fn write_sram_hword(&mut self, _value: u16, _offset: u32) {
         // unreachable!()
     }
 
-    pub fn write_sram_word(&mut self, value: u32, offset: u32) {
+    pub fn write_sram_word(&mut self, _value: u32, _offset: u32) {
         // unreachable!()
     }
 }

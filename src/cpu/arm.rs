@@ -1609,7 +1609,7 @@ impl Cpu {
         write_flags_field: bool,
         write_status_field: bool,
     ) {
-        let original_mode = self.get_cpu_mode();
+        let _original_mode = self.get_cpu_mode();
         const FLAGS_FIELD_MASK: u32 = 0b11111111_00000000_00000000_00000000;
         const STATUS_FIELD_MASK: u32 = 0b00000000_11111111_00000000_00000000;
         const EXTENSION_FIELD_MASK: u32 = 0b00000000_00000000_11111111_00000000;

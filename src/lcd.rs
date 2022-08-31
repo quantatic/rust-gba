@@ -10,7 +10,7 @@ use layer_3::Layer3;
 
 use crate::{BitManipulation, DataAccess};
 
-use std::{cmp::Ordering, default, fmt::Debug, ops::RangeInclusive};
+use std::{cmp::Ordering, fmt::Debug, ops::RangeInclusive};
 
 pub const LCD_WIDTH: usize = 240;
 pub const LCD_HEIGHT: usize = 160;
@@ -1440,7 +1440,7 @@ impl Lcd {
         }
     }
 
-    pub fn write_oam_byte(&mut self, value: u8, offset: u32) {
+    pub fn write_oam_byte(&mut self, _value: u8, _offset: u32) {
         // byte write to OAM is ignored
     }
 

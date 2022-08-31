@@ -8,7 +8,7 @@ mod keypad;
 mod lcd;
 mod timer;
 
-use std::{error::Error, fs::File, hash::Hasher, time::Instant};
+use std::{fs::File, hash::Hasher, time::Instant};
 
 use anyhow::{anyhow, Result};
 use clap::Parser;

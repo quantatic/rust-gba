@@ -4,7 +4,7 @@ use crate::{BitManipulation, DataAccess};
 
 use super::{
     half_word_fixed_point_to_float, word_fixed_point_to_float, AffineDisplayOverflow,
-    AffineScreenSize, BgMode, DisplayFrame, PaletteDepth, Rgb555, TextScreenSize,
+    AffineScreenSize, BgMode, PaletteDepth, Rgb555, TextScreenSize,
 };
 
 #[derive(Debug, Default)]

@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 
 use crate::apu::Apu;
 use crate::cartridge::Cartridge;
-use crate::cpu::{ArmInstruction, ThumbInstruction};
+
 use crate::keypad::Keypad;
 use crate::lcd::{Lcd, LcdStateChangeInfo};
 use crate::timer::Timer;

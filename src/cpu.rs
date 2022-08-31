@@ -2,16 +2,16 @@ mod arm;
 mod thumb;
 
 use std::cell::Cell;
-use std::collections::BTreeMap;
+
 use std::fmt::Display;
 use std::rc::Rc;
 use std::{fmt::Debug, ops::RangeInclusive};
 
 use crate::bus::Bus;
 use crate::cartridge::Cartridge;
-use crate::{cartridge, BitManipulation, DataAccess};
+use crate::{BitManipulation};
 
-use crate::DEBUG_AND_PANIC_ON_LOOP;
+
 
 pub use self::arm::ArmInstruction;
 pub use self::thumb::ThumbInstruction;

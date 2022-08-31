@@ -3,7 +3,7 @@ use crate::BitManipulation;
 use super::{Cpu, ExceptionType, InstructionCondition, Register, ShiftType};
 
 use std::{
-    cmp::{self, Ordering},
+    cmp::{Ordering},
     fmt::Display,
     ops::RangeInclusive,
 };
