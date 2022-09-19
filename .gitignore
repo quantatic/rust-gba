@@ -1,5 +1,4 @@
 /target
-/gba_bios.bin
 /*.gba
 
 .DS_Store
