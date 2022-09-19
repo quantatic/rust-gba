@@ -32,4 +32,4 @@ jobs:
           default: true
 
       - name: Run tests
-        run: cargo test
+        run: cargo test --release
