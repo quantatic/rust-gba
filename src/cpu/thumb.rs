@@ -2,11 +2,7 @@ use crate::BitManipulation;
 
 use super::{Cpu, ExceptionType, InstructionCondition, Register, ShiftType};
 
-use std::{
-    cmp::{Ordering},
-    fmt::Display,
-    ops::RangeInclusive,
-};
+use std::{cmp::Ordering, fmt::Display, ops::RangeInclusive};
 
 #[derive(Clone, Copy, Debug)]
 pub enum ThumbRegisterOperation {

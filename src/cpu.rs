@@ -9,9 +9,7 @@ use std::{fmt::Debug, ops::RangeInclusive};
 
 use crate::bus::Bus;
 use crate::cartridge::Cartridge;
-use crate::{BitManipulation};
-
-
+use crate::BitManipulation;
 
 pub use self::arm::ArmInstruction;
 pub use self::thumb::ThumbInstruction;
