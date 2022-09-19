@@ -816,7 +816,7 @@ impl Bus {
             }
             Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
                 let offset = (address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
-                self.lcd.read_palette_ram(offset)
+                self.lcd.read_palette_ram_byte(offset)
             }
             Self::VRAM_BASE..=Self::VRAM_END => {
                 let vram_offset = (address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
@@ -828,11 +828,11 @@ impl Bus {
                     }
                     _ => unreachable!(),
                 };
-                self.lcd.read_vram(offset)
+                self.lcd.read_vram_byte(offset)
             }
             Self::OAM_BASE..=Self::OAM_END => {
                 let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
-                self.lcd.read_oam(offset)
+                self.lcd.read_oam_byte(offset)
             }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => self
                 .cartridge
@@ -864,6 +864,40 @@ impl Bus {
                 let high_byte = BIOS[(address + 1) as usize];
 
                 u16::from_le_bytes([low_byte, high_byte])
+            }
+            Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
+                let actual_offset = (address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
+                let low_byte = self.chip_wram[actual_offset as usize];
+                let high_byte = self.chip_wram[(actual_offset + 1) as usize];
+
+                u16::from_le_bytes([low_byte, high_byte])
+            }
+            Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
+                let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_BASE;
+                let low_byte = self.board_wram[actual_offset as usize];
+                let high_byte = self.board_wram[(actual_offset + 1) as usize];
+
+                u16::from_le_bytes([low_byte, high_byte])
+            }
+            Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
+                let offset = (address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
+                self.lcd.read_palette_ram_hword(offset)
+            }
+            Self::VRAM_BASE..=Self::VRAM_END => {
+                let vram_offset = (address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
+                let offset = match vram_offset {
+                    Self::VRAM_OFFSET_FIRST_BASE..=Self::VRAM_OFFSET_FIRST_END => vram_offset,
+                    Self::VRAM_OFFSET_SECOND_BASE..=Self::VRAM_OFFSET_SECOND_END => {
+                        ((vram_offset - Self::VRAM_OFFSET_SECOND_BASE) % Self::VRAM_SECOND_SIZE)
+                            + Self::VRAM_OFFSET_SECOND_BASE
+                    }
+                    _ => unreachable!(),
+                };
+                self.lcd.read_vram_hword(offset)
+            }
+            Self::OAM_BASE..=Self::OAM_END => {
+                let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
+                self.lcd.read_oam_hword(offset)
             }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => self
                 .cartridge
@@ -900,6 +934,48 @@ impl Bus {
                 ];
 
                 u32::from_le_bytes(le_bytes)
+            }
+            Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
+                let actual_offset = (address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
+                let le_bytes = [
+                    self.chip_wram[actual_offset as usize],
+                    self.chip_wram[(actual_offset + 1) as usize],
+                    self.chip_wram[(actual_offset + 2) as usize],
+                    self.chip_wram[(actual_offset + 3) as usize],
+                ];
+
+                u32::from_le_bytes(le_bytes)
+            }
+            Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
+                let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
+                let le_bytes = [
+                    self.board_wram[actual_offset as usize],
+                    self.board_wram[(actual_offset + 1) as usize],
+                    self.board_wram[(actual_offset + 2) as usize],
+                    self.board_wram[(actual_offset + 3) as usize],
+                ];
+
+                u32::from_le_bytes(le_bytes)
+            }
+            Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
+                let offset = (address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
+                self.lcd.read_palette_ram_word(offset)
+            }
+            Self::VRAM_BASE..=Self::VRAM_END => {
+                let vram_offset = (address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
+                let offset = match vram_offset {
+                    Self::VRAM_OFFSET_FIRST_BASE..=Self::VRAM_OFFSET_FIRST_END => vram_offset,
+                    Self::VRAM_OFFSET_SECOND_BASE..=Self::VRAM_OFFSET_SECOND_END => {
+                        ((vram_offset - Self::VRAM_OFFSET_SECOND_BASE) % Self::VRAM_SECOND_SIZE)
+                            + Self::VRAM_OFFSET_SECOND_BASE
+                    }
+                    _ => unreachable!(),
+                };
+                self.lcd.read_vram_word(offset)
+            }
+            Self::OAM_BASE..=Self::OAM_END => {
+                let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
+                self.lcd.read_oam_word(offset)
             }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => self
                 .cartridge
@@ -1216,6 +1292,20 @@ impl Bus {
         assert!(address & 0b1 == 0);
 
         match address % Self::MEMORY_SIZE {
+            Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
+                let actual_offset = (address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
+                let [low_byte, high_byte] = value.to_le_bytes();
+
+                self.chip_wram[actual_offset as usize] = low_byte;
+                self.chip_wram[(actual_offset + 1) as usize] = high_byte;
+            }
+            Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
+                let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
+                let [low_byte, high_byte] = value.to_le_bytes();
+
+                self.board_wram[actual_offset as usize] = low_byte;
+                self.board_wram[(actual_offset + 1) as usize] = high_byte;
+            }
             Self::OAM_BASE..=Self::OAM_END => {
                 let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
 
@@ -1266,6 +1356,24 @@ impl Bus {
         assert!(address & 0b11 == 0);
 
         match address % Self::MEMORY_SIZE {
+            Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
+                let actual_offset = (address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
+                let le_bytes = value.to_le_bytes();
+
+                self.chip_wram[actual_offset as usize] = le_bytes[0];
+                self.chip_wram[(actual_offset + 1) as usize] = le_bytes[1];
+                self.chip_wram[(actual_offset + 2) as usize] = le_bytes[2];
+                self.chip_wram[(actual_offset + 3) as usize] = le_bytes[3];
+            }
+            Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
+                let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
+                let le_bytes = value.to_le_bytes();
+
+                self.board_wram[actual_offset as usize] = le_bytes[0];
+                self.board_wram[(actual_offset + 1) as usize] = le_bytes[1];
+                self.board_wram[(actual_offset + 2) as usize] = le_bytes[2];
+                self.board_wram[(actual_offset + 3) as usize] = le_bytes[3];
+            }
             Self::OAM_BASE..=Self::OAM_END => {
                 let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
 

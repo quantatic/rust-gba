@@ -1283,7 +1283,17 @@ impl Lcd {
     const OBJ_PALETTE_RAM_OFFSET_START: u32 = 0x200;
     const OBJ_PALETTE_RAM_OFFSET_END: u32 = 0x3FF;
 
-    pub fn read_palette_ram(&self, offset: u32) -> u8 {
+    pub fn read_palette_ram_byte(&self, offset: u32) -> u8 {
+        let hword_index = offset & 0b1;
+
+        let le_bytes = self.read_palette_ram_hword(offset & (!0b1)).to_le_bytes();
+
+        le_bytes[hword_index as usize]
+    }
+
+    pub fn read_palette_ram_hword(&self, offset: u32) -> u16 {
+        assert!(offset & 0b1 == 0);
+
         let color = match offset {
             Self::BG_PALETTE_RAM_OFFSET_START..=Self::BG_PALETTE_RAM_OFFSET_END => {
                 let color_idx = (offset - Self::BG_PALETTE_RAM_OFFSET_START) / 2;
@@ -1296,7 +1306,16 @@ impl Lcd {
             _ => unreachable!(),
         };
 
-        color.to_int().get_data(offset & 0b1)
+        color.to_int()
+    }
+
+    pub fn read_palette_ram_word(&self, offset: u32) -> u32 {
+        assert!(offset & 0b11 == 0);
+
+        let low_hword = self.read_palette_ram_hword(offset);
+        let high_hword = self.read_palette_ram_hword(offset + 2);
+
+        u32::from(low_hword) | (u32::from(high_hword) << 0x10)
     }
 
     pub fn write_palette_ram_byte(&mut self, value: u8, offset: u32) {
@@ -1337,8 +1356,30 @@ impl Lcd {
         self.write_palette_ram_hword(high_hword, offset + 2);
     }
 
-    pub fn read_vram(&self, offset: u32) -> u8 {
+    pub fn read_vram_byte(&self, offset: u32) -> u8 {
         self.vram[offset as usize]
+    }
+
+    pub fn read_vram_hword(&self, offset: u32) -> u16 {
+        assert!(offset & 0b1 == 0);
+
+        let low_byte = self.vram[offset as usize];
+        let high_byte = self.vram[(offset + 1) as usize];
+
+        u16::from_le_bytes([low_byte, high_byte])
+    }
+
+    pub fn read_vram_word(&self, offset: u32) -> u32 {
+        assert!(offset & 0b11 == 0);
+
+        let le_bytes = [
+            self.vram[offset as usize],
+            self.vram[(offset + 1) as usize],
+            self.vram[(offset + 2) as usize],
+            self.vram[(offset + 3) as usize],
+        ];
+
+        u32::from_le_bytes(le_bytes)
     }
 
     pub fn write_vram_byte(&mut self, value: u8, offset: u32) {
@@ -1406,7 +1447,17 @@ impl Lcd {
         }
     }
 
-    pub fn read_oam(&self, offset: u32) -> u8 {
+    pub fn read_oam_byte(&self, offset: u32) -> u8 {
+        let hword_index = offset % 2;
+
+        let le_bytes = self.read_oam_hword(offset).to_le_bytes();
+
+        le_bytes[hword_index as usize]
+    }
+
+    pub fn read_oam_hword(&self, offset: u32) -> u16 {
+        assert!(offset & 0b1 == 0);
+
         let hword_offset = offset / 2;
 
         let oam_index = (hword_offset / 4) as usize;
@@ -1415,29 +1466,28 @@ impl Lcd {
         let rotation_group_index = (hword_offset / 16) as usize;
         let rotation_group_offset = (hword_offset / 4) % 4;
 
-        let hword_index = offset % 2;
-
         match oam_offset {
-            0 => self.obj_attributes[oam_index].read_attribute_0(hword_index),
-            1 => self.obj_attributes[oam_index].read_attribute_1(hword_index),
-            2 => self.obj_attributes[oam_index].read_attribute_2(hword_index),
+            0 => self.obj_attributes[oam_index].attribute_0,
+            1 => self.obj_attributes[oam_index].attribute_1,
+            2 => self.obj_attributes[oam_index].attribute_2,
             3 => match rotation_group_offset {
-                0 => self.obj_rotations[rotation_group_index]
-                    .a
-                    .get_data(hword_index),
-                1 => self.obj_rotations[rotation_group_index]
-                    .b
-                    .get_data(hword_index),
-                2 => self.obj_rotations[rotation_group_index]
-                    .c
-                    .get_data(hword_index),
-                3 => self.obj_rotations[rotation_group_index]
-                    .d
-                    .get_data(hword_index),
+                0 => self.obj_rotations[rotation_group_index].a,
+                1 => self.obj_rotations[rotation_group_index].b,
+                2 => self.obj_rotations[rotation_group_index].c,
+                3 => self.obj_rotations[rotation_group_index].d,
                 _ => unreachable!(),
             },
             _ => unreachable!(),
         }
+    }
+
+    pub fn read_oam_word(&self, offset: u32) -> u32 {
+        assert!(offset & 0b11 == 0);
+
+        let low_hword = self.read_oam_hword(offset);
+        let high_hword = self.read_oam_hword(offset + 2);
+
+        u32::from(low_hword) | (u32::from(high_hword) << 0x10)
     }
 
     pub fn write_oam_byte(&mut self, _value: u8, _offset: u32) {
