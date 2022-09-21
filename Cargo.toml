@@ -7,13 +7,13 @@ resolver = "2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.62"
-clap = { version = "3.2.16", features = ["derive"] }
+anyhow = "1.0.65"
+clap = { version = "3.2.22", features = ["derive"] }
 lazy_static = "1.4.0"
-phf = { version = "0.11.0", features = ["macros"] }
+phf = { version = "0.11.1", features = ["macros"] }
 pixels = "0.9.0"
 regex = "1.6.0"
-winit = "0.26.1"
+winit = "0.27.3"
 xxhash-rust = { version = "0.8.5", features = ["xxh3"] }
 
 [profile.release]
