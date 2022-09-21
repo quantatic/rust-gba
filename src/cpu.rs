@@ -49,8 +49,8 @@ pub struct Cpu {
     cpsr: u32,
     cycle_count: u64,
     pub bus: Bus,
-    pre_fetch: Option<u32>,
-    pre_decode: Option<Instruction>,
+    pre_fetch_arm: Option<u32>,
+    pre_decode_arm: Option<ArmInstruction>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -234,8 +234,8 @@ impl Cpu {
             cpsr: Self::SYSTEM_MODE_BITS,
             cycle_count: 0,
             bus: Bus::new(cartridge),
-            pre_decode: None,
-            pre_fetch: None,
+            pre_decode_arm: None,
+            pre_fetch_arm: None,
         }
     }
 }
@@ -536,7 +536,7 @@ impl Cpu {
     pub fn fetch_decode_execute(&mut self, debug: bool) {
         if debug {
             let pc_offset = match self.get_instruction_mode() {
-                InstructionSet::Arm => |pc| pc + 4,
+                InstructionSet::Arm => |pc| pc,
                 InstructionSet::Thumb => |pc| pc + 2,
             };
             print!("{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} cpsr: {:08X} | ",
@@ -559,9 +559,11 @@ impl Cpu {
                 self.read_register(Register::Cpsr, |_| unreachable!())
             );
         }
+
         self.bus.step();
 
         if !self.get_irq_disable() && self.bus.get_irq_pending() {
+            self.flush_prefetch();
             self.handle_exception(ExceptionType::InterruptRequest);
         } else {
             let pc = self.read_register(Register::R15, |pc| pc);
@@ -571,12 +573,23 @@ impl Cpu {
                         unreachable!("unaligned ARM pc");
                     }
 
-                    let opcode = self.bus.read_word_address(pc);
+                    let decoded_instruction = self.pre_decode_arm;
+                    let prefetched_opcode = self.pre_fetch_arm;
 
-                    let instruction = arm::decode_arm(opcode);
+                    self.pre_fetch_arm = Some(self.bus.read_word_address(pc));
+                    self.pre_decode_arm = prefetched_opcode.map(arm::decode_arm);
 
-                    self.write_register(pc + 4, Register::R15);
-                    self.execute_arm(instruction);
+                    if let Some(decoded) = decoded_instruction {
+                        if debug {
+                            println!("{decoded}");
+                        }
+                        self.execute_arm(decoded);
+                    } else {
+                        if debug {
+                            println!("PREFETCH");
+                        }
+                        self.write_register(pc + 4, Register::R15);
+                    }
                 }
                 InstructionSet::Thumb => {
                     if pc % 2 != 0 {
@@ -586,6 +599,9 @@ impl Cpu {
                     let opcode = self.bus.read_halfword_address(pc);
 
                     let instruction = thumb::decode_thumb(opcode);
+                    if debug {
+                        println!("{instruction}");
+                    }
 
                     self.write_register(pc + 2, Register::R15);
                     self.execute_thumb(instruction);
@@ -597,8 +613,8 @@ impl Cpu {
     }
 
     fn flush_prefetch(&mut self) {
-        self.pre_fetch = None;
-        self.pre_decode = None;
+        self.pre_decode_arm = None;
+        self.pre_fetch_arm = None;
     }
 
     fn handle_exception(&mut self, exception_type: ExceptionType) {
@@ -613,10 +629,26 @@ impl Cpu {
             ExceptionType::FastInterruptRequest => CpuMode::Fiq,
         };
 
-        let pc_offset = match exception_type {
-            ExceptionType::InterruptRequest => |pc| pc + 4,
-            ExceptionType::Swi => |pc| pc, // PC has already been incremented by decoder
-            _ => todo!("{:?}", exception_type),
+        let pc_offset = match (exception_type, self.get_instruction_mode()) {
+            // PC = $ + 8 FOR ARM ONLY SO FAR
+            // PC = $ for THUMB
+            //
+            // Determine return information. SPSR is to be the current CPSR, after changing the IT[]
+            // bits to give them the correct values for the following instruction, and LR is to be
+            // the current PC minus 2 for Thumb or 4 for ARM, to change the PC offsets of 4 or 8
+            // respectively from the address of the current instruction into the required address of
+            // the next instruction, the SVC instruction having size 2bytes for Thumb or 4 bytes for ARM.
+            (ExceptionType::InterruptRequest, InstructionSet::Arm) => |pc| pc - 4,
+            (ExceptionType::InterruptRequest, InstructionSet::Thumb) => |pc| pc + 4,
+            // Determine return information. SPSR is to be the current CPSR, and LR is to be the
+            // current PC minus 0 for Thumb or 4 for ARM, to change the PC offsets of 4 or 8
+            // respectively from the address of the current instruction into the required address
+            // of the instruction boundary at which the interrupt occurred plus 4. For this
+            // purpose, the PC and CPSR are considered to have already moved on to their values
+            // for the instruction following that boundary.
+            // (ExceptionType::Swi, InstructionSet::Arm) => |pc| pc - 4,
+            (ExceptionType::Swi, InstructionSet::Thumb) => |pc| pc, // PC has already been incremented by decoder
+            (exception_type, mode) => todo!("{exception_type:?}, {mode:?}"),
         };
 
         let old_pc = self.read_register(Register::R15, pc_offset);
@@ -651,6 +683,7 @@ impl Cpu {
 
         let new_pc = Self::get_exception_vector_address(exception_type);
         self.write_register(new_pc, Register::R15);
+        self.flush_prefetch();
     }
 
     fn get_exception_vector_address(exception_type: ExceptionType) -> u32 {
