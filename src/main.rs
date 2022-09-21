@@ -172,28 +172,88 @@ mod tests {
     use super::cpu::Cpu;
 
     use super::*;
+    fn assert_checksum(cpu: &Cpu, checksum: u64) {
+        assert_eq!(calculate_lcd_checksum(cpu), checksum);
+    }
 
-    macro_rules! test_ppu_checksum {
+    fn press_key(cpu: &mut Cpu, key: Key) {
+        cpu.bus.keypad.set_pressed(key, true);
+        for _ in 0..5_000_000 {
+            cpu.fetch_decode_execute(false);
+        }
+        cpu.bus.keypad.set_pressed(key, false);
+        for _ in 0..5_000_000 {
+            cpu.fetch_decode_execute(false);
+        }
+    }
+
+    fn test_ppu_checksum(source: &[u8], checksum: u64) {
+        let cartridge = Cartridge::new(source);
+        let mut cpu = Cpu::new(cartridge);
+
+        for _ in 0..100_000_000 {
+            cpu.fetch_decode_execute(false);
+        }
+
+        assert_checksum(&cpu, checksum);
+    }
+
+    macro_rules! simple_ppu_test {
         ($name:ident, $path:literal, $checksum:literal) => {
             #[test]
             fn $name() {
                 let source = include_bytes!($path);
-                let cartridge = Cartridge::new(source.as_slice());
-                let mut cpu = Cpu::new(cartridge);
-
-                for _ in 0..100_000_000 {
-                    cpu.fetch_decode_execute(false);
-                }
-
-                assert_eq!(calculate_lcd_checksum(&cpu), $checksum);
+                test_ppu_checksum(source, $checksum);
             }
         };
     }
 
-    test_ppu_checksum!(eeprom, "../tests/eeprom_test.gba", 0x7AD21BBF19367764);
-    test_ppu_checksum!(flash, "../tests/flash_test.gba", 0x7AD21BBF19367764);
-    test_ppu_checksum!(mandelbrot, "../tests/mandelbrot.gba", 0x643CD59EBF90FAA9);
-    test_ppu_checksum!(memory, "../tests/memory.gba", 0x740626E6CC2D204A);
-    test_ppu_checksum!(swi_demo, "../tests/swi_demo.gba", 0xD55A7769AD7F9392);
-    test_ppu_checksum!(first, "../tests/first.gba", 0x36B520E8A096B03C);
+    simple_ppu_test!(eeprom, "../tests/eeprom_test.gba", 0x7AD21BBF19367764);
+    simple_ppu_test!(flash, "../tests/flash_test.gba", 0x7AD21BBF19367764);
+    simple_ppu_test!(mandelbrot, "../tests/mandelbrot.gba", 0x643CD59EBF90FAA9);
+    simple_ppu_test!(memory, "../tests/memory.gba", 0x740626E6CC2D204A);
+    simple_ppu_test!(swi_demo, "../tests/swi_demo.gba", 0xD55A7769AD7F9392);
+    simple_ppu_test!(first, "../tests/first.gba", 0x36B520E8A096B03C);
+
+    simple_ppu_test!(armwrestler_simple, "../tests/armwrestler.gba", 0x1C1579ACC537960D);
+
+    #[test]
+    fn armwrestler_complex() {
+        const INITIAL_CHECKSUM: u64 = 0x1C1579ACC537960D;
+
+        const ARM_ALU_PART_1: u64 = 0x53DA53FF9EF55555;
+        const ARM_ALU_PART_2: u64 = 0x5987D6DD7264121C;
+        const ARM_LOAD_TESTS_PART_1: u64 = 0x127F4528A024A777;
+        const ARM_LOAD_TESTS_PART_2: u64 = 0x7569D8F3583A88BD;
+        const ARM_LDM_STM_TESTS_1: u64 = 0x2F4688257C51FD03;
+
+        let source = include_bytes!("../tests/armwrestler.gba");
+        let cartridge = Cartridge::new(source.as_slice());
+        let mut cpu = Cpu::new(cartridge);
+
+        // skip boot screen
+        for _ in 0..100_000_000 {
+            cpu.fetch_decode_execute(false);
+        }
+
+        assert_checksum(&cpu, INITIAL_CHECKSUM);
+
+        press_key(&mut cpu, Key::Start);
+        assert_checksum(&cpu, ARM_ALU_PART_1);
+
+        press_key(&mut cpu, Key::Start);
+        assert_checksum(&cpu, ARM_ALU_PART_2);
+
+        press_key(&mut cpu, Key::Start);
+        assert_checksum(&cpu, ARM_LOAD_TESTS_PART_1);
+
+        press_key(&mut cpu, Key::Start);
+        assert_checksum(&cpu, ARM_LOAD_TESTS_PART_2);
+
+        press_key(&mut cpu, Key::Start);
+        assert_checksum(&cpu, ARM_LDM_STM_TESTS_1);
+
+        press_key(&mut cpu, Key::Start);
+        assert_checksum(&cpu, INITIAL_CHECKSUM);
+    }
 }
