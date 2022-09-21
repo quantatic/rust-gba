@@ -173,16 +173,21 @@ mod tests {
 
     use super::*;
     fn assert_checksum(cpu: &Cpu, checksum: u64) {
-        assert_eq!(calculate_lcd_checksum(cpu), checksum);
+        assert_eq!(checksum, calculate_lcd_checksum(cpu));
     }
 
     fn press_key(cpu: &mut Cpu, key: Key) {
+        // Tune this if this isn't long enough for key presses to register.
+        //
+        // This is currently about 100ms of cpu time (1/10 of a second).
+        const KEY_PRESS_DELAY: usize = (CYCLES_PER_SECOND / 10) as usize;
+
         cpu.bus.keypad.set_pressed(key, true);
-        for _ in 0..5_000_000 {
+        for _ in 0..KEY_PRESS_DELAY {
             cpu.fetch_decode_execute(false);
         }
         cpu.bus.keypad.set_pressed(key, false);
-        for _ in 0..5_000_000 {
+        for _ in 0..KEY_PRESS_DELAY {
             cpu.fetch_decode_execute(false);
         }
     }
@@ -218,7 +223,7 @@ mod tests {
     simple_ppu_test!(armwrestler_simple, "../tests/armwrestler.gba", 0x1C1579ACC537960D);
 
     #[test]
-    fn armwrestler_complex() {
+    fn armwrestler_arm_complex() {
         const INITIAL_CHECKSUM: u64 = 0x1C1579ACC537960D;
 
         const ARM_ALU_PART_1: u64 = 0x53DA53FF9EF55555;
@@ -254,6 +259,52 @@ mod tests {
         assert_checksum(&cpu, ARM_LDM_STM_TESTS_1);
 
         press_key(&mut cpu, Key::Start);
+        assert_checksum(&cpu, INITIAL_CHECKSUM);
+    }
+
+    #[test]
+    fn armwrestler_thumb_complex() {
+        const INITIAL_CHECKSUM: u64 = 0x1C1579ACC537960D;
+
+        const THUMB_TESTS_SELECTED_CHECKSUM: u64 = 0xF36B500E2D90CD52;
+
+        const THUMB_ALU_TEST: u64 = 0x55D652A9DAE7F2A0;
+        const THUMB_LDR_STR_TEST: u64 = 0xF4F5CBE6217EF9F0;
+        const THUMB_LDM_STM_TEST: u64 = 0xDED0DBE7F075848E;
+
+        let source = include_bytes!("../tests/armwrestler.gba");
+        let cartridge = Cartridge::new(source.as_slice());
+        let mut cpu = Cpu::new(cartridge);
+
+        // skip boot screen
+        for _ in 0..100_000_000 {
+            cpu.fetch_decode_execute(false);
+        }
+
+        assert_checksum(&cpu, INITIAL_CHECKSUM);
+
+        // Scroll down to Thumb tests.
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        assert_checksum(&cpu, THUMB_TESTS_SELECTED_CHECKSUM);
+
+        press_key(&mut cpu, Key::Start);
+        assert_checksum(&cpu, THUMB_ALU_TEST);
+
+        press_key(&mut cpu, Key::Start);
+        assert_checksum(&cpu, THUMB_LDR_STR_TEST);
+
+        press_key(&mut cpu, Key::Start);
+        assert_checksum(&cpu, THUMB_LDM_STM_TEST);
+
+        press_key(&mut cpu, Key::Start);
+        assert_checksum(&cpu, THUMB_TESTS_SELECTED_CHECKSUM);
+
+        // Scroll back up to initial state.
+        press_key(&mut cpu, Key::Up);
+        press_key(&mut cpu, Key::Up);
+        press_key(&mut cpu, Key::Up);
         assert_checksum(&cpu, INITIAL_CHECKSUM);
     }
 }
