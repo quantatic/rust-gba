@@ -1,6 +1,6 @@
 use super::{Cpu, ExceptionType, InstructionCondition, Register, ShiftType};
 
-use crate::{BitManipulation, DataAccess, DEBUG_AND_PANIC_ON_LOOP};
+use crate::{BitManipulation, DataAccess};
 
 use std::fmt::Display;
 use std::ops::RangeInclusive;
@@ -1372,7 +1372,7 @@ impl Cpu {
                 shift_info: ArmRegisterOrImmediate::Register(_),
                 ..
             } => |pc| pc + 4,
-            _ => |pc| pc + 0,
+            _ => |pc| pc,
         };
 
         let first_operand_value = self.read_register(first_operand, pc_operand_calculation);
@@ -1641,7 +1641,7 @@ impl Cpu {
 
         let source_value = match source_info {
             MsrSourceInfo::Immediate { value } => value,
-            MsrSourceInfo::Register(register) => self.read_register(register, |pc| unreachable!()),
+            MsrSourceInfo::Register(register) => self.read_register(register, |_| unreachable!()),
         };
 
         let mut write_mask = 0;
@@ -1666,7 +1666,7 @@ impl Cpu {
             PsrTransferPsr::Spsr => Register::Spsr,
         };
 
-        let original_psr_value = self.read_register(psr_register, |pc| unreachable!());
+        let original_psr_value = self.read_register(psr_register, |_| unreachable!());
         let new_psr_value = (source_value & write_mask) | (original_psr_value & (!write_mask));
 
         self.write_register(new_psr_value, psr_register);
@@ -1700,7 +1700,7 @@ impl Cpu {
         let offset_amount = match offset_info.value {
             SingleDataTransferOffsetValue::Immediate { offset } => offset,
             SingleDataTransferOffsetValue::Register { offset_register } => {
-                self.read_register(offset_register, |pc| unreachable!())
+                self.read_register(offset_register, |_| unreachable!())
             }
             SingleDataTransferOffsetValue::RegisterImmediate {
                 offset_register,
@@ -1710,7 +1710,7 @@ impl Cpu {
                 assert!(!matches!(offset_register, Register::R15));
 
                 let offset_register_value =
-                    self.read_register(offset_register, |pc| unreachable!());
+                    self.read_register(offset_register, |_| unreachable!());
                 shift_type.evaluate(offset_register_value, shift_amount)
             }
         };
@@ -1775,7 +1775,7 @@ impl Cpu {
         let offset_amount = match offset_info.value {
             SingleDataTransferOffsetValue::Immediate { offset } => offset,
             SingleDataTransferOffsetValue::Register { offset_register } => {
-                self.read_register(offset_register, |pc| unreachable!())
+                self.read_register(offset_register, |_| unreachable!())
             }
             SingleDataTransferOffsetValue::RegisterImmediate {
                 offset_register,
@@ -2075,7 +2075,7 @@ impl Cpu {
                             self.set_cpu_mode(old_mode);
                             result
                         } else {
-                            self.read_register(register, |pc| unreachable!())
+                            self.read_register(register, |_| unreachable!())
                         };
 
                         self.bus
@@ -2105,7 +2105,7 @@ impl Cpu {
                 self.set_cpu_mode(old_mode);
                 result
             } else {
-                self.read_register(register, |pc| unreachable!())
+                self.read_register(register, |_| unreachable!())
             };
 
             self.bus

@@ -51,6 +51,8 @@ pub struct Cpu {
     pub bus: Bus,
     pre_fetch_arm: Option<u32>,
     pre_decode_arm: Option<ArmInstruction>,
+    pre_fetch_thumb: Option<u16>,
+    pre_decode_thumb: Option<ThumbInstruction>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -236,6 +238,8 @@ impl Cpu {
             bus: Bus::new(cartridge),
             pre_decode_arm: None,
             pre_fetch_arm: None,
+            pre_decode_thumb: None,
+            pre_fetch_thumb: None,
         }
     }
 }
@@ -535,10 +539,7 @@ impl Cpu {
 impl Cpu {
     pub fn fetch_decode_execute(&mut self, debug: bool) {
         if debug {
-            let pc_offset = match self.get_instruction_mode() {
-                InstructionSet::Arm => |pc| pc,
-                InstructionSet::Thumb => |pc| pc + 2,
-            };
+            let pc_offset = |pc| pc;
             print!("{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} cpsr: {:08X} | ",
                 self.read_register(Register::R0, |_| unreachable!()),
                 self.read_register(Register::R1, |_| unreachable!()),
@@ -596,15 +597,24 @@ impl Cpu {
                         unreachable!("unaligned Thumb pc");
                     }
 
-                    let opcode = self.bus.read_halfword_address(pc);
+                    let decoded_instruction = self.pre_decode_thumb;
+                    let prefetched_opcode = self.pre_fetch_thumb;
 
-                    let instruction = thumb::decode_thumb(opcode);
-                    if debug {
-                        println!("{instruction}");
+                    self.pre_fetch_thumb = Some(self.bus.read_halfword_address(pc));
+                    self.pre_decode_thumb = prefetched_opcode.map(thumb::decode_thumb);
+
+                    if let Some(decoded) = decoded_instruction {
+                        if debug {
+                            println!("{decoded}");
+                        }
+
+                        self.execute_thumb(decoded);
+                    } else {
+                        if debug {
+                            println!("PREFETCH");
+                        }
+                        self.write_register(pc + 2, Register::R15);
                     }
-
-                    self.write_register(pc + 2, Register::R15);
-                    self.execute_thumb(instruction);
                 }
             }
         }
@@ -615,6 +625,9 @@ impl Cpu {
     fn flush_prefetch(&mut self) {
         self.pre_decode_arm = None;
         self.pre_fetch_arm = None;
+
+        self.pre_decode_thumb = None;
+        self.pre_fetch_thumb = None;
     }
 
     fn handle_exception(&mut self, exception_type: ExceptionType) {
@@ -630,24 +643,28 @@ impl Cpu {
         };
 
         let pc_offset = match (exception_type, self.get_instruction_mode()) {
-            // PC = $ + 8 FOR ARM ONLY SO FAR
-            // PC = $ for THUMB
+            // PC = $ + 8 for ARM
+            // PC = $ + 4 for Thumb
             //
-            // Determine return information. SPSR is to be the current CPSR, after changing the IT[]
-            // bits to give them the correct values for the following instruction, and LR is to be
-            // the current PC minus 2 for Thumb or 4 for ARM, to change the PC offsets of 4 or 8
-            // respectively from the address of the current instruction into the required address of
-            // the next instruction, the SVC instruction having size 2bytes for Thumb or 4 bytes for ARM.
-            (ExceptionType::InterruptRequest, InstructionSet::Arm) => |pc| pc - 4,
-            (ExceptionType::InterruptRequest, InstructionSet::Thumb) => |pc| pc + 4,
+            // IRQ Exception
+            //
             // Determine return information. SPSR is to be the current CPSR, and LR is to be the
             // current PC minus 0 for Thumb or 4 for ARM, to change the PC offsets of 4 or 8
             // respectively from the address of the current instruction into the required address
             // of the instruction boundary at which the interrupt occurred plus 4. For this
             // purpose, the PC and CPSR are considered to have already moved on to their values
             // for the instruction following that boundary.
+            (ExceptionType::InterruptRequest, InstructionSet::Arm) => |pc| pc - 4,
+            (ExceptionType::InterruptRequest, InstructionSet::Thumb) => |pc| pc,
+            // SVC (SWI) Exception
+            //
+            // Determine return information. SPSR is to be the current CPSR, after changing the IT[]
+            // bits to give them the correct values for the following instruction, and LR is to be
+            // the current PC minus 2 for Thumb or 4 for ARM, to change the PC offsets of 4 or 8
+            // respectively from the address of the current instruction into the required address of
+            // the next instruction, the SVC instruction having size 2bytes for Thumb or 4 bytes for ARM.
             // (ExceptionType::Swi, InstructionSet::Arm) => |pc| pc - 4,
-            (ExceptionType::Swi, InstructionSet::Thumb) => |pc| pc, // PC has already been incremented by decoder
+            (ExceptionType::Swi, InstructionSet::Thumb) => |pc| pc - 2,
             (exception_type, mode) => todo!("{exception_type:?}, {mode:?}"),
         };
 

@@ -101,6 +101,9 @@ pub enum ThumbInstructionType {
     Bx {
         operand: Register,
     },
+    Blx {
+        operand: Register,
+    },
     Push {
         register_bit_list: [bool; 8],
         push_lr: bool,
@@ -126,6 +129,9 @@ pub enum ThumbInstructionType {
     Swi {
         comment: u16,
     },
+    Invalid {
+        opcode: u16,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -150,7 +156,7 @@ pub fn decode_thumb(opcode: u16) -> ThumbInstruction {
     let instruction_type = if let Some(instruction_type) = maybe_instruction_type {
         instruction_type
     } else {
-        todo!("unrecognized Thumb opcode {:04X}", opcode)
+        ThumbInstructionType::Invalid { opcode }
     };
 
     ThumbInstruction { instruction_type }
@@ -383,8 +389,9 @@ fn try_decode_thumb_high_register_operations_branch_exchange(
         },
         3 => {
             if dest_register_msb_bl_flag {
-                // blx
-                todo!()
+                ThumbInstructionType::Blx {
+                    operand: source_register,
+                }
             } else {
                 ThumbInstructionType::Bx {
                     operand: source_register,
@@ -997,6 +1004,12 @@ impl Cpu {
             _ => todo!("{:#016x?}", instruction),
         }
     }
+
+    fn advance_pc_for_thumb_instruction(&mut self) {
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        let new_pc = old_pc.wrapping_add(2);
+        self.write_register(new_pc, Register::R15);
+    }
 }
 
 impl Cpu {
@@ -1007,7 +1020,7 @@ impl Cpu {
         source: Register,
         second_operand: ThumbRegisterOrImmediate,
     ) {
-        let first_operand_value = self.read_register(source, |pc| pc + 2);
+        let first_operand_value = self.read_register(source, |_| unreachable!());
         let second_operand_value =
             self.evaluate_thumb_register_or_immedate(second_operand, |_| unreachable!());
 
@@ -1294,6 +1307,9 @@ impl Cpu {
         self.set_sign_flag(signed_result < 0);
         self.set_zero_flag(unsigned_result == 0);
 
+        // Assert that we never write out to R15 -- if we did, we would have to flush prefetch in this case
+        assert!(!matches!(destination_register, Register::R15));
+
         if matches!(
             operation,
             ThumbRegisterOperation::Lsl
@@ -1315,6 +1331,8 @@ impl Cpu {
         ) {
             self.write_register(unsigned_result, destination_register);
         }
+
+        self.advance_pc_for_thumb_instruction();
     }
 
     fn execute_thumb_high_register_operation(
@@ -1323,12 +1341,18 @@ impl Cpu {
         operation: ThumbHighRegisterOperation,
         source: Register,
     ) {
-        let destination_register_value = self.read_register(destination_register, |pc| pc + 2);
-        let source_value = self.read_register(source, |pc| pc + 2);
+        let destination_register_value = self.read_register(destination_register, |pc| pc);
+        let source_value = self.read_register(source, |pc| pc);
         match operation {
             ThumbHighRegisterOperation::Add => {
                 let result = destination_register_value.wrapping_add(source_value);
                 self.write_register(result, destination_register);
+
+                if matches!(destination_register, Register::R15) {
+                    self.flush_prefetch();
+                } else {
+                    self.advance_pc_for_thumb_instruction();
+                }
             }
             ThumbHighRegisterOperation::Cmp => {
                 // cmp is only high register operation that sets flags, but it doesn't write value out to destination register.
@@ -1341,9 +1365,18 @@ impl Cpu {
                 self.set_zero_flag(unsigned_result == 0);
                 self.set_carry_flag(!borrow);
                 self.set_overflow_flag(overflow);
+
+                // Mov can't write out to R15 (or any register for that matter), so unconditionally advance PC (never flush).
+                self.advance_pc_for_thumb_instruction();
             }
             ThumbHighRegisterOperation::Mov => {
-                self.write_register(source_value, destination_register)
+                self.write_register(source_value, destination_register);
+
+                if matches!(destination_register, Register::R15) {
+                    self.flush_prefetch();
+                } else {
+                    self.advance_pc_for_thumb_instruction();
+                }
             }
         }
     }
@@ -1356,7 +1389,7 @@ impl Cpu {
         size: ThumbLoadStoreDataSize,
         sign_extend: bool,
     ) {
-        let base_address = self.read_register(base_register, |pc| (pc + 2) & (!2));
+        let base_address = self.read_register(base_register, |pc| pc & (!2));
         let base_offset = match offset {
             ThumbRegisterOrImmediate::Immediate(immediate) => immediate,
             ThumbRegisterOrImmediate::Register(register) => {
@@ -1400,6 +1433,10 @@ impl Cpu {
         };
 
         self.write_register(result_value, destination_register);
+
+        // Assert that we never write out to R15, so we can unconditionally advance PC.
+        assert!(!matches!(destination_register, Register::R15));
+        self.advance_pc_for_thumb_instruction();
     }
 
     fn execute_thumb_str(
@@ -1431,42 +1468,55 @@ impl Cpu {
                 .bus
                 .write_word_address(source_register_value, real_address & (!0b11)),
         }
+
+        self.advance_pc_for_thumb_instruction();
     }
 
     fn execute_thumb_b(&mut self, condition: InstructionCondition, offset: i16) {
         if self.evaluate_instruction_condition(condition) {
             let old_pc = self.read_register(Register::R15, |pc| pc);
-            let new_pc = old_pc.wrapping_add(offset as u32).wrapping_add(2);
+            let new_pc = old_pc.wrapping_add(offset as u32);
             self.write_register(new_pc, Register::R15);
+
+            self.flush_prefetch();
+        } else {
+            self.advance_pc_for_thumb_instruction();
         }
     }
 
     // LR = PC + 4 + offset
+    // PC = $ + 4 already due to prefetch
     fn execute_thumb_bl_part_1(&mut self, offset: i32) {
         let old_pc = self.read_register(Register::R15, |pc| pc);
-        let new_lr = old_pc.wrapping_add(offset as u32).wrapping_add(2);
+        let new_lr = old_pc.wrapping_add(offset as u32);
 
         self.write_register(new_lr, Register::R14);
+        self.advance_pc_for_thumb_instruction();
     }
 
     // PC = LR + (nn SHL 1), and LR = PC+2 OR 1
+    // PC = $ + 4 already due to prefetch
     fn execute_thumb_bl_part_2(&mut self, offset: u16) {
-        let new_pc = self
-            .read_register(Register::R14, |_| unreachable!())
-            .wrapping_add(u32::from(offset));
-        let new_lr = self.read_register(Register::R15, |pc| pc) | 1;
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        let old_lr = self.read_register(Register::R14, |_| unreachable!());
+
+        let new_pc = old_lr.wrapping_add(u32::from(offset));
+        let new_lr = (old_pc - 2) | 1;
 
         self.write_register(new_pc, Register::R15);
         self.write_register(new_lr, Register::R14);
+
+        self.flush_prefetch();
     }
 
     fn execute_thumb_bx(&mut self, operand: Register) {
         const NEW_STATE_BIT_INDEX: usize = 0;
 
         // "BX R15: CPU switches to ARM state, and PC is auto-aligned as (($+4) AND NOT 2)."
+        // Note that PC = $ + 4 already due to prefetch.
         //
         // Ensure bit 0 is also cleared to make sure we switch to ARM state.
-        let operand_value = self.read_register(operand, |pc| (pc + 2) & (!2) & (!1));
+        let operand_value = self.read_register(operand, |pc| pc & (!2) & (!1));
 
         let new_state_bit = operand_value.get_bit(NEW_STATE_BIT_INDEX);
         self.set_cpu_state_bit(new_state_bit);
@@ -1474,6 +1524,7 @@ impl Cpu {
         let new_pc = operand_value & (!1);
 
         self.write_register(new_pc, Register::R15);
+        self.flush_prefetch();
     }
 
     fn execute_thumb_push(&mut self, register_bit_list: [bool; 8], push_lr: bool) {
@@ -1498,6 +1549,8 @@ impl Cpu {
                     .write_word_address(pushed_register_value, new_r13 & (!0b11));
             }
         }
+
+        self.advance_pc_for_thumb_instruction();
     }
 
     fn execute_thumb_pop(&mut self, register_bit_list: [bool; 8], pop_pc: bool) {
@@ -1508,6 +1561,9 @@ impl Cpu {
                 let popped_register_value = self.bus.read_word_address(old_r13 & (!0b11));
 
                 self.write_register(old_r13 + 4, Register::R13);
+
+                // Ensure that we don't update R15 here so we don't have to check for prefetch flush here.
+                assert!(!matches!(popped_register, Register::R15));
                 self.write_register(popped_register_value, popped_register);
             }
         }
@@ -1519,6 +1575,10 @@ impl Cpu {
 
             self.write_register(old_r13 + 4, Register::R13);
             self.write_register(pc_value, Register::R15);
+
+            self.flush_prefetch();
+        } else {
+            self.advance_pc_for_thumb_instruction();
         }
     }
 
@@ -1532,7 +1592,7 @@ impl Cpu {
         for (register_idx, register_stored) in register_bit_list.into_iter().enumerate() {
             if register_stored {
                 let stored_register = Register::from_index(register_idx as u32);
-                let stored_register_value = self.read_register(stored_register, |_| todo!());
+                let stored_register_value = self.read_register(stored_register, |_| unreachable!());
 
                 self.bus
                     .write_word_address(stored_register_value, current_write_address);
@@ -1542,6 +1602,9 @@ impl Cpu {
         }
 
         self.write_register(current_write_address, base_register);
+
+        assert!(!matches!(base_register, Register::R15));
+        self.advance_pc_for_thumb_instruction();
     }
 
     fn execute_thumb_ldmia_write_back(
@@ -1558,11 +1621,18 @@ impl Cpu {
 
                 self.write_register(loaded_value, loaded_register);
 
+                // Ensure that R15 is never loaded as part of this routine.
+                assert!(!matches!(loaded_register, Register::R15));
+
                 current_read_address += 4;
             }
         }
 
         self.write_register(current_read_address, base_register);
+
+        // Ensure that the base register can never be R15, so we can unconditionally just increment PC.
+        assert!(!matches!(base_register, Register::R15));
+        self.advance_pc_for_thumb_instruction();
     }
 
     fn execute_thumb_add_special(
@@ -1573,7 +1643,9 @@ impl Cpu {
         unsigned_offset: u16,
     ) {
         // (when reading PC): "Rd = (($+4) AND NOT 2) + nn"
-        let source_register_value = self.read_register(source_register, |pc| (pc + 2) & (!2));
+        //
+        // Keep in mind that PC = $ + 4 due to prefetch.
+        let source_register_value = self.read_register(source_register, |pc| pc & (!2));
 
         let result_value = if sign_bit {
             source_register_value - u32::from(unsigned_offset)
@@ -1582,6 +1654,10 @@ impl Cpu {
         };
 
         self.write_register(result_value, dest_register);
+
+        // Ensure that the base register can never be R15, so we can unconditionally just increment PC.
+        assert!(!matches!(dest_register, Register::R15));
+        self.advance_pc_for_thumb_instruction();
     }
 }
 
@@ -1706,6 +1782,7 @@ impl Display for ThumbInstruction {
                 write!(f, "b{} 0x{:08X}", condition, offset)
             }
             ThumbInstructionType::Bx { operand } => write!(f, "bx {}", operand),
+            ThumbInstructionType::Blx { operand } => write!(f, "blx {}", operand),
             ThumbInstructionType::Push {
                 register_bit_list,
                 push_lr,
@@ -1950,6 +2027,7 @@ impl Display for ThumbInstruction {
                 Ok(())
             }
             ThumbInstructionType::Swi { comment } => write!(f, "swi #{}", comment),
+            ThumbInstructionType::Invalid { opcode } => write!(f, "INVALID 0x{opcode:04X}"),
         }
     }
 }
