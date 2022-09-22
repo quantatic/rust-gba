@@ -66,6 +66,10 @@ fn main() -> Result<()> {
     let cartridge = cartridge::Cartridge::new(rom_file);
     let mut cpu = cpu::Cpu::new(cartridge);
 
+    // for _ in 0..74_500_000 {
+    //     cpu.fetch_decode_execute(false);
+    // }
+
     let init = Instant::now();
     let mut last_step = Instant::now();
     let mut i = 0;
@@ -220,7 +224,17 @@ mod tests {
     simple_ppu_test!(swi_demo, "../tests/swi_demo.gba", 0xD55A7769AD7F9392);
     simple_ppu_test!(first, "../tests/first.gba", 0x36B520E8A096B03C);
 
-    simple_ppu_test!(armwrestler_simple, "../tests/armwrestler.gba", 0x1C1579ACC537960D);
+    simple_ppu_test!(dma_demo_simple, "../tests/dma_demo.gba", 0x9BA3DB86C4D5D083);
+
+    simple_ppu_test!(hello, "../tests/hello.gba", 0xCF2FB83F6755E1DB);
+
+    simple_ppu_test!(m3_demo, "../tests/m3_demo.gba", 0x7F4A2DFC61FC7E34);
+
+    simple_ppu_test!(
+        armwrestler_simple,
+        "../tests/armwrestler.gba",
+        0x1C1579ACC537960D
+    );
 
     #[test]
     fn armwrestler_arm_complex() {
