@@ -220,7 +220,7 @@ impl Layer2 {
                 let x = x;
                 let y = y;
 
-                let pixel_idx = (usize::from(y) * super::LCD_WIDTH) + usize::from(x);
+                let pixel_idx = (usize::from(y) * super::Lcd::LCD_WIDTH) + usize::from(x);
                 let pixel_offset = pixel_idx * 2;
 
                 let pixel_low = vram[pixel_offset];
@@ -242,7 +242,7 @@ impl Layer2 {
                 let x = x;
                 let y = y;
 
-                let pixel_idx = (usize::from(y) * super::LCD_WIDTH) + usize::from(x);
+                let pixel_idx = (usize::from(y) * super::Lcd::LCD_WIDTH) + usize::from(x);
                 let pixel_offset = match frame {
                     DisplayFrame::Frame0 => pixel_idx,
                     DisplayFrame::Frame1 => pixel_idx + (FRAME_SIZE as usize),

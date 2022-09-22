@@ -12,9 +12,6 @@ use crate::{BitManipulation, DataAccess};
 
 use std::{cmp::Ordering, fmt::Debug, ops::RangeInclusive};
 
-pub const LCD_WIDTH: usize = 240;
-pub const LCD_HEIGHT: usize = 160;
-
 #[derive(Debug)]
 enum LcdState {
     Visible,
@@ -452,8 +449,8 @@ pub struct Lcd {
     vram: Box<[u8; 0x18000]>,
     obj_attributes: Box<[ObjectAttributeInfo; 0x80]>,
     obj_rotations: Box<[ObjectRotationScalingInfo; 0x20]>,
-    buffer: Box<[[Rgb555; LCD_WIDTH]; LCD_HEIGHT]>, // access as buffer[y][x]
-    back_buffer: Box<[[Rgb555; LCD_WIDTH]; LCD_HEIGHT]>,
+    buffer: Box<[[Rgb555; Self::LCD_WIDTH]; Self::LCD_HEIGHT]>, // access as buffer[y][x]
+    back_buffer: Box<[[Rgb555; Self::LCD_WIDTH]; Self::LCD_HEIGHT]>,
     layer_0: Layer0,
     layer_1: Layer1,
     layer_2: Layer2,
@@ -500,8 +497,8 @@ impl Default for Lcd {
             vram: Box::new([0; 0x18000]),
             obj_attributes: Box::new([ObjectAttributeInfo::default(); 0x80]),
             obj_rotations: Box::new([ObjectRotationScalingInfo::default(); 0x20]),
-            buffer: Box::new([[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT]),
-            back_buffer: Box::new([[Rgb555::default(); LCD_WIDTH]; LCD_HEIGHT]),
+            buffer: Box::new([[Rgb555::default(); Self::LCD_WIDTH]; Self::LCD_HEIGHT]),
+            back_buffer: Box::new([[Rgb555::default(); Self::LCD_WIDTH]; Self::LCD_HEIGHT]),
             layer_0: Layer0::default(),
             layer_1: Layer1::default(),
             layer_2: Layer2::default(),
@@ -511,6 +508,9 @@ impl Default for Lcd {
 }
 
 impl Lcd {
+    pub const LCD_WIDTH: usize = 240;
+    pub const LCD_HEIGHT: usize = 160;
+
     pub fn step(&mut self) -> LcdStateChangeInfo {
         let mut vblank_entered = false;
         let mut hblank_entered = false;
@@ -2379,7 +2379,7 @@ impl Lcd {
 }
 
 impl Lcd {
-    pub fn get_buffer(&self) -> &[[Rgb555; LCD_WIDTH]; LCD_HEIGHT] {
+    pub fn get_buffer(&self) -> &[[Rgb555; Self::LCD_WIDTH]; Self::LCD_HEIGHT] {
         &self.buffer
     }
 }

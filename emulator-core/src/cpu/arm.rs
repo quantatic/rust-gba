@@ -1709,8 +1709,7 @@ impl Cpu {
             } => {
                 assert!(!matches!(offset_register, Register::R15));
 
-                let offset_register_value =
-                    self.read_register(offset_register, |_| unreachable!());
+                let offset_register_value = self.read_register(offset_register, |_| unreachable!());
                 shift_type.evaluate(offset_register_value, shift_amount)
             }
         };
