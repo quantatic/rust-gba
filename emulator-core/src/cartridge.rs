@@ -111,7 +111,7 @@ impl Cartridge {
         if offset < self.rom.len() {
             self.rom[offset as usize]
         } else {
-            println!("OUT OF BOUNDS READ CARTRIDGE OFFSET: {:08X}", offset);
+            log::warn!("OUT OF BOUNDS READ CARTRIDGE OFFSET: {:08X}", offset);
             0
         }
     }
@@ -166,12 +166,16 @@ impl Cartridge {
         }
     }
 
-    pub fn read_sram_hword(&self, _offset: u32) -> u16 {
-        unreachable!()
+    pub fn read_sram_hword(&self, offset: u32) -> u16 {
+        // unreachable!()
+        log::warn!("reading hword from sram at offset 0x{:08X}", offset);
+        0
     }
 
-    pub fn read_sram_word(&self, _offset: u32) -> u32 {
-        unreachable!()
+    pub fn read_sram_word(&self, offset: u32) -> u32 {
+        // unreachable!()
+        log::warn!("reading word from sram at offset 0x{:08X}", offset);
+        0
     }
 
     pub fn write_sram_byte(&mut self, value: u8, offset: u32) {

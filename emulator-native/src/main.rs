@@ -12,7 +12,7 @@ use winit::{
 
 use emulator_core::{calculate_lcd_checksum, Cartridge, Cpu, Key, Lcd, CYCLES_PER_SECOND};
 
-const DEBUG_AND_PANIC_ON_LOOP: bool = false;
+const DEBUG_AND_PANIC_ON_LOOP: bool = true;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -22,7 +22,20 @@ struct Args {
     frames: Option<u64>,
 }
 
+fn press_key(cpu: &mut Cpu, key: Key) {
+    cpu.bus.keypad.set_pressed(key, true);
+    for _ in 0..500_000 {
+        cpu.fetch_decode_execute_no_logs();
+    }
+    cpu.bus.keypad.set_pressed(key, false);
+    for _ in 0..500_000 {
+        cpu.fetch_decode_execute_no_logs();
+    }
+}
+
 fn main() -> Result<()> {
+    env_logger::init();
+
     let args = Args::parse();
 
     let rom_file =
@@ -49,10 +62,6 @@ fn main() -> Result<()> {
     let cartridge = Cartridge::new(rom_file);
     let mut cpu = Cpu::new(cartridge);
 
-    // for _ in 0..74_500_000 {
-    //     cpu.fetch_decode_execute(false);
-    // }
-
     let init = Instant::now();
     let mut last_step = Instant::now();
     let mut i = 0;
@@ -60,7 +69,7 @@ fn main() -> Result<()> {
         match event {
             Event::MainEventsCleared => {
                 for _ in 0..(CYCLES_PER_SECOND / 60) {
-                    cpu.fetch_decode_execute(DEBUG_AND_PANIC_ON_LOOP);
+                    cpu.fetch_decode_execute_logs();
                 }
 
                 let draw_buffer = pixels.get_frame();

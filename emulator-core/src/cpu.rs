@@ -49,9 +49,8 @@ pub struct Cpu {
     cpsr: u32,
     cycle_count: u64,
     pub bus: Bus,
-    pre_fetch_arm: Option<u32>,
+    prefetch_opcode: Option<u32>,
     pre_decode_arm: Option<ArmInstruction>,
-    pre_fetch_thumb: Option<u16>,
     pre_decode_thumb: Option<ThumbInstruction>,
 }
 
@@ -237,9 +236,8 @@ impl Cpu {
             cycle_count: 0,
             bus: Bus::new(cartridge),
             pre_decode_arm: None,
-            pre_fetch_arm: None,
+            prefetch_opcode: None,
             pre_decode_thumb: None,
-            pre_fetch_thumb: None,
         }
     }
 }
@@ -482,7 +480,7 @@ impl Cpu {
             Register::R15 => {
                 if self.get_cpu_state_bit() {
                     if value & 0b1 != 0 {
-                        println!(
+                        log::warn!(
                             "writing to Thumb PC with unaligned value: 0x{:08X}, force aligning",
                             value
                         );
@@ -490,7 +488,7 @@ impl Cpu {
                     registers.r15.set(value & !0b1);
                 } else {
                     if value & 0b11 != 0 {
-                        println!(
+                        log::warn!(
                             "writing to ARM PC with unaligned value: 0x{:08X}, force aligning",
                             value
                         );
@@ -537,10 +535,17 @@ impl Cpu {
 }
 
 impl Cpu {
-    pub fn fetch_decode_execute(&mut self, debug: bool) {
+    pub fn fetch_decode_execute_logs(&mut self) {
+        self.fetch_decode_execute(true);
+    }
+
+    pub fn fetch_decode_execute_no_logs(&mut self) {
+        self.fetch_decode_execute(false);
+    }
+
+    fn fetch_decode_execute(&mut self, debug: bool) {
         if debug {
-            let pc_offset = |pc| pc;
-            print!("{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} cpsr: {:08X} | ",
+            log::trace!("{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} cpsr: {:08X} | ",
                 self.read_register(Register::R0, |_| unreachable!()),
                 self.read_register(Register::R1, |_| unreachable!()),
                 self.read_register(Register::R2, |_| unreachable!()),
@@ -556,65 +561,84 @@ impl Cpu {
                 self.read_register(Register::R12, |_| unreachable!()),
                 self.read_register(Register::R13, |_| unreachable!()),
                 self.read_register(Register::R14, |_| unreachable!()),
-                self.read_register(Register::R15, pc_offset),
+                self.read_register(Register::R15, |pc| pc),
                 self.read_register(Register::Cpsr, |_| unreachable!())
             );
         }
 
         self.bus.step();
 
-        if !self.get_irq_disable() && self.bus.get_irq_pending() {
-            self.flush_prefetch();
-            self.handle_exception(ExceptionType::InterruptRequest);
-        } else {
-            let pc = self.read_register(Register::R15, |pc| pc);
-            match self.get_instruction_mode() {
-                InstructionSet::Arm => {
-                    if pc % 4 != 0 {
-                        unreachable!("unaligned ARM pc");
-                    }
+        let irq_wanted = !self.get_irq_disable() && self.bus.get_irq_pending();
+        let pc = self.read_register(Register::R15, |pc| pc);
 
-                    let decoded_instruction = self.pre_decode_arm;
-                    let prefetched_opcode = self.pre_fetch_arm;
+        match self.get_instruction_mode() {
+            InstructionSet::Arm => {
+                if pc % 4 != 0 {
+                    unreachable!("unaligned ARM pc");
+                }
 
-                    self.pre_fetch_arm = Some(self.bus.read_word_address(pc));
-                    self.pre_decode_arm = prefetched_opcode.map(arm::decode_arm);
+                let decoded_instruction = self.pre_decode_arm;
+                let prefetched_opcode = self.prefetch_opcode;
 
-                    if let Some(decoded) = decoded_instruction {
-                        if debug {
-                            println!("{decoded}");
-                        }
-                        self.execute_arm(decoded);
+                self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(pc));
+                self.pre_decode_arm = prefetched_opcode.map(arm::decode_arm);
+
+                if let Some(decoded) = decoded_instruction {
+                    // IRQ must only be dispatched when the pipeline is full.
+                    //
+                    // The return value we push in the IRQ handler is based on the current value of
+                    // PC, which is in turned based on how saturated the prefetch pipeline is. As
+                    // a result, if we attempt to dispatch an interrupt directly after the pipeline
+                    // is flushed (for instance, by a branch), our IRQ handler will push the wrong
+                    // return value.
+                    //
+                    // TODO: Evaluate whether it makes more sense to add custom logic to our
+                    // IRQ handler to check what stage of the instruction pipeline we're in in
+                    // order to calculate the proper return value to save. This may make more sense
+                    // in the long run, but this works for now. This same logic applies to ARM,
+                    // for the same reasons.
+                    if irq_wanted {
+                        self.handle_exception(ExceptionType::InterruptRequest);
                     } else {
                         if debug {
-                            println!("PREFETCH");
+                            log::trace!("{decoded}");
                         }
-                        self.write_register(pc + 4, Register::R15);
+                        self.execute_arm(decoded);
                     }
+                } else {
+                    if debug {
+                        log::trace!("PREFETCH");
+                    }
+                    self.write_register(pc + 4, Register::R15);
                 }
-                InstructionSet::Thumb => {
-                    if pc % 2 != 0 {
-                        unreachable!("unaligned Thumb pc");
-                    }
+            }
+            InstructionSet::Thumb => {
+                if pc % 2 != 0 {
+                    unreachable!("unaligned Thumb pc");
+                }
 
-                    let decoded_instruction = self.pre_decode_thumb;
-                    let prefetched_opcode = self.pre_fetch_thumb;
+                let decoded_instruction = self.pre_decode_thumb;
+                let prefetched_opcode = self.prefetch_opcode;
 
-                    self.pre_fetch_thumb = Some(self.bus.read_halfword_address(pc));
-                    self.pre_decode_thumb = prefetched_opcode.map(thumb::decode_thumb);
+                self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(pc)));
+                self.pre_decode_thumb =
+                    prefetched_opcode.map(|prefetch| thumb::decode_thumb(prefetch as u16));
 
-                    if let Some(decoded) = decoded_instruction {
+                if let Some(decoded) = decoded_instruction {
+                    if irq_wanted {
+                        self.handle_exception(ExceptionType::InterruptRequest);
+                    } else {
                         if debug {
-                            println!("{decoded}");
+                            log::trace!("{decoded}");
                         }
 
                         self.execute_thumb(decoded);
-                    } else {
-                        if debug {
-                            println!("PREFETCH");
-                        }
-                        self.write_register(pc + 2, Register::R15);
                     }
+                } else {
+                    if debug {
+                        log::trace!("PREFETCH");
+                    }
+                    self.write_register(pc + 2, Register::R15);
                 }
             }
         }
@@ -624,13 +648,14 @@ impl Cpu {
 
     fn flush_prefetch(&mut self) {
         self.pre_decode_arm = None;
-        self.pre_fetch_arm = None;
-
         self.pre_decode_thumb = None;
-        self.pre_fetch_thumb = None;
+
+        self.prefetch_opcode = None;
     }
 
     fn handle_exception(&mut self, exception_type: ExceptionType) {
+        log::trace!("HANDLING EXCEPTION: {:?}", exception_type);
+
         let new_mode = match exception_type {
             ExceptionType::Reset => CpuMode::Supervisor,
             ExceptionType::Undefined => CpuMode::Undefined,
@@ -663,7 +688,7 @@ impl Cpu {
             // the current PC minus 2 for Thumb or 4 for ARM, to change the PC offsets of 4 or 8
             // respectively from the address of the current instruction into the required address of
             // the next instruction, the SVC instruction having size 2bytes for Thumb or 4 bytes for ARM.
-            // (ExceptionType::Swi, InstructionSet::Arm) => |pc| pc - 4,
+            (ExceptionType::Swi, InstructionSet::Arm) => |pc| pc - 4,
             (ExceptionType::Swi, InstructionSet::Thumb) => |pc| pc - 2,
             (exception_type, mode) => todo!("{exception_type:?}, {mode:?}"),
         };

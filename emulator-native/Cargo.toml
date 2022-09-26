@@ -10,5 +10,6 @@ resolver = "2"
 anyhow = "1.0.65"
 clap = { version = "3.2.22", features = ["derive"] }
 emulator-core = { path = "../emulator-core" }
+env_logger = "0.9.1"
 pixels = "0.9.0"
 winit = "0.27.3"

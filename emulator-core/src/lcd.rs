@@ -136,6 +136,7 @@ enum ObjectShape {
     Square,
     Horizontal,
     Vertical,
+    Prohibited,
 }
 
 impl Default for ObjectShape {
@@ -204,7 +205,7 @@ struct ObjectAttributeInfo {
     attribute_0: u16,
     attribute_1: u16,
     attribute_2: u16,
-    tile_dims_cache: (u16, u16),
+    tile_dims_cache: Option<(u16, u16)>,
 }
 
 // attribute 0
@@ -225,6 +226,7 @@ impl ObjectAttributeInfo {
     const OBJ_SHAPE_SQUARE: u16 = 0;
     const OBJ_SHAPE_HORIZONTAL: u16 = 1;
     const OBJ_SHAPE_VERTICAL: u16 = 2;
+    const OBJ_SHAPE_PROHIBITED: u16 = 3;
 
     fn read_attribute_0<T>(&self, index: u32) -> T
     where
@@ -292,6 +294,7 @@ impl ObjectAttributeInfo {
             Self::OBJ_SHAPE_SQUARE => ObjectShape::Square,
             Self::OBJ_SHAPE_HORIZONTAL => ObjectShape::Horizontal,
             Self::OBJ_SHAPE_VERTICAL => ObjectShape::Vertical,
+            Self::OBJ_SHAPE_PROHIBITED => ObjectShape::Prohibited,
             _ => unreachable!(),
         }
     }
@@ -369,7 +372,7 @@ impl ObjectAttributeInfo {
             .get_bit_range(Self::PALETTE_NUMBER_BIT_RANGE) as u8
     }
 
-    fn get_obj_tile_dims(&self) -> (u16, u16) {
+    fn get_obj_tile_dims(&self) -> Option<(u16, u16)> {
         self.tile_dims_cache
     }
 }
@@ -379,23 +382,25 @@ impl ObjectAttributeInfo {
     fn update_cache(&mut self) {
         let obj_size_index = self.attribute_1.get_bit_range(Self::OBJ_SIZE_BIT_RANGE);
 
-        let (tile_width, tile_height) = match (obj_size_index, self.get_obj_shape()) {
-            (0, ObjectShape::Square) => (1, 1),
-            (1, ObjectShape::Square) => (2, 2),
-            (2, ObjectShape::Square) => (4, 4),
-            (3, ObjectShape::Square) => (8, 8),
-            (0, ObjectShape::Horizontal) => (2, 1),
-            (1, ObjectShape::Horizontal) => (4, 1),
-            (2, ObjectShape::Horizontal) => (4, 2),
-            (3, ObjectShape::Horizontal) => (8, 4),
-            (0, ObjectShape::Vertical) => (1, 2),
-            (1, ObjectShape::Vertical) => (1, 4),
-            (2, ObjectShape::Vertical) => (2, 4),
-            (3, ObjectShape::Vertical) => (4, 8),
+        self.tile_dims_cache = match (obj_size_index, self.get_obj_shape()) {
+            (0, ObjectShape::Square) => Some((1, 1)),
+            (1, ObjectShape::Square) => Some((2, 2)),
+            (2, ObjectShape::Square) => Some((4, 4)),
+            (3, ObjectShape::Square) => Some((8, 8)),
+            (0, ObjectShape::Horizontal) => Some((2, 1)),
+            (1, ObjectShape::Horizontal) => Some((4, 1)),
+            (2, ObjectShape::Horizontal) => Some((4, 2)),
+            (3, ObjectShape::Horizontal) => Some((8, 4)),
+            (0, ObjectShape::Vertical) => Some((1, 2)),
+            (1, ObjectShape::Vertical) => Some((1, 4)),
+            (2, ObjectShape::Vertical) => Some((2, 4)),
+            (3, ObjectShape::Vertical) => Some((4, 8)),
+            (_, ObjectShape::Prohibited) => {
+                log::warn!("found a prohibited object shape");
+                None
+            }
             _ => unreachable!(),
         };
-
-        self.tile_dims_cache = (tile_width, tile_height);
     }
 }
 
@@ -818,7 +823,11 @@ impl Lcd {
         let mut obj_window = false;
 
         for obj in self.obj_attributes.iter() {
-            let (sprite_tile_width, sprite_tile_height) = obj.get_obj_tile_dims();
+            let (sprite_tile_width, sprite_tile_height) = match obj.get_obj_tile_dims() {
+                Some(dims) => dims,
+                None => continue,
+            };
+
             let sprite_width = sprite_tile_width * TILE_SIZE;
             let sprite_height = sprite_tile_height * TILE_SIZE;
 
@@ -1450,7 +1459,7 @@ impl Lcd {
     pub fn read_oam_byte(&self, offset: u32) -> u8 {
         let hword_index = offset % 2;
 
-        let le_bytes = self.read_oam_hword(offset).to_le_bytes();
+        let le_bytes = self.read_oam_hword(offset & (!0b1)).to_le_bytes();
 
         le_bytes[hword_index as usize]
     }

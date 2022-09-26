@@ -21,6 +21,7 @@ pub struct Bus {
     interrupt_request: u16,
     dma_infos: [DmaInfo; 4],
     timers: [Timer; 4],
+    open_bus_data: u32,
     pub lcd: Lcd,
     pub apu: Apu,
     pub keypad: Keypad,
@@ -48,6 +49,7 @@ impl Bus {
                 Timer::default(),
                 Timer::default(),
             ],
+            open_bus_data: 0,
             lcd: Lcd::default(),
             apu: Apu::default(),
             keypad: Keypad::default(),
@@ -288,6 +290,20 @@ impl Bus {
         }
 
         self.cycle_count += 1;
+    }
+}
+
+impl Bus {
+    pub fn fetch_arm_opcode(&mut self, address: u32) -> u32 {
+        let result = self.read_word_address(address);
+        self.open_bus_data = result;
+        result
+    }
+
+    pub fn fetch_thumb_opcode(&mut self, address: u32) -> u16 {
+        let result = self.read_halfword_address(address);
+        self.open_bus_data = u32::from(result) | (u32::from(result) << 16);
+        result
     }
 }
 
@@ -561,6 +577,8 @@ impl Bus {
     const GAME_PAK_SRAM_SIZE: u32 = 0x00010000;
 
     pub fn read_byte_address(&self, address: u32) -> u8 {
+        let address = address % Self::MEMORY_SIZE;
+
         match address {
             Self::BIOS_BASE..=Self::BIOS_END => BIOS[address as usize],
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
@@ -575,7 +593,7 @@ impl Bus {
                 self.lcd.read_lcd_control(address & 0b1)
             }
             Self::GREEN_SWAP_BASE..=Self::GREEP_SWAP_END => {
-                // println!("STUBBED READ FROM GREEN SWAP");
+                log::debug!("STUBBED READ FROM GREEN SWAP");
                 0x00
             }
             Self::LCD_STATUS_BASE..=Self::LCD_STATUS_END => self.lcd.read_lcd_status(address & 0b1),
@@ -778,7 +796,7 @@ impl Bus {
             }
 
             Self::SIO_CONTROL_BASE..=Self::SIO_CONTROL_END => {
-                // println!("read from stubbed SIOCNT");
+                log::debug!("read from stubbed SIOCNT");
                 0
             }
 
@@ -790,7 +808,7 @@ impl Bus {
             }
 
             Self::SIO_JOY_RECV_BASE..=Self::SIO_JOY_RECV_END => {
-                // println!("read from stubbed SIO_JOY_RECV");
+                log::debug!("read from stubbed SIO_JOY_RECV");
                 0
             }
             Self::INTERRUPT_ENABLE_BASE..=Self::INTERRUPT_ENABLE_END => {
@@ -800,18 +818,18 @@ impl Bus {
                 self.read_interrupt_request(address & 0b1)
             }
             Self::UNUSED_IO_BASE..=Self::UNUSED_IO_END => {
-                // println!("READ from {:08X}", address);
+                log::debug!("READ from {:08X}", address);
                 0
             }
             Self::GAME_PAK_WAITSTATE_BASE..=Self::GAME_PAK_WAITSTATE_END => {
-                // println!("stubbed read game_pak[{}]", address & 0b1);
+                log::debug!("stubbed read game_pak[{}]", address & 0b1);
                 0
             }
             Self::INTERRUPT_MASTER_ENABLE_BASE..=Self::INTERRUPT_MASTER_ENABLE_END => {
                 self.read_interrupt_master_enable(address & 0b1)
             }
             Self::POSTFLG_ADDR => {
-                println!("UNIMPLEMENTED POSTFLG");
+                log::debug!("UNIMPLEMENTED POSTFLG");
                 0
             }
             Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
@@ -848,17 +866,22 @@ impl Bus {
                 self.cartridge.read_sram_byte(offset)
             }
             Self::SERIAL_BASE..=Self::SERIAL_END => {
-                // println!("read from stubbed serial {:08X}", address);
+                log::debug!("read from stubbed serial {:08X}", address);
                 0
             }
-            _ => 0xFF,
+            _ => {
+                log::debug!("unknown read from 0x{:08X}", address);
+                0
+            }
         }
     }
 
     pub fn read_halfword_address(&mut self, address: u32) -> u16 {
         assert!(address & 0b1 == 0);
 
-        match address % Self::MEMORY_SIZE {
+        let address = address % Self::MEMORY_SIZE;
+
+        match address {
             Self::BIOS_BASE..=Self::BIOS_END => {
                 let low_byte = BIOS[address as usize];
                 let high_byte = BIOS[(address + 1) as usize];
@@ -873,7 +896,7 @@ impl Bus {
                 u16::from_le_bytes([low_byte, high_byte])
             }
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
-                let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_BASE;
+                let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
                 let low_byte = self.board_wram[actual_offset as usize];
                 let high_byte = self.board_wram[(actual_offset + 1) as usize];
 
@@ -924,7 +947,9 @@ impl Bus {
     pub fn read_word_address(&self, address: u32) -> u32 {
         assert!(address & 0b11 == 0);
 
-        match address % Self::MEMORY_SIZE {
+        let address = address % Self::MEMORY_SIZE;
+
+        match address {
             Self::BIOS_BASE..=Self::BIOS_END => {
                 let le_bytes = [
                     BIOS[address as usize],
@@ -1004,8 +1029,12 @@ impl Bus {
     }
 
     pub fn write_byte_address(&mut self, value: u8, address: u32) {
+        let address = address % Self::MEMORY_SIZE;
+
         match address {
-            Self::BIOS_BASE..=Self::BIOS_END => {} // println!("{:02X} -> ignored BIOS write", value),
+            Self::BIOS_BASE..=Self::BIOS_END => {
+                log::debug!("{:02X} -> ignored BIOS write", value)
+            }
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
                 let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
                 self.board_wram[actual_offset as usize] = value;
@@ -1291,7 +1320,9 @@ impl Bus {
     pub fn write_halfword_address(&mut self, value: u16, address: u32) {
         assert!(address & 0b1 == 0);
 
-        match address % Self::MEMORY_SIZE {
+        let address = address % Self::MEMORY_SIZE;
+
+        match address {
             Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
                 let actual_offset = (address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
                 let [low_byte, high_byte] = value.to_le_bytes();
@@ -1354,6 +1385,8 @@ impl Bus {
 
     pub fn write_word_address(&mut self, value: u32, address: u32) {
         assert!(address & 0b11 == 0);
+
+        let address = address % Self::MEMORY_SIZE;
 
         match address % Self::MEMORY_SIZE {
             Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {

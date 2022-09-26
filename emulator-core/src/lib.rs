@@ -48,11 +48,11 @@ mod tests {
 
         cpu.bus.keypad.set_pressed(key, true);
         for _ in 0..KEY_PRESS_DELAY {
-            cpu.fetch_decode_execute(false);
+            cpu.fetch_decode_execute_no_logs();
         }
         cpu.bus.keypad.set_pressed(key, false);
         for _ in 0..KEY_PRESS_DELAY {
-            cpu.fetch_decode_execute(false);
+            cpu.fetch_decode_execute_no_logs();
         }
     }
 
@@ -61,7 +61,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         for _ in 0..100_000_000 {
-            cpu.fetch_decode_execute(false);
+            cpu.fetch_decode_execute_no_logs();
         }
 
         assert_checksum(&cpu, checksum);
@@ -112,7 +112,7 @@ mod tests {
 
         // skip boot screen
         for _ in 0..100_000_000 {
-            cpu.fetch_decode_execute(false);
+            cpu.fetch_decode_execute_no_logs();
         }
 
         assert_checksum(&cpu, INITIAL_CHECKSUM);
@@ -152,7 +152,7 @@ mod tests {
 
         // skip boot screen
         for _ in 0..100_000_000 {
-            cpu.fetch_decode_execute(false);
+            cpu.fetch_decode_execute_no_logs();
         }
 
         assert_checksum(&cpu, INITIAL_CHECKSUM);
@@ -180,5 +180,99 @@ mod tests {
         press_key(&mut cpu, Key::Up);
         press_key(&mut cpu, Key::Up);
         assert_checksum(&cpu, INITIAL_CHECKSUM);
+    }
+
+    #[test]
+    fn suite_shifter() {
+        const INITIAL_CHECKSUM: u64 = 0x3B32CCEB3BAE455B;
+        const SHIFTER_TEST_SELECTED_CHECKSUM: u64 = 0x44BFA86E38A2027E;
+        const SHIFTER_SUCCESS_SCREEN_CHECKSUM: u64 = 0xF82D049DDEF321AC;
+
+        let source = include_bytes!("../tests/suite.gba");
+        let cartridge = Cartridge::new(source.as_slice());
+        let mut cpu = Cpu::new(cartridge);
+
+        // skip boot screen
+        for _ in 0..100_000_000 {
+            cpu.fetch_decode_execute_no_logs();
+        }
+
+        assert_checksum(&cpu, INITIAL_CHECKSUM);
+
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+
+        assert_checksum(&cpu, SHIFTER_TEST_SELECTED_CHECKSUM);
+
+        press_key(&mut cpu, Key::A);
+
+        assert_checksum(&cpu, SHIFTER_SUCCESS_SCREEN_CHECKSUM);
+    }
+
+    #[test]
+    fn suite_carry() {
+        const INITIAL_CHECKSUM: u64 = 0x3B32CCEB3BAE455B;
+        const CARRY_TEST_SELECTED_CHECKSUM: u64 = 0x584DECF1B2656938;
+        const CARRY_SUCCESS_SCREEN_CHECKSUM: u64 = 0x89F7F1CFD8DC70E3;
+
+        let source = include_bytes!("../tests/suite.gba");
+        let cartridge = Cartridge::new(source.as_slice());
+        let mut cpu = Cpu::new(cartridge);
+
+        // skip boot screen
+        for _ in 0..100_000_000 {
+            cpu.fetch_decode_execute_no_logs();
+        }
+
+        assert_checksum(&cpu, INITIAL_CHECKSUM);
+
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+
+        assert_checksum(&cpu, CARRY_TEST_SELECTED_CHECKSUM);
+
+        press_key(&mut cpu, Key::A);
+
+        assert_checksum(&cpu, CARRY_SUCCESS_SCREEN_CHECKSUM);
+    }
+
+    #[test]
+    fn suite_bios_math() {
+        const INITIAL_CHECKSUM: u64 = 0x3B32CCEB3BAE455B;
+        const BIOS_MATH_TEST_SELECTED_CHECKSUM: u64 = 0x2950FA409FCAF1D2;
+        const BIOS_MATH_SUCCESS_SCREEN_CHECKSUM: u64 = 0x43AD9E744E911293;
+
+        let source = include_bytes!("../tests/suite.gba");
+        let cartridge = Cartridge::new(source.as_slice());
+        let mut cpu = Cpu::new(cartridge);
+
+        // skip boot screen
+        for _ in 0..100_000_000 {
+            cpu.fetch_decode_execute_no_logs();
+        }
+
+        assert_checksum(&cpu, INITIAL_CHECKSUM);
+
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+
+        assert_checksum(&cpu, BIOS_MATH_TEST_SELECTED_CHECKSUM);
+
+        press_key(&mut cpu, Key::A);
+
+        assert_checksum(&cpu, BIOS_MATH_SUCCESS_SCREEN_CHECKSUM);
     }
 }

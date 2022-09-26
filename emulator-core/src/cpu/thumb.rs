@@ -1001,6 +1001,7 @@ impl Cpu {
                 unsigned_offset,
             ),
             ThumbInstructionType::Swi { comment: _ } => self.handle_exception(ExceptionType::Swi),
+            ThumbInstructionType::Invalid { opcode } => unreachable!("Invalid(0x{:04X})", opcode),
             _ => todo!("{:#016x?}", instruction),
         }
     }
@@ -1595,7 +1596,7 @@ impl Cpu {
                 let stored_register_value = self.read_register(stored_register, |_| unreachable!());
 
                 self.bus
-                    .write_word_address(stored_register_value, current_write_address);
+                    .write_word_address(stored_register_value, current_write_address & (!0b11));
 
                 current_write_address += 4;
             }
@@ -1617,7 +1618,7 @@ impl Cpu {
         for (register_idx, register_loaded) in register_bit_list.into_iter().enumerate() {
             if register_loaded {
                 let loaded_register = Register::from_index(register_idx as u32);
-                let loaded_value = self.bus.read_word_address(current_read_address);
+                let loaded_value = self.bus.read_word_address(current_read_address & (!0b11));
 
                 self.write_register(loaded_value, loaded_register);
 
