@@ -7,7 +7,7 @@ use std::{io::Read, ops::Range};
 use lazy_static::lazy_static;
 use regex::bytes::Regex;
 
-use crate::bit_manipulation::BitManipulation;
+use crate::{bit_manipulation::BitManipulation, data_access::DataAccess};
 
 lazy_static! {
     static ref EEPROM_PATTERN: Regex = Regex::new(r"EEPROM_V\w\w\w").unwrap();
@@ -107,12 +107,15 @@ impl Cartridge {
     }
 
     pub fn read_rom_byte(&self, offset: u32) -> u8 {
-        let offset = offset as usize;
-        if offset < self.rom.len() {
+        if offset < (self.rom.len() as u32) {
             self.rom[offset as usize]
         } else {
-            log::warn!("OUT OF BOUNDS READ CARTRIDGE OFFSET: {:08X}", offset);
-            0
+            // Reading from GamePak ROM when no Cartridge is inserted
+            //
+            // Because Gamepak uses the same signal-lines for both 16bit data and for lower 16bit halfword address,
+            // the entire gamepak ROM area is effectively filled by incrementing 16bit values (Address/2 AND FFFFh).
+            let hword_value = (offset / 2) & 0xFFFF;
+            hword_value.get_data(offset & 0b1)
         }
     }
 

@@ -869,10 +869,7 @@ impl Bus {
                 log::debug!("read from stubbed serial {:08X}", address);
                 0
             }
-            _ => {
-                log::debug!("unknown read from 0x{:08X}", address);
-                0
-            }
+            _ => self.open_bus_data.get_data(address & 0b11),
         }
     }
 

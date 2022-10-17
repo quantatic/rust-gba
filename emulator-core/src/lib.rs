@@ -126,6 +126,18 @@ mod tests {
         0xE4167702EFF02E47
     );
 
+    simple_ppu_test!(
+        gba_tests_shades,
+        "../tests/gba_tests_shades.gba",
+        0x21D6D12973C70D5D
+    );
+
+    simple_ppu_test!(
+        gba_tests_stripes,
+        "../tests/gba_tests_stripes.gba",
+        0x6E881E3A0BC09EBF
+    );
+
     #[test]
     fn armwrestler_arm_complex() {
         const INITIAL_CHECKSUM: u64 = 0x1C1579ACC537960D;
