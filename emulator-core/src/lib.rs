@@ -109,8 +109,14 @@ mod tests {
     );
 
     simple_ppu_test!(
-        gpu_tests_arm,
+        gba_tests_arm,
         "../tests/gba_tests_arm.gba",
+        0x740626E6CC2D204A
+    );
+
+    simple_ppu_test!(
+        gba_tests_thumb,
+        "../tests/gba_tests_thumb.gba",
         0x740626E6CC2D204A
     );
 
