@@ -2,7 +2,8 @@ use crate::BitManipulation;
 
 use super::{Cpu, ExceptionType, InstructionCondition, Register, ShiftType};
 
-use std::{cmp::Ordering, fmt::Display, ops::RangeInclusive};
+use core::num;
+use std::{cmp::Ordering, fmt::Display, ops::RangeInclusive, os::linux::raw};
 
 #[derive(Clone, Copy, Debug)]
 pub enum ThumbRegisterOperation {
@@ -1588,23 +1589,47 @@ impl Cpu {
         base_register: Register,
         register_bit_list: [bool; 8],
     ) {
-        let mut current_write_address = self.read_register(base_register, |_| todo!());
+        let raw_registers = register_bit_list
+            .into_iter()
+            .enumerate()
+            .filter_map(|(register_idx, register_loaded)| {
+                register_loaded.then(|| Register::from_index(register_idx as u32))
+            })
+            .collect::<Vec<_>>();
 
-        for (register_idx, register_stored) in register_bit_list.into_iter().enumerate() {
-            if register_stored {
-                let stored_register = Register::from_index(register_idx as u32);
-                let stored_register_value = self.read_register(stored_register, |_| unreachable!());
+        let base_address = self.read_register(base_register, |_| unreachable!());
 
-                self.bus
-                    .write_word_address(stored_register_value, current_write_address & (!0b11));
+        let (num_registers, stored_registers) = if raw_registers.is_empty() {
+            (16, vec![Register::R15])
+        } else {
+            (raw_registers.len() as u32, raw_registers)
+        };
 
-                current_write_address += 4;
-            }
+        let new_base = base_address + (4 * num_registers);
+        let mut current_address = base_address;
+
+        // Writeback with Rb included in Rlist: Store OLD base if Rb is FIRST entry in Rlist, otherwise store NEW base
+        let base_value_if_read = if stored_registers.first() == Some(&base_register) {
+            base_address
+        } else {
+            new_base
+        };
+
+        for register in stored_registers {
+            let register_value = if register == base_register {
+                base_value_if_read
+            } else {
+                self.read_register(register, |pc| pc + 2)
+            };
+
+            self.bus
+                .write_word_address(register_value, current_address & (!0b11));
+
+            current_address += 4;
         }
 
-        self.write_register(current_write_address, base_register);
+        self.write_register(new_base, base_register);
 
-        assert!(!matches!(base_register, Register::R15));
         self.advance_pc_for_thumb_instruction();
     }
 
@@ -1613,27 +1638,48 @@ impl Cpu {
         base_register: Register,
         register_bit_list: [bool; 8],
     ) {
-        let mut current_read_address = self.read_register(base_register, |_| todo!());
+        let raw_registers = register_bit_list
+            .into_iter()
+            .enumerate()
+            .filter_map(|(register_idx, register_loaded)| {
+                register_loaded.then(|| Register::from_index(register_idx as u32))
+            })
+            .collect::<Vec<_>>();
 
-        for (register_idx, register_loaded) in register_bit_list.into_iter().enumerate() {
-            if register_loaded {
-                let loaded_register = Register::from_index(register_idx as u32);
-                let loaded_value = self.bus.read_word_address(current_read_address & (!0b11));
+        let mut r15_written = false;
 
-                self.write_register(loaded_value, loaded_register);
+        let base_address = self.read_register(base_register, |_| unreachable!());
 
-                // Ensure that R15 is never loaded as part of this routine.
-                assert!(!matches!(loaded_register, Register::R15));
+        let (num_registers, stored_registers) = if raw_registers.is_empty() {
+            (16, vec![Register::R15])
+        } else {
+            (raw_registers.len() as u32, raw_registers)
+        };
 
-                current_read_address += 4;
+        let new_base = base_address + (4 * num_registers);
+        let mut current_address = base_address;
+
+        for register in stored_registers {
+            let loaded_value = self.bus.read_word_address(current_address & (!0b11));
+
+            self.write_register(loaded_value, register);
+
+            // Ensure that we flush prefetch properly if R15 is loaded as part of this routine.
+            // This is only possible when we handle the edge case for an empty rlist.
+            if matches!(register, Register::R15) {
+                r15_written |= true;
             }
+
+            current_address += 4;
         }
 
-        self.write_register(current_read_address, base_register);
+        self.write_register(new_base, base_register);
 
-        // Ensure that the base register can never be R15, so we can unconditionally just increment PC.
-        assert!(!matches!(base_register, Register::R15));
-        self.advance_pc_for_thumb_instruction();
+        if r15_written {
+            self.flush_prefetch();
+        } else {
+            self.advance_pc_for_thumb_instruction();
+        }
     }
 
     fn execute_thumb_add_special(
