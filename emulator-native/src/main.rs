@@ -65,6 +65,10 @@ fn main() -> Result<()> {
     let init = Instant::now();
     let mut last_step = Instant::now();
     let mut i = 0;
+    // for _ in 0..74_500_000 {
+    //     cpu.fetch_decode_execute_no_logs();
+    // }
+
     event_loop.run(move |event, _, control_flow| {
         match event {
             Event::MainEventsCleared => {
