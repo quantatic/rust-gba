@@ -1310,7 +1310,7 @@ impl Bus {
                 let offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
                 self.cartridge.write_sram_byte(value, offset);
             }
-            _ => todo!("0x{:02x} -> 0x{:08x}", value, address),
+            _ => {}
         }
     }
 

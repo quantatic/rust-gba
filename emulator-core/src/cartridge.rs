@@ -1,6 +1,7 @@
 mod backup_types;
 
 use backup_types::{BackupType, BACKUP_TYPES_MAP};
+use serde_with::serde_as;
 
 use std::{io::Read, ops::Range};
 
@@ -8,6 +9,9 @@ use lazy_static::lazy_static;
 use regex::bytes::Regex;
 
 use crate::{bit_manipulation::BitManipulation, data_access::DataAccess};
+use serde::{Deserialize, Serialize};
+
+use anyhow::{anyhow, bail, Result};
 
 lazy_static! {
     static ref EEPROM_PATTERN: Regex = Regex::new(r"EEPROM_V\w\w\w").unwrap();
@@ -16,21 +20,23 @@ lazy_static! {
     static ref FLASH_128KB_PATTERN: Regex = Regex::new(r"FLASH1M_V\w\w\w").unwrap();
 }
 
-#[derive(Debug)]
-enum Backup {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Backup {
     Eeprom(Eeprom),
     Flash(Flash),
     Sram(Sram),
     None,
 }
 
+#[serde_as]
+#[derive(Serialize, Deserialize)]
 pub struct Cartridge {
     rom: Vec<u8>,
     backup: Backup,
 }
 
 impl Cartridge {
-    pub fn new<T: Read>(mut input: T) -> Self {
+    pub fn new<T: Read>(mut input: T, existing_backup: Option<Backup>) -> Result<Self> {
         let mut data = Vec::new();
         input
             .read_to_end(&mut data)
@@ -63,7 +69,7 @@ impl Cartridge {
             }
         }
 
-        let backup = {
+        let new_backup = {
             let code_bytes = &data[GAME_CODE_BYTE_RANGE];
 
             match backup_types::BACKUP_TYPES_MAP.get(code_bytes).copied() {
@@ -103,9 +109,47 @@ impl Cartridge {
 
         let rom = data;
 
-        Self { rom, backup }
+        let backup = if let Some(existing_backup) = existing_backup {
+            let new_backup_discriminant = std::mem::discriminant(&new_backup);
+            let existing_backup_discriminant = std::mem::discriminant(&existing_backup);
+
+            if new_backup_discriminant != existing_backup_discriminant {
+                bail!(
+                    "expected existing backup to match detected backup type {:?}, but got {:?}",
+                    new_backup_discriminant,
+                    existing_backup_discriminant
+                );
+            }
+
+            existing_backup
+        } else {
+            new_backup
+        };
+
+        Ok(Self { rom, backup })
     }
 
+    pub fn get_backup(&self) -> &Backup {
+        &self.backup
+    }
+
+    pub fn set_backup(&mut self, backup: Backup) -> Result<()> {
+        let current_variant = std::mem::discriminant(&self.backup);
+        let new_variant = std::mem::discriminant(&backup);
+        if current_variant != new_variant {
+            bail!(
+                "expected to get backup with existing variant {:?}, but got {:?}",
+                current_variant,
+                new_variant
+            );
+        }
+
+        self.backup = backup;
+        Ok(())
+    }
+}
+
+impl Cartridge {
     pub fn read_rom_byte(&self, offset: u32) -> u8 {
         if offset < (self.rom.len() as u32) {
             self.rom[offset as usize]
@@ -198,21 +242,23 @@ impl Cartridge {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 enum EepromAction {
     SetReadAddress,
     Write,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 enum EepromStatus {
     ReceivingCommand,
     OngoingAction(EepromAction),
     StopBit,
 }
 
-#[derive(Debug)]
-struct Eeprom {
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Eeprom {
+    #[serde_as(as = "Box<[_; 0x10000]>")]
     data: Box<[bool; 0x10000]>,
     rx_bits: u8,
     rx_buffer: u64,
@@ -326,8 +372,8 @@ impl Eeprom {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-enum FlashCommandState {
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum FlashCommandState {
     ReadCommand,
     BankSwitch,
     Identification,
@@ -335,17 +381,21 @@ enum FlashCommandState {
     WriteSingleByte,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 enum FlashWantedWrite {
     Write_5555_AA,
     Write_2AAA_55,
     CommandData,
 }
 
+use serde_with::Same;
 // Atmel flash chips are not handled.
-#[derive(Debug)]
-struct Flash {
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Flash {
+    #[serde_as(as = "Box<[_; 0x10000]>")]
     low_bank: Box<[u8; 0x10000]>,
+    #[serde_as(as = "Box<[_; 0x10000]>")]
     high_bank: Box<[u8; 0x10000]>,
     device_type: u8,
     manufacturer: u8,
@@ -491,9 +541,20 @@ impl Flash {
     }
 }
 
-#[derive(Debug)]
-struct Sram {
+use serde_with::Bytes;
+
+#[serde_as]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Sram {
+    #[serde_as(as = "Box<[_; 0x8000]>")]
     data: Box<[u8; 0x8000]>,
+}
+
+#[serde_as]
+#[derive(Debug, Deserialize, Serialize)]
+struct Foo {
+    #[serde_as(as = "Box<[_; 0x1000]>")]
+    vals: Box<[u128; 0x1000]>,
 }
 
 impl Default for Sram {

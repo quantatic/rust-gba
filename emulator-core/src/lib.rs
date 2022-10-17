@@ -57,7 +57,7 @@ mod tests {
     }
 
     fn test_ppu_checksum(source: &[u8], checksum: u64) {
-        let cartridge = Cartridge::new(source);
+        let cartridge = Cartridge::new(source, None).unwrap();
         let mut cpu = Cpu::new(cartridge);
 
         for _ in 0..100_000_000 {
@@ -149,7 +149,7 @@ mod tests {
         const ARM_LDM_STM_TESTS_1: u64 = 0x2F4688257C51FD03;
 
         let source = include_bytes!("../tests/armwrestler.gba");
-        let cartridge = Cartridge::new(source.as_slice());
+        let cartridge = Cartridge::new(source.as_slice(), None).unwrap();
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
@@ -189,7 +189,7 @@ mod tests {
         const THUMB_LDM_STM_TEST: u64 = 0xDED0DBE7F075848E;
 
         let source = include_bytes!("../tests/armwrestler.gba");
-        let cartridge = Cartridge::new(source.as_slice());
+        let cartridge = Cartridge::new(source.as_slice(), None).unwrap();
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
@@ -231,7 +231,7 @@ mod tests {
         const SHIFTER_SUCCESS_SCREEN_CHECKSUM: u64 = 0xF82D049DDEF321AC;
 
         let source = include_bytes!("../tests/suite.gba");
-        let cartridge = Cartridge::new(source.as_slice());
+        let cartridge = Cartridge::new(source.as_slice(), None).unwrap();
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
@@ -261,7 +261,7 @@ mod tests {
         const CARRY_SUCCESS_SCREEN_CHECKSUM: u64 = 0x89F7F1CFD8DC70E3;
 
         let source = include_bytes!("../tests/suite.gba");
-        let cartridge = Cartridge::new(source.as_slice());
+        let cartridge = Cartridge::new(source.as_slice(), None).unwrap();
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
@@ -292,7 +292,7 @@ mod tests {
         const BIOS_MATH_SUCCESS_SCREEN_CHECKSUM: u64 = 0x43AD9E744E911293;
 
         let source = include_bytes!("../tests/suite.gba");
-        let cartridge = Cartridge::new(source.as_slice());
+        let cartridge = Cartridge::new(source.as_slice(), None).unwrap();
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen

@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::{fs::File, time::Instant};
 
 use anyhow::{anyhow, Result};
@@ -38,8 +39,20 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
 
+    let save_file_name = format!("{}.sav", args.rom);
+
     let rom_file =
         File::open(&args.rom).map_err(|_| anyhow!("failed to open ROM file \"{}\"", args.rom))?;
+
+    let save_file = File::open(&save_file_name).ok();
+
+    log::info!("attempting to read save info from {save_file_name}");
+    let save_data = save_file.map(serde_cbor::from_reader).transpose()?;
+
+    match save_data {
+        Some(_) => log::info!("successfuly read save info from {save_file_name}"),
+        None => log::info!("failed to read save info from {save_file_name}"),
+    };
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
@@ -59,7 +72,7 @@ fn main() -> Result<()> {
         .build()?
     };
 
-    let cartridge = Cartridge::new(rom_file);
+    let cartridge = Cartridge::new(rom_file, save_data)?;
     let mut cpu = Cpu::new(cartridge);
 
     let init = Instant::now();
@@ -148,7 +161,16 @@ fn main() -> Result<()> {
                 window_id,
                 ..
             } if window_id == window.id() => *control_flow = ControlFlow::Exit,
-            Event::LoopDestroyed => println!("ran for {:?}", init.elapsed()),
+            Event::LoopDestroyed => {
+                log::info!("ran for {:?}", init.elapsed());
+
+                let save_file_name = format!("{}.sav", args.rom);
+                log::info!("writing save data to {save_file_name}");
+                let save_file = File::create(&save_file_name).expect("failed to create save file");
+                serde_cbor::to_writer(save_file, cpu.bus.cartridge.get_backup())
+                    .expect("failed to write save data to save file");
+                log::info!("finished writing save data to {save_file_name}");
+            }
             _ => {}
         };
     });
