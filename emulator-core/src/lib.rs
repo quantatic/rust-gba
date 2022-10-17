@@ -96,6 +96,30 @@ mod tests {
         0x1C1579ACC537960D
     );
 
+    simple_ppu_test!(
+        gba_tests_memory,
+        "../tests/gba_tests_memory.gba",
+        0x740626E6CC2D204A
+    );
+
+    simple_ppu_test!(
+        gba_tests_nes,
+        "../tests/gba_tests_nes.gba",
+        0x740626E6CC2D204A
+    );
+
+    simple_ppu_test!(
+        gpu_tests_arm,
+        "../tests/gba_tests_arm.gba",
+        0x740626E6CC2D204A
+    );
+
+    simple_ppu_test!(
+        gba_tests_hello,
+        "../tests/gba_tests_hello.gba",
+        0xE4167702EFF02E47
+    );
+
     #[test]
     fn armwrestler_arm_complex() {
         const INITIAL_CHECKSUM: u64 = 0x1C1579ACC537960D;

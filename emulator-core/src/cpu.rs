@@ -46,7 +46,7 @@ pub struct Cpu {
     abt_registers: ModeRegisters,
     irq_registers: ModeRegisters,
     und_registers: ModeRegisters,
-    cpsr: u32,
+    cpsr: Rc<Cell<u32>>,
     cycle_count: u64,
     pub bus: Bus,
     prefetch_opcode: Option<u32>,
@@ -105,6 +105,9 @@ impl Cpu {
         let r13_und = Rc::default();
         let r14_und = Rc::default();
 
+        // treated as SPSR in system and user mode
+        let cpsr = Rc::new(Cell::new(Self::SYSTEM_MODE_BITS));
+
         let user_registers = ModeRegisters {
             r0: Rc::clone(&r0),
             r1: Rc::clone(&r1),
@@ -122,7 +125,7 @@ impl Cpu {
             r13: Rc::clone(&r13),
             r14: Rc::clone(&r14),
             r15: Rc::clone(&r15),
-            spsr: Rc::default(),
+            spsr: Rc::clone(&cpsr),
         };
 
         let fiq_registers = ModeRegisters {
@@ -232,7 +235,7 @@ impl Cpu {
             abt_registers,
             irq_registers,
             und_registers,
-            cpsr: Self::SYSTEM_MODE_BITS,
+            cpsr,
             cycle_count: 0,
             bus: Bus::new(cartridge),
             pre_decode_arm: None,
@@ -297,7 +300,7 @@ pub enum CpuMode {
     System,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Register {
     R0,
     R1,
@@ -497,7 +500,7 @@ impl Cpu {
                 }
             }
             Register::Spsr => registers.spsr.set(value),
-            Register::Cpsr => self.cpsr = value,
+            Register::Cpsr => self.cpsr.set(value),
         }
     }
 
@@ -529,7 +532,30 @@ impl Cpu {
             Register::R14 => registers.r14.get(),
             Register::R15 => pc_calculation(registers.r15.get()),
             Register::Spsr => registers.spsr.get(),
-            Register::Cpsr => self.cpsr,
+            Register::Cpsr => self.cpsr.get(),
+        }
+    }
+
+    fn read_user_register(&self, register: Register, pc_calculation: fn(u32) -> u32) -> u32 {
+        match register {
+            Register::R0 => self.user_registers.r0.get(),
+            Register::R1 => self.user_registers.r1.get(),
+            Register::R2 => self.user_registers.r2.get(),
+            Register::R3 => self.user_registers.r3.get(),
+            Register::R4 => self.user_registers.r4.get(),
+            Register::R5 => self.user_registers.r5.get(),
+            Register::R6 => self.user_registers.r6.get(),
+            Register::R7 => self.user_registers.r7.get(),
+            Register::R8 => self.user_registers.r8.get(),
+            Register::R9 => self.user_registers.r9.get(),
+            Register::R10 => self.user_registers.r10.get(),
+            Register::R11 => self.user_registers.r11.get(),
+            Register::R12 => self.user_registers.r12.get(),
+            Register::R13 => self.user_registers.r13.get(),
+            Register::R14 => self.user_registers.r14.get(),
+            Register::R15 => pc_calculation(self.user_registers.r15.get()),
+            Register::Spsr => self.user_registers.spsr.get(),
+            Register::Cpsr => self.cpsr.get(),
         }
     }
 }
@@ -583,6 +609,11 @@ impl Cpu {
                 self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(pc));
                 self.pre_decode_arm = prefetched_opcode.map(arm::decode_arm);
 
+                if debug {
+                    if let Some(p) = prefetched_opcode {
+                        log::trace!("0x{:08X}", p);
+                    }
+                }
                 if let Some(decoded) = decoded_instruction {
                     // IRQ must only be dispatched when the pipeline is full.
                     //
@@ -797,35 +828,39 @@ impl Cpu {
     const OVERFLOW_FLAG_BIT_INDEX: usize = 28;
 
     fn get_sign_flag(&self) -> bool {
-        self.cpsr.get_bit(Self::SIGN_FLAG_BIT_INDEX)
+        self.cpsr.get().get_bit(Self::SIGN_FLAG_BIT_INDEX)
     }
 
     fn set_sign_flag(&mut self, set: bool) {
-        self.cpsr = self.cpsr.set_bit(Self::SIGN_FLAG_BIT_INDEX, set);
+        let new_cpsr = self.cpsr.get().set_bit(Self::SIGN_FLAG_BIT_INDEX, set);
+        self.cpsr.set(new_cpsr);
     }
 
     fn get_zero_flag(&self) -> bool {
-        self.cpsr.get_bit(Self::ZERO_FLAG_BIT_INDEX)
+        self.cpsr.get().get_bit(Self::ZERO_FLAG_BIT_INDEX)
     }
 
     fn set_zero_flag(&mut self, set: bool) {
-        self.cpsr = self.cpsr.set_bit(Self::ZERO_FLAG_BIT_INDEX, set);
+        let new_cpsr = self.cpsr.get().set_bit(Self::ZERO_FLAG_BIT_INDEX, set);
+        self.cpsr.set(new_cpsr);
     }
 
     fn get_carry_flag(&self) -> bool {
-        self.cpsr.get_bit(Self::CARRY_FLAG_BIT_INDEX)
+        self.cpsr.get().get_bit(Self::CARRY_FLAG_BIT_INDEX)
     }
 
     fn set_carry_flag(&mut self, set: bool) {
-        self.cpsr = self.cpsr.set_bit(Self::CARRY_FLAG_BIT_INDEX, set);
+        let new_cpsr = self.cpsr.get().set_bit(Self::CARRY_FLAG_BIT_INDEX, set);
+        self.cpsr.set(new_cpsr);
     }
 
     fn get_overflow_flag(&self) -> bool {
-        self.cpsr.get_bit(Self::OVERFLOW_FLAG_BIT_INDEX)
+        self.cpsr.get().get_bit(Self::OVERFLOW_FLAG_BIT_INDEX)
     }
 
     fn set_overflow_flag(&mut self, set: bool) {
-        self.cpsr = self.cpsr.set_bit(Self::OVERFLOW_FLAG_BIT_INDEX, set);
+        let new_cpsr = self.cpsr.get().set_bit(Self::OVERFLOW_FLAG_BIT_INDEX, set);
+        self.cpsr.set(new_cpsr);
     }
 
     const IRQ_DISABLE_BIT_OFFSET: usize = 7;
@@ -841,19 +876,21 @@ impl Cpu {
     const SYSTEM_MODE_BITS: u32 = 0b11111;
 
     fn get_irq_disable(&self) -> bool {
-        self.cpsr.get_bit(Self::IRQ_DISABLE_BIT_OFFSET)
+        self.cpsr.get().get_bit(Self::IRQ_DISABLE_BIT_OFFSET)
     }
 
     fn set_irq_disable(&mut self, set: bool) {
-        self.cpsr = self.cpsr.set_bit(Self::IRQ_DISABLE_BIT_OFFSET, set);
+        let new_cpsr = self.cpsr.get().set_bit(Self::IRQ_DISABLE_BIT_OFFSET, set);
+        self.cpsr.set(new_cpsr);
     }
 
     fn get_fiq_disable(&self) -> bool {
-        self.cpsr.get_bit(Self::FIQ_DISABLE_BIT_OFFSET)
+        self.cpsr.get().get_bit(Self::FIQ_DISABLE_BIT_OFFSET)
     }
 
     fn set_fiq_disable(&mut self, set: bool) {
-        self.cpsr = self.cpsr.set_bit(Self::FIQ_DISABLE_BIT_OFFSET, set);
+        let new_cpsr = self.cpsr.get().set_bit(Self::FIQ_DISABLE_BIT_OFFSET, set);
+        self.cpsr.set(new_cpsr);
     }
 
     fn get_instruction_mode(&self) -> InstructionSet {
@@ -865,15 +902,16 @@ impl Cpu {
     }
 
     fn get_cpu_state_bit(&self) -> bool {
-        self.cpsr.get_bit(Self::STATE_BIT_OFFSET)
+        self.cpsr.get().get_bit(Self::STATE_BIT_OFFSET)
     }
 
     fn set_cpu_state_bit(&mut self, set: bool) {
-        self.cpsr = self.cpsr.set_bit(Self::STATE_BIT_OFFSET, set);
+        let new_cpsr = self.cpsr.get().set_bit(Self::STATE_BIT_OFFSET, set);
+        self.cpsr.set(new_cpsr);
     }
 
     fn get_cpu_mode(&self) -> CpuMode {
-        match self.cpsr.get_bit_range(Self::MODE_BITS_RANGE) {
+        match self.cpsr.get().get_bit_range(Self::MODE_BITS_RANGE) {
             Self::USER_MODE_BITS => CpuMode::User,
             Self::FIQ_MODE_BITS => CpuMode::Fiq,
             Self::IRQ_MODE_BITS => CpuMode::Irq,
@@ -896,8 +934,10 @@ impl Cpu {
             CpuMode::System => Self::SYSTEM_MODE_BITS,
         };
 
-        self.cpsr = self
+        let new_cpsr = self
             .cpsr
+            .get()
             .set_bit_range(new_mode_bits, Self::MODE_BITS_RANGE);
+        self.cpsr.set(new_cpsr);
     }
 }

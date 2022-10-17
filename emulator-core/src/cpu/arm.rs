@@ -2,6 +2,7 @@ use super::{Cpu, ExceptionType, InstructionCondition, Register, ShiftType};
 
 use crate::{BitManipulation, DataAccess};
 
+use core::num;
 use std::fmt::Display;
 use std::ops::RangeInclusive;
 
@@ -1553,7 +1554,7 @@ impl Cpu {
 
             if matches!(destination_operand, Register::R15) {
                 let saved_cpsr = self.read_register(Register::Spsr, |_| unreachable!());
-                self.cpsr = saved_cpsr;
+                self.cpsr.set(saved_cpsr);
             }
         }
 
@@ -2022,104 +2023,86 @@ impl Cpu {
         register_bit_list: [bool; 16],
         force_user_mode: bool,
     ) {
-        let empty_rlist = register_bit_list.into_iter().all(|val| !val);
-
-        // "not including R15".
-        let mut current_address = self.read_register(base_register, |_| unreachable!());
-
-        match offset_modifier {
-            OffsetModifierType::AddToBase => {
-                for (register_idx, register_loaded) in register_bit_list.into_iter().enumerate() {
-                    if register_loaded {
-                        if matches!(index_type, BlockDataTransferIndexType::PreIndex) {
-                            current_address += 4;
-                        }
-
-                        let register = Register::from_index(register_idx as u32);
-                        let register_value = if force_user_mode {
-                            let old_mode = self.get_cpu_mode();
-                            self.set_cpu_mode(super::CpuMode::User);
-                            let result = self.read_register(register, |_| unreachable!());
-                            self.set_cpu_mode(old_mode);
-                            result
-                        } else {
-                            self.read_register(register, |_| unreachable!())
-                        };
-
-                        self.bus
-                            .write_word_address(register_value, current_address & (!0b11));
-
-                        if matches!(index_type, BlockDataTransferIndexType::PostIndex) {
-                            current_address += 4;
-                        }
-                    }
-                }
-            }
-            OffsetModifierType::SubtractFromBase => {
-                // Lowest register index goes at lowest address. When decrementing after store, lowest register index needs to be considered last.
-                //  In order to achieve this, iterate in reverse order.
-                for (register_idx, register_loaded) in
-                    register_bit_list.into_iter().enumerate().rev()
-                {
-                    if register_loaded {
-                        if matches!(index_type, BlockDataTransferIndexType::PreIndex) {
-                            current_address -= 4;
-                        }
-
-                        let register = Register::from_index(register_idx as u32);
-                        let register_value = if force_user_mode {
-                            let old_mode = self.get_cpu_mode();
-                            self.set_cpu_mode(super::CpuMode::User);
-                            let result = self.read_register(register, |_| unreachable!());
-                            self.set_cpu_mode(old_mode);
-                            result
-                        } else {
-                            self.read_register(register, |_| unreachable!())
-                        };
-
-                        self.bus
-                            .write_word_address(register_value, current_address & (!0b11));
-
-                        if matches!(index_type, BlockDataTransferIndexType::PostIndex) {
-                            current_address -= 4;
-                        }
-                    }
-                }
-            }
+        enum IncrementTiming {
+            BeforeWrite,
+            AfterWrite,
         }
 
-        if empty_rlist {
-            if matches!(index_type, BlockDataTransferIndexType::PreIndex) {
-                match offset_modifier {
-                    OffsetModifierType::AddToBase => current_address += 0x40,
-                    OffsetModifierType::SubtractFromBase => current_address -= 0x40,
-                };
+        let raw_registers = register_bit_list
+            .into_iter()
+            .enumerate()
+            .filter_map(|(register_idx, register_loaded)| {
+                register_loaded.then(|| Register::from_index(register_idx as u32))
+            })
+            .collect::<Vec<_>>();
+        let read_register_pc_calculation = |pc| pc + 4;
+
+        // "not including R15".
+        let base_address = self.read_register(base_register, |_| unreachable!());
+
+        // number of non-zero registers
+        //
+        // empty rlist behaves as if we had _all_ registers when performing offset calculations.
+        // Empty Rlist: R15 loaded/stored (ARMv4 only), and Rb=Rb+/-40h (ARMv4-v5).
+        let (num_registers, stored_registers) = if raw_registers.is_empty() {
+            (16, vec![Register::R15])
+        } else {
+            (raw_registers.len() as u32, raw_registers)
+        };
+
+        let increment_timing = match (offset_modifier, index_type) {
+            (OffsetModifierType::AddToBase, BlockDataTransferIndexType::PreIndex)
+            | (OffsetModifierType::SubtractFromBase, BlockDataTransferIndexType::PostIndex) => {
+                IncrementTiming::BeforeWrite
+            }
+            (OffsetModifierType::AddToBase, BlockDataTransferIndexType::PostIndex)
+            | (OffsetModifierType::SubtractFromBase, BlockDataTransferIndexType::PreIndex) => {
+                IncrementTiming::AfterWrite
+            }
+        };
+
+        let new_base = match offset_modifier {
+            OffsetModifierType::AddToBase => base_address + (4 * num_registers),
+            OffsetModifierType::SubtractFromBase => base_address - (4 * num_registers),
+        };
+
+        // we store registers from low to high address no matter what, but the final value of "current_address" does
+        // not represent the true write-back address.
+        let mut current_address = match offset_modifier {
+            OffsetModifierType::AddToBase => base_address,
+            OffsetModifierType::SubtractFromBase => base_address - (4 * num_registers),
+        };
+
+        // Writeback with Rb included in Rlist: Store OLD base if Rb is FIRST entry in Rlist, otherwise store NEW base
+        let base_value_if_read = if stored_registers.first() == Some(&base_register) {
+            base_address
+        } else {
+            new_base
+        };
+
+        for register in stored_registers {
+            if matches!(increment_timing, IncrementTiming::BeforeWrite) {
+                current_address += 4;
             }
 
-            let register = Register::R15;
-            let register_value = if force_user_mode {
-                let old_mode = self.get_cpu_mode();
-                self.set_cpu_mode(super::CpuMode::User);
-                let result = self.read_register(register, |_| unreachable!());
-                self.set_cpu_mode(old_mode);
-                result
+            let register_value = if register == base_register {
+                base_value_if_read
+            } else if force_user_mode {
+                self.read_user_register(register, read_register_pc_calculation)
             } else {
-                self.read_register(register, |_| unreachable!())
+                self.read_register(register, read_register_pc_calculation)
             };
 
             self.bus
                 .write_word_address(register_value, current_address & (!0b11));
 
-            if matches!(index_type, BlockDataTransferIndexType::PostIndex) {
-                match offset_modifier {
-                    OffsetModifierType::AddToBase => current_address += 0x40,
-                    OffsetModifierType::SubtractFromBase => current_address -= 0x40,
-                };
+            if matches!(increment_timing, IncrementTiming::AfterWrite) {
+                current_address += 4;
             }
         }
 
         if write_back {
-            self.write_register(current_address, base_register);
+            self.write_register(new_base, base_register);
         }
 
         self.advance_pc_for_arm_instruction();
