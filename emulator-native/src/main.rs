@@ -89,7 +89,7 @@ fn main() -> Result<()> {
                     cpu.fetch_decode_execute_logs();
                 }
 
-                let draw_buffer = pixels.get_frame();
+                let draw_buffer = pixels.get_frame_mut();
                 let lcd_buffer = cpu.bus.lcd.get_buffer();
                 for (index, pixel) in lcd_buffer.iter().flatten().enumerate() {
                     draw_buffer[(index * 4)..][0] = (pixel.red << 3) | (pixel.red >> 2);
