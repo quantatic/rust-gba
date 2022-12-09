@@ -1,6 +1,7 @@
 mod arm;
 mod thumb;
 
+use core::num;
 use std::cell::Cell;
 
 use std::fmt::Display;
@@ -244,6 +245,10 @@ impl Cpu {
             prefetch_opcode: None,
             pre_decode_thumb: None,
         }
+    }
+
+    pub fn cycle_count(&self) -> u64 {
+        self.cycle_count
     }
 }
 
@@ -572,29 +577,7 @@ impl Cpu {
     }
 
     fn fetch_decode_execute(&mut self, debug: bool) {
-        if debug {
-            log::trace!("{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} cpsr: {:08X} | ",
-                self.read_register(Register::R0, |_| unreachable!()),
-                self.read_register(Register::R1, |_| unreachable!()),
-                self.read_register(Register::R2, |_| unreachable!()),
-                self.read_register(Register::R3, |_| unreachable!()),
-                self.read_register(Register::R4, |_| unreachable!()),
-                self.read_register(Register::R5, |_| unreachable!()),
-                self.read_register(Register::R6, |_| unreachable!()),
-                self.read_register(Register::R7, |_| unreachable!()),
-                self.read_register(Register::R8, |_| unreachable!()),
-                self.read_register(Register::R9, |_| unreachable!()),
-                self.read_register(Register::R10, |_| unreachable!()),
-                self.read_register(Register::R11, |_| unreachable!()),
-                self.read_register(Register::R12, |_| unreachable!()),
-                self.read_register(Register::R13, |_| unreachable!()),
-                self.read_register(Register::R14, |_| unreachable!()),
-                self.read_register(Register::R15, |pc| pc),
-                self.read_register(Register::Cpsr, |_| unreachable!())
-            );
-        }
-
-        self.bus.step();
+        let mut cycles_taken = 0;
 
         let irq_wanted = !self.get_irq_disable() && self.bus.get_irq_pending();
         let pc = self.read_register(Register::R15, |pc| pc);
@@ -611,12 +594,7 @@ impl Cpu {
                 self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(pc));
                 self.pre_decode_arm = prefetched_opcode.map(arm::decode_arm);
 
-                if debug {
-                    if let Some(p) = prefetched_opcode {
-                        log::trace!("0x{:08X}", p);
-                    }
-                }
-                if let Some(decoded) = decoded_instruction {
+                cycles_taken = if let Some(decoded) = decoded_instruction {
                     // IRQ must only be dispatched when the pipeline is full.
                     //
                     // The return value we push in the IRQ handler is based on the current value of
@@ -632,12 +610,18 @@ impl Cpu {
                     // for the same reasons.
                     if irq_wanted {
                         self.handle_exception(ExceptionType::InterruptRequest);
+                        1
                     } else {
                         self.execute_arm(decoded);
+                        let cycle_info = decoded.instruction_type().cycles_info();
+
+                        let result = cycle_info.i + cycle_info.n + cycle_info.s;
+                        u8::max(result, 1)
                     }
                 } else {
                     self.write_register(pc + 4, Register::R15);
-                }
+                    1
+                };
             }
             InstructionSet::Thumb => {
                 if pc % 2 != 0 {
@@ -667,10 +651,16 @@ impl Cpu {
                     }
                     self.write_register(pc + 2, Register::R15);
                 }
+
+                cycles_taken = 1;
             }
         }
 
-        self.cycle_count += 1;
+        for _ in 0..cycles_taken {
+            self.bus.step();
+        }
+
+        self.cycle_count += u64::from(cycles_taken);
     }
 
     fn flush_prefetch(&mut self) {

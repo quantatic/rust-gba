@@ -64,7 +64,7 @@ mod tests {
                 let cartridge = Cartridge::new(source.as_slice(), None).unwrap();
                 let mut cpu = Cpu::new(cartridge);
 
-                for _ in 0..100_000_000 {
+                while cpu.cycle_count() < 100_000_000 {
                     cpu.fetch_decode_execute_no_logs();
                 }
 
@@ -149,7 +149,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
-        for _ in 0..100_000_000 {
+        while cpu.cycle_count() < 100_000_000 {
             cpu.fetch_decode_execute_no_logs();
         }
 
@@ -189,7 +189,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
-        for _ in 0..100_000_000 {
+        while cpu.cycle_count() < 100_000_000 {
             cpu.fetch_decode_execute_no_logs();
         }
 
@@ -231,7 +231,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
-        for _ in 0..100_000_000 {
+        while cpu.cycle_count() < 100_000_000 {
             cpu.fetch_decode_execute_no_logs();
         }
 
@@ -261,7 +261,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
-        for _ in 0..100_000_000 {
+        while cpu.cycle_count() < 100_000_000 {
             cpu.fetch_decode_execute_no_logs();
         }
 
@@ -292,7 +292,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
-        for _ in 0..100_000_000 {
+        while cpu.cycle_count() < 100_000_000 {
             cpu.fetch_decode_execute_no_logs();
         }
 

@@ -19,8 +19,12 @@ pub fn basic_cpu_benchmark(c: &mut Criterion) {
                         let cartridge = Cartridge::new(source.as_slice(), None).unwrap();
                         Cpu::new(cartridge)
                     },
-                    |cpu| (0..num_steps).for_each(|_| cpu.fetch_decode_execute_no_logs()),
-                    BatchSize::LargeInput,
+                    |cpu| {
+                        while cpu.cycle_count() < num_steps {
+                            cpu.fetch_decode_execute_no_logs();
+                        }
+                    },
+                    BatchSize::PerIteration,
                 );
             },
         );

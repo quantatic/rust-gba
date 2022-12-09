@@ -85,7 +85,8 @@ fn main() -> Result<()> {
     event_loop.run(move |event, _, control_flow| {
         match event {
             Event::MainEventsCleared => {
-                for _ in 0..(CYCLES_PER_SECOND / 60) {
+                let cycle_start = cpu.cycle_count();
+                while (cpu.cycle_count() - cycle_start) < (CYCLES_PER_SECOND / 60) {
                     cpu.fetch_decode_execute_logs();
                 }
 
