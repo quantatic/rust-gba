@@ -1,4 +1,4 @@
-use super::{Cpu, ExceptionType, InstructionCondition, Register, ShiftType};
+use super::{Cpu, ExceptionType, InstructionCondition, InstructionCyclesInfo, Register, ShiftType};
 
 use crate::{BitManipulation, DataAccess};
 
@@ -106,10 +106,47 @@ enum ArmInstructionType {
     },
 }
 
+impl ArmInstructionType {
+    fn cycles_info(&self) -> InstructionCyclesInfo {
+        match self {
+            ArmInstructionType::Alu {
+                second_operand,
+                destination_operand,
+                ..
+            } => {
+                let mut i = 0;
+                let mut s = 1;
+                let mut n = 0;
+
+                // Add x=1I cycles if Op2 shifted-by-register.
+                if matches!(
+                    second_operand,
+                    AluSecondOperandInfo::Register {
+                        shift_info: ArmRegisterOrImmediate::Register(_),
+                        ..
+                    }
+                ) {
+                    i += 1;
+                }
+
+                // Add y=1S+1N cycles if Rd=R15.
+                if matches!(destination_operand, Register::R15) {
+                    s += 1;
+                    n += 1;
+                }
+
+                InstructionCyclesInfo { i, n, s }
+            }
+            _ => InstructionCyclesInfo { i: 0, n: 0, s: 0 },
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct ArmInstruction {
     instruction_type: ArmInstructionType,
     condition: InstructionCondition,
+    cycles: InstructionCyclesInfo,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -460,6 +497,7 @@ pub fn decode_arm(opcode: u32) -> ArmInstruction {
     ArmInstruction {
         condition,
         instruction_type,
+        cycles: instruction_type.cycles_info(),
     }
 }
 

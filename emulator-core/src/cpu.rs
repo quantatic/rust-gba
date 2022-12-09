@@ -14,11 +14,6 @@ use crate::BitManipulation;
 pub use self::arm::ArmInstruction;
 pub use self::thumb::ThumbInstruction;
 
-enum Instruction {
-    ArmInstruction(ArmInstruction),
-    ThumbInstruction(ThumbInstruction),
-}
-
 struct ModeRegisters {
     r0: Rc<Cell<u32>>,
     r1: Rc<Cell<u32>>,
@@ -52,6 +47,13 @@ pub struct Cpu {
     prefetch_opcode: Option<u32>,
     pre_decode_arm: Option<ArmInstruction>,
     pre_decode_thumb: Option<ThumbInstruction>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct InstructionCyclesInfo {
+    i: u8, // internal cycle
+    n: u8, // non-sequential cycle
+    s: u8, // sequential cycle
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -631,15 +633,9 @@ impl Cpu {
                     if irq_wanted {
                         self.handle_exception(ExceptionType::InterruptRequest);
                     } else {
-                        if debug {
-                            log::trace!("{decoded}");
-                        }
                         self.execute_arm(decoded);
                     }
                 } else {
-                    if debug {
-                        log::trace!("PREFETCH");
-                    }
                     self.write_register(pc + 4, Register::R15);
                 }
             }

@@ -116,7 +116,7 @@ fn main() -> Result<()> {
                 window_id,
             } if window_id == window.id() => {
                 pixels.resize_surface(new_size.width, new_size.height);
-                println!("resized to ({}, {})", new_size.width, new_size.height);
+                log::info!("resized to ({}, {})", new_size.width, new_size.height);
             }
             Event::WindowEvent {
                 event:
@@ -151,7 +151,7 @@ fn main() -> Result<()> {
                     VirtualKeyCode::Q => cpu.bus.keypad.set_pressed(Key::L, pressed),
                     VirtualKeyCode::E => cpu.bus.keypad.set_pressed(Key::R, pressed),
                     VirtualKeyCode::Space if pressed => {
-                        println!("current checksum: {:016X}", calculate_lcd_checksum(&cpu));
+                        log::error!("current checksum: {:016X}", calculate_lcd_checksum(&cpu));
                     }
                     _ => {}
                 }

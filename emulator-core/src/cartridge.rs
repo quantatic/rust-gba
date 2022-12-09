@@ -52,7 +52,7 @@ impl Cartridge {
                 .take_while(|val| *val != 0)
                 .map(char::from)
                 .collect();
-            println!("{}", title);
+            log::info!("{}", title);
         }
 
         if let Some(code_bytes) = data.get(GAME_CODE_BYTE_RANGE) {
@@ -62,10 +62,10 @@ impl Cartridge {
                 .take_while(|val| *val != 0)
                 .map(char::from)
                 .collect();
-            println!("{}", code);
+            log::info!("{}", code);
 
             if let Some(backup_type) = BACKUP_TYPES_MAP.get(code_bytes) {
-                println!("{:?}", backup_type);
+                log::info!("{:?}", backup_type);
             }
         }
 
@@ -82,7 +82,7 @@ impl Cartridge {
                 Some(BackupType::Sram) => Backup::Sram(Sram::default()),
                 Some(BackupType::None) => todo!(),
                 None => {
-                    println!("falling back to ROM string search for backup detection");
+                    log::warn!("falling back to ROM string search for backup detection");
                     let eeprom_match = EEPROM_PATTERN.is_match(&data);
                     let sram_match = SRAM_PATTERN.is_match(&data);
                     let flash64kb_match = FLASH_64KB_PATTERN.is_match(&data);
@@ -340,7 +340,7 @@ impl Eeprom {
 
                 if self.rx_bits == 1 {
                     if self.rx_buffer != 0b0 {
-                        println!("awaiting set address stop bit got invalid stop bit");
+                        log::warn!("awaiting set address stop bit got invalid stop bit");
                     }
                 }
 
@@ -455,7 +455,7 @@ impl Flash {
                 self.wanted_write = FlashWantedWrite::CommandData;
             }
             FlashWantedWrite::Write_5555_AA if offset == 0x5555 && value == 0xF0 => {
-                println!("Macronix force end of command");
+                log::warn!("Macronix force end of command");
                 self.state = FlashCommandState::ReadCommand;
                 self.wanted_write = FlashWantedWrite::Write_5555_AA;
             }

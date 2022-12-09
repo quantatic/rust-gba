@@ -56,23 +56,19 @@ mod tests {
         }
     }
 
-    fn test_ppu_checksum(source: &[u8], checksum: u64) {
-        let cartridge = Cartridge::new(source, None).unwrap();
-        let mut cpu = Cpu::new(cartridge);
-
-        for _ in 0..100_000_000 {
-            cpu.fetch_decode_execute_no_logs();
-        }
-
-        assert_checksum(&cpu, checksum);
-    }
-
     macro_rules! simple_ppu_test {
         ($name:ident, $path:literal, $checksum:literal) => {
             #[test]
             fn $name() {
                 let source = include_bytes!($path);
-                test_ppu_checksum(source, $checksum);
+                let cartridge = Cartridge::new(source.as_slice(), None).unwrap();
+                let mut cpu = Cpu::new(cartridge);
+
+                for _ in 0..100_000_000 {
+                    cpu.fetch_decode_execute_no_logs();
+                }
+
+                assert_checksum(&cpu, $checksum);
             }
         };
     }
