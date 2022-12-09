@@ -1,7 +1,6 @@
 mod arm;
 mod thumb;
 
-use core::num;
 use std::cell::Cell;
 
 use std::fmt::Display;
@@ -12,8 +11,8 @@ use crate::bus::Bus;
 use crate::cartridge::Cartridge;
 use crate::BitManipulation;
 
-pub use self::arm::ArmInstruction;
-pub use self::thumb::ThumbInstruction;
+use self::arm::ArmInstruction;
+use self::thumb::ThumbInstruction;
 
 struct ModeRegisters {
     r0: Rc<Cell<u32>>,
@@ -568,21 +567,11 @@ impl Cpu {
 }
 
 impl Cpu {
-    pub fn fetch_decode_execute_logs(&mut self) {
-        self.fetch_decode_execute(true);
-    }
-
-    pub fn fetch_decode_execute_no_logs(&mut self) {
-        self.fetch_decode_execute(false);
-    }
-
-    fn fetch_decode_execute(&mut self, debug: bool) {
-        let mut cycles_taken = 0;
-
+    pub fn fetch_decode_execute(&mut self) {
         let irq_wanted = !self.get_irq_disable() && self.bus.get_irq_pending();
         let pc = self.read_register(Register::R15, |pc| pc);
 
-        match self.get_instruction_mode() {
+        let cycles_taken = match self.get_instruction_mode() {
             InstructionSet::Arm => {
                 if pc % 4 != 0 {
                     unreachable!("unaligned ARM pc");
@@ -594,7 +583,7 @@ impl Cpu {
                 self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(pc));
                 self.pre_decode_arm = prefetched_opcode.map(arm::decode_arm);
 
-                cycles_taken = if let Some(decoded) = decoded_instruction {
+                if let Some(decoded) = decoded_instruction {
                     // IRQ must only be dispatched when the pipeline is full.
                     //
                     // The return value we push in the IRQ handler is based on the current value of
@@ -621,7 +610,7 @@ impl Cpu {
                 } else {
                     self.write_register(pc + 4, Register::R15);
                     1
-                };
+                }
             }
             InstructionSet::Thumb => {
                 if pc % 2 != 0 {
@@ -638,23 +627,20 @@ impl Cpu {
                 if let Some(decoded) = decoded_instruction {
                     if irq_wanted {
                         self.handle_exception(ExceptionType::InterruptRequest);
+                        1
                     } else {
-                        if debug {
-                            log::trace!("{decoded}");
-                        }
-
                         self.execute_thumb(decoded);
+                        let cycle_info = decoded.instruction_type().cycles_info();
+
+                        let result = cycle_info.i + cycle_info.n + cycle_info.s;
+                        u8::max(result, 1)
                     }
                 } else {
-                    if debug {
-                        log::trace!("PREFETCH");
-                    }
                     self.write_register(pc + 2, Register::R15);
+                    1
                 }
-
-                cycles_taken = 1;
             }
-        }
+        };
 
         for _ in 0..cycles_taken {
             self.bus.step();

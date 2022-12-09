@@ -2,7 +2,6 @@ use super::{Cpu, ExceptionType, InstructionCondition, InstructionCyclesInfo, Reg
 
 use crate::{BitManipulation, DataAccess};
 
-use core::num;
 use std::fmt::Display;
 use std::ops::RangeInclusive;
 

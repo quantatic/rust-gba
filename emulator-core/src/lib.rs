@@ -48,11 +48,11 @@ mod tests {
 
         cpu.bus.keypad.set_pressed(key, true);
         for _ in 0..KEY_PRESS_DELAY {
-            cpu.fetch_decode_execute_no_logs();
+            cpu.fetch_decode_execute();
         }
         cpu.bus.keypad.set_pressed(key, false);
         for _ in 0..KEY_PRESS_DELAY {
-            cpu.fetch_decode_execute_no_logs();
+            cpu.fetch_decode_execute();
         }
     }
 
@@ -65,7 +65,7 @@ mod tests {
                 let mut cpu = Cpu::new(cartridge);
 
                 while cpu.cycle_count() < 100_000_000 {
-                    cpu.fetch_decode_execute_no_logs();
+                    cpu.fetch_decode_execute();
                 }
 
                 assert_checksum(&cpu, $checksum);
@@ -150,7 +150,7 @@ mod tests {
 
         // skip boot screen
         while cpu.cycle_count() < 100_000_000 {
-            cpu.fetch_decode_execute_no_logs();
+            cpu.fetch_decode_execute();
         }
 
         assert_checksum(&cpu, INITIAL_CHECKSUM);
@@ -190,7 +190,7 @@ mod tests {
 
         // skip boot screen
         while cpu.cycle_count() < 100_000_000 {
-            cpu.fetch_decode_execute_no_logs();
+            cpu.fetch_decode_execute();
         }
 
         assert_checksum(&cpu, INITIAL_CHECKSUM);
@@ -232,7 +232,7 @@ mod tests {
 
         // skip boot screen
         while cpu.cycle_count() < 100_000_000 {
-            cpu.fetch_decode_execute_no_logs();
+            cpu.fetch_decode_execute();
         }
 
         assert_checksum(&cpu, INITIAL_CHECKSUM);
@@ -262,7 +262,7 @@ mod tests {
 
         // skip boot screen
         while cpu.cycle_count() < 100_000_000 {
-            cpu.fetch_decode_execute_no_logs();
+            cpu.fetch_decode_execute();
         }
 
         assert_checksum(&cpu, INITIAL_CHECKSUM);
@@ -293,7 +293,7 @@ mod tests {
 
         // skip boot screen
         while cpu.cycle_count() < 100_000_000 {
-            cpu.fetch_decode_execute_no_logs();
+            cpu.fetch_decode_execute();
         }
 
         assert_checksum(&cpu, INITIAL_CHECKSUM);

@@ -1,5 +1,6 @@
 mod backup_types;
 
+use anyhow::anyhow;
 use backup_types::{BackupType, BACKUP_TYPES_MAP};
 use serde_with::serde_as;
 
@@ -11,7 +12,7 @@ use regex::bytes::Regex;
 use crate::{bit_manipulation::BitManipulation, data_access::DataAccess};
 use serde::{Deserialize, Serialize};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::Result;
 
 lazy_static! {
     static ref EEPROM_PATTERN: Regex = Regex::new(r"EEPROM_V\w\w\w").unwrap();
@@ -114,11 +115,11 @@ impl Cartridge {
             let existing_backup_discriminant = std::mem::discriminant(&existing_backup);
 
             if new_backup_discriminant != existing_backup_discriminant {
-                bail!(
+                return Err(anyhow!(
                     "expected existing backup to match detected backup type {:?}, but got {:?}",
                     new_backup_discriminant,
                     existing_backup_discriminant
-                );
+                ));
             }
 
             existing_backup
@@ -137,11 +138,11 @@ impl Cartridge {
         let current_variant = std::mem::discriminant(&self.backup);
         let new_variant = std::mem::discriminant(&backup);
         if current_variant != new_variant {
-            bail!(
+            return Err(anyhow!(
                 "expected to get backup with existing variant {:?}, but got {:?}",
                 current_variant,
                 new_variant
-            );
+            ));
         }
 
         self.backup = backup;
@@ -388,7 +389,6 @@ enum FlashWantedWrite {
     CommandData,
 }
 
-use serde_with::Same;
 // Atmel flash chips are not handled.
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -540,8 +540,6 @@ impl Flash {
         }
     }
 }
-
-use serde_with::Bytes;
 
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]

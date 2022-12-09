@@ -1,4 +1,3 @@
-use std::borrow::Borrow;
 use std::{fs::File, time::Instant};
 
 use anyhow::{anyhow, Result};
@@ -23,14 +22,15 @@ struct Args {
     frames: Option<u64>,
 }
 
+#[allow(unused)]
 fn press_key(cpu: &mut Cpu, key: Key) {
     cpu.bus.keypad.set_pressed(key, true);
     for _ in 0..500_000 {
-        cpu.fetch_decode_execute_no_logs();
+        cpu.fetch_decode_execute();
     }
     cpu.bus.keypad.set_pressed(key, false);
     for _ in 0..500_000 {
-        cpu.fetch_decode_execute_no_logs();
+        cpu.fetch_decode_execute();
     }
 }
 
@@ -79,7 +79,7 @@ fn main() -> Result<()> {
     let mut last_step = Instant::now();
     let mut i = 0;
     // for _ in 0..74_500_000 {
-    //     cpu.fetch_decode_execute_no_logs();
+    //     cpu.fetch_decode_execute();
     // }
 
     event_loop.run(move |event, _, control_flow| {
@@ -87,7 +87,7 @@ fn main() -> Result<()> {
             Event::MainEventsCleared => {
                 let cycle_start = cpu.cycle_count();
                 while (cpu.cycle_count() - cycle_start) < (CYCLES_PER_SECOND / 60) {
-                    cpu.fetch_decode_execute_logs();
+                    cpu.fetch_decode_execute();
                 }
 
                 let draw_buffer = pixels.get_frame_mut();

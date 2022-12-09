@@ -21,7 +21,7 @@ pub fn basic_cpu_benchmark(c: &mut Criterion) {
                     },
                     |cpu| {
                         while cpu.cycle_count() < num_steps {
-                            cpu.fetch_decode_execute_no_logs();
+                            cpu.fetch_decode_execute();
                         }
                     },
                     BatchSize::PerIteration,
