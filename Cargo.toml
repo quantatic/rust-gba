@@ -1,6 +1,7 @@
 [workspace]
 members = [
 	"emulator-core",
+	"emulator-egui",
 	"emulator-native",
 ]
 resolver = "2"
