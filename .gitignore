@@ -3,5 +3,6 @@
 *.sav
 /flamegraph.svg
 /perf.data
+/perf.data.*
 
 .DS_Store
