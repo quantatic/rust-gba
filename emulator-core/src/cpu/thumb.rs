@@ -289,7 +289,7 @@ impl ThumbInstructionType {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct ThumbInstruction {
+pub struct ThumbInstruction {
     instruction_type: ThumbInstructionType,
 }
 
@@ -1002,7 +1002,7 @@ fn try_decode_thumb_conditional_branch(opcode: u16) -> Option<ThumbInstructionTy
         0xB => InstructionCondition::SignedLessThan,
         0xC => InstructionCondition::SignedGreaterThan,
         0xD => InstructionCondition::SignedLessOrEqual,
-        0xE => unreachable!("Undefined"),
+        0xE => InstructionCondition::Never,
         0xF => return None, // reserved for SWI
         _ => unreachable!(),
     };

@@ -558,11 +558,11 @@ pub fn decode_arm(opcode: u32) -> ArmInstruction {
     } else if mask_result == MUST_BE_101 {
         try_decode_arm_branch_basic(opcode)
     } else if mask_result == MUST_BE_110 {
-        unreachable!()
+        None
     } else if mask_result == MUST_BE_111 {
         try_decode_arm_swi(opcode)
     } else {
-        unreachable!()
+        None
     };
 
     let instruction_type = if let Some(instruction_type) = maybe_instruction_type {
@@ -2748,6 +2748,7 @@ impl Display for ArmInstruction {
                     operand_register_rm,
                     operand_register_rs
                 ),
+                MultiplyOperation::Umaal => write!(f, "umaal"),
                 _ => todo!("{:?}", operation),
             },
             ArmInstructionType::Swi { comment } => write!(f, "swi #{}", comment),

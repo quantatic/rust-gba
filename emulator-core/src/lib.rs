@@ -13,6 +13,10 @@ use data_access::DataAccess;
 
 pub use cartridge::Cartridge;
 pub use cpu::Cpu;
+pub use cpu::CpuMode;
+pub use cpu::Instruction;
+pub use cpu::InstructionSet;
+pub use cpu::Register;
 pub use keypad::Key;
 pub use lcd::Lcd;
 pub use lcd::Rgb555;

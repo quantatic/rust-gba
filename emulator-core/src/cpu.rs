@@ -1,5 +1,5 @@
-mod arm;
-mod thumb;
+pub mod arm;
+pub mod thumb;
 
 use std::cell::Cell;
 
@@ -416,13 +416,13 @@ impl Display for InstructionCondition {
             Self::SignedGreaterThan => f.write_str("gt"),
             Self::SignedLessOrEqual => f.write_str("le"),
             Self::Always => Ok(()),
-            Self::Never => unreachable!("never branch condition"),
+            Self::Never => f.write_str("_NEVER"),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-enum InstructionSet {
+pub enum InstructionSet {
     Arm,
     Thumb,
 }
@@ -510,7 +510,7 @@ impl Cpu {
         }
     }
 
-    fn read_register(&self, register: Register, pc_calculation: fn(u32) -> u32) -> u32 {
+    pub fn read_register(&self, register: Register, pc_calculation: fn(u32) -> u32) -> u32 {
         let registers = match self.get_cpu_mode() {
             CpuMode::User | CpuMode::System => &self.user_registers,
             CpuMode::Fiq => &self.fiq_registers,
@@ -563,6 +563,35 @@ impl Cpu {
             Register::Spsr => self.user_registers.spsr.get(),
             Register::Cpsr => self.cpsr.get(),
         }
+    }
+}
+
+pub enum Instruction {
+    ArmInstruction(ArmInstruction),
+    ThumbInstruction(ThumbInstruction),
+}
+
+impl Debug for Instruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Instruction::ArmInstruction(instruction) => Debug::fmt(&instruction, f),
+            Instruction::ThumbInstruction(instruction) => Debug::fmt(&instruction, f),
+        }
+    }
+}
+
+impl Display for Instruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Instruction::ArmInstruction(instruction) => Display::fmt(&instruction, f),
+            Instruction::ThumbInstruction(instruction) => Display::fmt(&instruction, f),
+        }
+    }
+}
+
+impl Default for Instruction {
+    fn default() -> Self {
+        Self::ArmInstruction(arm::decode_arm(0x00000000))
     }
 }
 
@@ -799,7 +828,7 @@ impl Cpu {
     const CARRY_FLAG_BIT_INDEX: usize = 29;
     const OVERFLOW_FLAG_BIT_INDEX: usize = 28;
 
-    fn get_sign_flag(&self) -> bool {
+    pub fn get_sign_flag(&self) -> bool {
         self.cpsr.get().get_bit(Self::SIGN_FLAG_BIT_INDEX)
     }
 
@@ -808,7 +837,7 @@ impl Cpu {
         self.cpsr.set(new_cpsr);
     }
 
-    fn get_zero_flag(&self) -> bool {
+    pub fn get_zero_flag(&self) -> bool {
         self.cpsr.get().get_bit(Self::ZERO_FLAG_BIT_INDEX)
     }
 
@@ -817,7 +846,7 @@ impl Cpu {
         self.cpsr.set(new_cpsr);
     }
 
-    fn get_carry_flag(&self) -> bool {
+    pub fn get_carry_flag(&self) -> bool {
         self.cpsr.get().get_bit(Self::CARRY_FLAG_BIT_INDEX)
     }
 
@@ -826,7 +855,7 @@ impl Cpu {
         self.cpsr.set(new_cpsr);
     }
 
-    fn get_overflow_flag(&self) -> bool {
+    pub fn get_overflow_flag(&self) -> bool {
         self.cpsr.get().get_bit(Self::OVERFLOW_FLAG_BIT_INDEX)
     }
 
@@ -847,7 +876,7 @@ impl Cpu {
     const UNDEFINED_MODE_BITS: u32 = 0b11011;
     const SYSTEM_MODE_BITS: u32 = 0b11111;
 
-    fn get_irq_disable(&self) -> bool {
+    pub fn get_irq_disable(&self) -> bool {
         self.cpsr.get().get_bit(Self::IRQ_DISABLE_BIT_OFFSET)
     }
 
@@ -856,7 +885,7 @@ impl Cpu {
         self.cpsr.set(new_cpsr);
     }
 
-    fn get_fiq_disable(&self) -> bool {
+    pub fn get_fiq_disable(&self) -> bool {
         self.cpsr.get().get_bit(Self::FIQ_DISABLE_BIT_OFFSET)
     }
 
@@ -865,7 +894,7 @@ impl Cpu {
         self.cpsr.set(new_cpsr);
     }
 
-    fn get_instruction_mode(&self) -> InstructionSet {
+    pub fn get_instruction_mode(&self) -> InstructionSet {
         if self.get_cpu_state_bit() {
             InstructionSet::Thumb
         } else {
@@ -882,7 +911,7 @@ impl Cpu {
         self.cpsr.set(new_cpsr);
     }
 
-    fn get_cpu_mode(&self) -> CpuMode {
+    pub fn get_cpu_mode(&self) -> CpuMode {
         match self.cpsr.get().get_bit_range(Self::MODE_BITS_RANGE) {
             Self::USER_MODE_BITS => CpuMode::User,
             Self::FIQ_MODE_BITS => CpuMode::Fiq,
@@ -911,5 +940,52 @@ impl Cpu {
             .get()
             .set_bit_range(new_mode_bits, Self::MODE_BITS_RANGE);
         self.cpsr.set(new_cpsr);
+    }
+}
+
+// Methods intended for external introspection
+impl Cpu {
+    pub fn disassemble(&mut self, address: u32) -> Instruction {
+        match self.get_instruction_mode() {
+            InstructionSet::Arm => {
+                let opcode = self.bus.read_word_address(address);
+                let instruction = arm::decode_arm(opcode);
+                Instruction::ArmInstruction(instruction)
+            }
+            InstructionSet::Thumb => {
+                let opcode = self.bus.read_halfword_address(address);
+                let instruction = thumb::decode_thumb(opcode);
+                Instruction::ThumbInstruction(instruction)
+            }
+        }
+    }
+
+    pub fn get_instruction_width(&self) -> u32 {
+        match self.get_instruction_mode() {
+            InstructionSet::Arm => 4,
+            InstructionSet::Thumb => 2,
+        }
+    }
+
+    pub fn get_executing_pc(&self) -> u32 {
+        let r15 = self.read_register(Register::R15, std::convert::identity);
+        let prefetch_saturated = self.prefetch_opcode.is_some();
+        let decode_saturated = match self.get_instruction_mode() {
+            InstructionSet::Arm => self.pre_decode_arm.is_some(),
+            InstructionSet::Thumb => self.pre_decode_thumb.is_some(),
+        };
+
+        let instructions_behind = match (prefetch_saturated, decode_saturated) {
+            (false, false) => 0,
+            (true, false) => 1,
+            (false, true) => {
+                unreachable!("decode saturated and prefetch saturated shouldn't be possible")
+            }
+            (true, true) => 2,
+        };
+
+        let bytes_behind = instructions_behind * self.get_instruction_width();
+
+        r15 - bytes_behind
     }
 }

@@ -1,19 +1,24 @@
 use std::{
+    array,
+    fmt::Debug,
     fs::File,
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc::{channel, Sender},
-        Arc,
+        Arc, Mutex,
     },
     thread,
 };
 
 use eframe::{
-    egui::{self, Slider, TextEdit, TextureOptions},
-    epaint::{mutex::Mutex, ColorImage},
+    egui::{self, ScrollArea, Slider, TextEdit, TextStyle, TextureOptions, Ui},
+    epaint::ColorImage,
 };
-use emulator_core::{Cartridge, Cpu, Key, Lcd, Rgb555, CYCLES_PER_SECOND};
+use emulator_core::{
+    Cartridge, Cpu, CpuMode, Instruction, InstructionSet, Key, Lcd, Register, Rgb555,
+    CYCLES_PER_SECOND,
+};
 use rfd::FileDialog;
 
 fn main() {
@@ -41,8 +46,54 @@ enum EmulatorState {
     Paused,
 }
 
+struct MemoryViewInfo {
+    offset: u32,
+    buffer: Box<[u8; 0x1000]>,
+}
+
+struct DisassemblyInfo {
+    pc: u32,
+    buffer: Box<[Instruction; 0x1000]>,
+    instruction_width: u32,
+}
+
+struct RegisterValue {
+    register: Register,
+    value: u32,
+}
+
+struct CpuInfo {
+    sign_flag: bool,
+    zero_flag: bool,
+    carry_flag: bool,
+    overflow_flag: bool,
+    irq_disable: bool,
+    fiq_disable: bool,
+    instruction_mode: InstructionSet,
+    cpu_mode: CpuMode,
+}
+
+impl Default for CpuInfo {
+    fn default() -> Self {
+        Self {
+            sign_flag: false,
+            zero_flag: false,
+            carry_flag: false,
+            overflow_flag: false,
+            irq_disable: false,
+            fiq_disable: false,
+            instruction_mode: InstructionSet::Arm,
+            cpu_mode: CpuMode::System,
+        }
+    }
+}
+
 struct MyEguiApp {
     display_buffer: Arc<Mutex<[[Rgb555; Lcd::LCD_WIDTH]; Lcd::LCD_HEIGHT]>>,
+    memory_view_info: Arc<Mutex<MemoryViewInfo>>,
+    disassembly_info: Arc<Mutex<DisassemblyInfo>>,
+    registers_info: Arc<Mutex<Box<[RegisterValue]>>>,
+    cpu_info: Arc<Mutex<CpuInfo>>,
     emulator_command_sender: Sender<EmulatorCommand>,
     step_count: u64,
     cycles_executed: Arc<AtomicU64>,
@@ -58,6 +109,18 @@ impl MyEguiApp {
         let display_buffer = Arc::new(Mutex::new(
             [[Rgb555::default(); Lcd::LCD_WIDTH]; Lcd::LCD_HEIGHT],
         ));
+        let memory_view_info = Arc::new(Mutex::new(MemoryViewInfo {
+            buffer: Box::new([0; 0x1000]),
+            offset: 0x00000000,
+        }));
+        let disassembly_info = Arc::new(Mutex::new(DisassemblyInfo {
+            buffer: Box::new(array::from_fn(|_| Instruction::default())),
+            pc: 0x00000000,
+            instruction_width: 0,
+        }));
+        let registers_info = Arc::new(Mutex::new(Box::new([]) as Box<[_]>));
+        let cpu_info = Arc::new(Mutex::new(CpuInfo::default()));
+
         let cycles_executed = Arc::new(AtomicU64::new(0));
 
         let (emulator_command_sender, emulator_command_receiver) = channel();
@@ -65,6 +128,10 @@ impl MyEguiApp {
         {
             let display_buffer = Arc::clone(&display_buffer);
             let cycles_executed = Arc::clone(&cycles_executed);
+            let memory_view_info = Arc::clone(&memory_view_info);
+            let disassembly_info = Arc::clone(&disassembly_info);
+            let registers_info = Arc::clone(&registers_info);
+            let cpu_info = Arc::clone(&cpu_info);
             thread::spawn(move || {
                 let cartridge = Cartridge::new(
                     include_bytes!("../../emulator-core/tests/suite.gba").as_slice(),
@@ -72,7 +139,7 @@ impl MyEguiApp {
                 )
                 .unwrap();
                 let mut cpu = Cpu::new(cartridge);
-                let mut state = EmulatorState::Running;
+                let mut state = EmulatorState::Paused;
 
                 loop {
                     for command in emulator_command_receiver.try_iter() {
@@ -88,8 +155,22 @@ impl MyEguiApp {
                                 state = EmulatorState::Paused
                             }
                             EmulatorCommand::LoadRom(path) => {
-                                let file = File::open(path).unwrap();
-                                let cartridge = Cartridge::new(file, None).unwrap();
+                                let file = match File::open(&path) {
+                                    Ok(file) => file,
+                                    Err(e) => {
+                                        println!("{e:?}");
+                                        continue;
+                                    }
+                                };
+
+                                let cartridge = match Cartridge::new(file, None) {
+                                    Ok(cart) => cart,
+                                    Err(e) => {
+                                        println!("{e:?}");
+                                        continue;
+                                    }
+                                };
+
                                 cpu = Cpu::new(cartridge);
                             }
                             EmulatorCommand::KeyPressed(key) => {
@@ -114,7 +195,75 @@ impl MyEguiApp {
                     {
                         display_buffer
                             .lock()
+                            .unwrap()
                             .copy_from_slice(cpu.bus.lcd.get_buffer());
+                        {
+                            let mut memory_view_info_lock = memory_view_info.lock().unwrap();
+                            for offset in 0..memory_view_info_lock.buffer.len() {
+                                memory_view_info_lock.buffer[offset] = cpu.bus.read_byte_address(
+                                    memory_view_info_lock.offset + (offset as u32),
+                                );
+                            }
+                        }
+
+                        {
+                            let executing_pc = cpu.get_executing_pc();
+
+                            let mut disassembly_info_lock = disassembly_info.lock().unwrap();
+                            let instruction_width = cpu.get_instruction_width();
+                            for offset in 0..disassembly_info_lock.buffer.len() {
+                                disassembly_info_lock.buffer[offset] = cpu.disassemble(
+                                    executing_pc + ((offset as u32) * instruction_width),
+                                );
+                            }
+                            disassembly_info_lock.instruction_width = cpu.get_instruction_width();
+                            disassembly_info_lock.pc = executing_pc;
+                        }
+
+                        {
+                            const REGISTERS_TO_READ: &[Register] = &[
+                                Register::R0,
+                                Register::R1,
+                                Register::R2,
+                                Register::R3,
+                                Register::R4,
+                                Register::R5,
+                                Register::R6,
+                                Register::R7,
+                                Register::R8,
+                                Register::R9,
+                                Register::R10,
+                                Register::R11,
+                                Register::R12,
+                                Register::R13,
+                                Register::R14,
+                                Register::R15,
+                            ];
+
+                            let register_values = REGISTERS_TO_READ
+                                .iter()
+                                .map(|&register| {
+                                    let value = cpu.read_register(register, |pc| pc);
+                                    RegisterValue { register, value }
+                                })
+                                .collect::<Box<_>>();
+
+                            *registers_info.lock().unwrap() = register_values;
+                        }
+
+                        {
+                            let new_cpu_info = CpuInfo {
+                                sign_flag: cpu.get_sign_flag(),
+                                zero_flag: cpu.get_zero_flag(),
+                                carry_flag: cpu.get_carry_flag(),
+                                overflow_flag: cpu.get_overflow_flag(),
+                                irq_disable: cpu.get_irq_disable(),
+                                fiq_disable: cpu.get_fiq_disable(),
+                                instruction_mode: cpu.get_instruction_mode(),
+                                cpu_mode: cpu.get_cpu_mode(),
+                            };
+                            *cpu_info.lock().unwrap() = new_cpu_info;
+                        }
                         cycles_executed.store(cpu.cycle_count(), Ordering::Relaxed);
                     }
                 }
@@ -126,6 +275,197 @@ impl MyEguiApp {
             emulator_command_sender,
             step_count: 1,
             cycles_executed,
+            memory_view_info,
+            disassembly_info,
+            registers_info,
+            cpu_info,
+        }
+    }
+}
+
+impl MyEguiApp {
+    fn controls(&mut self, ui: &mut Ui) {
+        if ui.button("Play").clicked() {
+            self.emulator_command_sender
+                .send(EmulatorCommand::Run)
+                .unwrap();
+        }
+
+        if ui.button("Pause").clicked() {
+            self.emulator_command_sender
+                .send(EmulatorCommand::Pause)
+                .unwrap();
+        }
+
+        ui.horizontal(|ui| {
+            if ui.button("Step").clicked() {
+                self.emulator_command_sender
+                    .send(EmulatorCommand::Step(self.step_count))
+                    .unwrap();
+            }
+            ui.add(
+                Slider::new(&mut self.step_count, 1..=10_000_000)
+                    .logarithmic(true)
+                    .suffix(" step(s)"),
+            );
+        });
+
+        if ui.button("Choose ROM").clicked() {
+            let sender = self.emulator_command_sender.clone();
+            thread::spawn(move || {
+                if let Some(file) = FileDialog::new()
+                    .add_filter("GBA ROM", &["gba"])
+                    .pick_file()
+                {
+                    sender.send(EmulatorCommand::LoadRom(file)).unwrap();
+                } else {
+                    println!("user cancelled file selection");
+                }
+            });
+        }
+    }
+
+    fn stats(&self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            ui.label("CPU Cycles");
+            ui.add(
+                TextEdit::singleline(&mut format!(
+                    "{}",
+                    self.cycles_executed.load(Ordering::Relaxed)
+                ))
+                .interactive(false),
+            );
+        });
+    }
+
+    fn emulator_window(&self, ui: &mut Ui) {
+        let rgb_data = self
+            .display_buffer
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|row| {
+                row.iter().flat_map(|pixel| {
+                    let red = (pixel.red << 3) | (pixel.red >> 2);
+                    let green = (pixel.green << 3) | (pixel.green >> 2);
+                    let blue = (pixel.blue << 3) | (pixel.blue >> 2);
+                    [red, green, blue]
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let image = ColorImage::from_rgb([Lcd::LCD_WIDTH, Lcd::LCD_HEIGHT], &rgb_data);
+        let texture = ui
+            .ctx()
+            .load_texture("gba-texture", image, TextureOptions::NEAREST);
+
+        ui.image(texture.id(), ui.available_size());
+    }
+
+    fn memory_viewer(&self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Memory Address: ");
+            ui.add(
+                Slider::new(
+                    &mut self.memory_view_info.lock().unwrap().offset,
+                    0x00000000..=0xFFFFFFFF,
+                )
+                .step_by(16.)
+                .hexadecimal(8, false, true),
+            )
+        });
+
+        let mut view_string = String::new();
+        {
+            let memory_view_info_lock = self.memory_view_info.lock().unwrap();
+            let view_start = memory_view_info_lock.offset;
+            for (offset, value) in memory_view_info_lock.buffer.iter().copied().enumerate() {
+                if offset % 0x10 == 0 {
+                    view_string.push_str(&format!("{:08X}:", view_start + (offset as u32)))
+                }
+
+                view_string.push_str(&format!(" {:02X}", value));
+
+                if offset % 0x10 == 0xF {
+                    view_string.push('\n');
+                }
+            }
+        }
+
+        ScrollArea::vertical().show(ui, |ui| {
+            ui.add(
+                TextEdit::multiline(&mut view_string)
+                    .interactive(false)
+                    .font(TextStyle::Monospace)
+                    .layouter(&mut |ui, val, wrap_width| {
+                        ui.fonts().layout_no_wrap(
+                            val.to_string(),
+                            TextStyle::Monospace.resolve(ui.style()),
+                            ui.visuals().widgets.inactive.text_color(),
+                        )
+                    }),
+            );
+        });
+    }
+
+    fn disassembler(&self, ui: &mut Ui) {
+        let mut view_string = String::new();
+        {
+            let disassembly_info_lock = self.disassembly_info.lock().unwrap();
+            for (offset, instruction) in disassembly_info_lock.buffer.iter().enumerate() {
+                let address = disassembly_info_lock.pc
+                    + (disassembly_info_lock.instruction_width * (offset as u32));
+                view_string.push_str(&format!("{:08X}: {}\n", address, instruction));
+            }
+        }
+
+        ScrollArea::vertical().show(ui, |ui| {
+            ui.add(
+                TextEdit::multiline(&mut view_string)
+                    .interactive(false)
+                    .font(TextStyle::Monospace)
+                    .layouter(&mut |ui, val, wrap_width| {
+                        ui.fonts().layout_no_wrap(
+                            val.to_string(),
+                            TextStyle::Monospace.resolve(ui.style()),
+                            ui.visuals().widgets.inactive.text_color(),
+                        )
+                    }),
+            );
+        });
+    }
+
+    fn register_info(&self, ui: &mut Ui) {
+        let registers_info_lock = self.registers_info.lock().unwrap();
+        for register_info in registers_info_lock.iter() {
+            ui.horizontal(|ui| {
+                ui.label(&format!("{}", register_info.register));
+                ui.add(
+                    TextEdit::singleline(&mut format!("{:08X}", register_info.value))
+                        .interactive(false),
+                );
+            });
+        }
+    }
+
+    fn cpu_info(&self, ui: &mut Ui) {
+        let cpu_info_lock = self.cpu_info.lock().unwrap();
+        let info_fields: [(&str, &dyn Debug); 8] = [
+            ("sign flag", &cpu_info_lock.sign_flag),
+            ("zero flag", &cpu_info_lock.zero_flag),
+            ("carry flag", &cpu_info_lock.carry_flag),
+            ("overflow flag", &cpu_info_lock.overflow_flag),
+            ("irq disable", &cpu_info_lock.irq_disable),
+            ("fiq disable", &cpu_info_lock.fiq_disable),
+            ("instruction mode", &cpu_info_lock.instruction_mode),
+            ("cpu mode", &cpu_info_lock.cpu_mode),
+        ];
+
+        for (name, value) in info_fields {
+            ui.horizontal(|ui| {
+                ui.label(name.to_string());
+                ui.add(TextEdit::singleline(&mut format!("{:?}", value)).interactive(false));
+            });
         }
     }
 }
@@ -134,121 +474,57 @@ impl eframe::App for MyEguiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint();
 
-        egui::Window::new("Controls").show(ctx, |ui| {
-            if ui.button("Play").clicked() {
-                self.emulator_command_sender
-                    .send(EmulatorCommand::Run)
-                    .unwrap();
-            }
+        egui::Window::new("Controls").show(ctx, |ui| self.controls(ui));
 
-            if ui.button("Pause").clicked() {
-                self.emulator_command_sender
-                    .send(EmulatorCommand::Pause)
-                    .unwrap();
-            }
-
-            ui.horizontal(|ui| {
-                if ui.button("Step").clicked() {
-                    self.emulator_command_sender
-                        .send(EmulatorCommand::Step(self.step_count))
-                        .unwrap();
-                }
-                ui.add(
-                    Slider::new(&mut self.step_count, 1..=10_000_000)
-                        .logarithmic(true)
-                        .suffix(" step(s)"),
-                );
-            });
-
-            if ui.button("Choose File").clicked() {
-                let sender = self.emulator_command_sender.clone();
-                thread::spawn(move || {
-                    let file = FileDialog::new()
-                        .add_filter("GBA ROM", &["gba"])
-                        .pick_file()
-                        .unwrap();
-
-                    sender.send(EmulatorCommand::LoadRom(file))
-                });
-            }
-        });
-
-        egui::Window::new("Stats").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Steps:");
-                ui.add(
-                    TextEdit::singleline(&mut format!(
-                        "{}",
-                        self.cycles_executed.load(Ordering::Relaxed)
-                    ))
-                    .interactive(false),
-                );
-            });
-        });
+        egui::Window::new("Stats").show(ctx, |ui| self.stats(ui));
 
         egui::Window::new("Emulator Window")
             .collapsible(false)
             .default_height(Lcd::LCD_HEIGHT as f32 * 4.0)
             .default_width(Lcd::LCD_WIDTH as f32 * 4.0)
-            .show(ctx, |ui| {
-                let rgb_data = self
-                    .display_buffer
-                    .lock()
-                    .iter()
-                    .flat_map(|row| {
-                        row.iter().flat_map(|pixel| {
-                            let red = (pixel.red << 3) | (pixel.red >> 2);
-                            let green = (pixel.green << 3) | (pixel.green >> 2);
-                            let blue = (pixel.blue << 3) | (pixel.blue >> 2);
-                            [red, green, blue]
-                        })
-                    })
-                    .collect::<Vec<_>>();
+            .show(ctx, |ui| self.emulator_window(ui));
 
-                let image = ColorImage::from_rgb([Lcd::LCD_WIDTH, Lcd::LCD_HEIGHT], &rgb_data);
-                let texture = ui
-                    .ctx()
-                    .load_texture("gba-texture", image, TextureOptions::NEAREST);
+        const KEYS_TO_CHECK: &[Key] = &[
+            Key::A,
+            Key::B,
+            Key::Down,
+            Key::Left,
+            Key::Right,
+            Key::Up,
+            Key::Select,
+            Key::Start,
+            Key::L,
+            Key::R,
+        ];
 
-                ui.image(texture.id(), ui.available_size());
+        for to_check in KEYS_TO_CHECK.iter().copied() {
+            let egui_key = match to_check {
+                Key::A => egui::Key::X,
+                Key::B => egui::Key::Z,
+                Key::Up => egui::Key::ArrowUp,
+                Key::Down => egui::Key::ArrowDown,
+                Key::Left => egui::Key::ArrowLeft,
+                Key::Right => egui::Key::ArrowRight,
+                Key::Start => egui::Key::Enter,
+                Key::Select => egui::Key::Space,
+                Key::L => egui::Key::Q,
+                Key::R => egui::Key::P,
+            };
 
-                const KEYS_TO_CHECK: &[Key] = &[
-                    Key::A,
-                    Key::B,
-                    Key::Down,
-                    Key::Left,
-                    Key::Right,
-                    Key::Up,
-                    Key::Select,
-                    Key::Start,
-                    Key::L,
-                    Key::R,
-                ];
+            if ctx.input().key_pressed(egui_key) {
+                self.emulator_command_sender
+                    .send(EmulatorCommand::KeyPressed(to_check))
+                    .unwrap();
+            } else if ctx.input().key_released(egui_key) {
+                self.emulator_command_sender
+                    .send(EmulatorCommand::KeyReleased(to_check))
+                    .unwrap();
+            };
+        }
 
-                for to_check in KEYS_TO_CHECK.iter().copied() {
-                    let egui_key = match to_check {
-                        Key::A => egui::Key::X,
-                        Key::B => egui::Key::Z,
-                        Key::Up => egui::Key::ArrowUp,
-                        Key::Down => egui::Key::ArrowDown,
-                        Key::Left => egui::Key::ArrowLeft,
-                        Key::Right => egui::Key::ArrowRight,
-                        Key::Start => egui::Key::Enter,
-                        Key::Select => egui::Key::Space,
-                        Key::L => egui::Key::Q,
-                        Key::R => egui::Key::P,
-                    };
-
-                    if ctx.input().key_pressed(egui_key) {
-                        self.emulator_command_sender
-                            .send(EmulatorCommand::KeyPressed(to_check))
-                            .unwrap();
-                    } else if ctx.input().key_released(egui_key) {
-                        self.emulator_command_sender
-                            .send(EmulatorCommand::KeyReleased(to_check))
-                            .unwrap();
-                    };
-                }
-            });
+        egui::Window::new("Memory Viewer").show(ctx, |ui| self.memory_viewer(ui));
+        egui::Window::new("Instruction Disassembler").show(ctx, |ui| self.disassembler(ui));
+        egui::Window::new("Register Viewer").show(ctx, |ui| self.register_info(ui));
+        egui::Window::new("CPU Info").show(ctx, |ui| self.cpu_info(ui));
     }
 }
