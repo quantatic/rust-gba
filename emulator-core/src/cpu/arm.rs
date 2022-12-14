@@ -1668,7 +1668,7 @@ impl Cpu {
 
             if matches!(destination_operand, Register::R15) {
                 let saved_cpsr = self.read_register(Register::Spsr, |_| unreachable!());
-                self.cpsr.set(saved_cpsr);
+                self.write_register(saved_cpsr, Register::Cpsr);
             }
         }
 
