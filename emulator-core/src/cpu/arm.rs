@@ -577,12 +577,6 @@ pub fn decode_arm(opcode: u32) -> ArmInstruction {
     }
 }
 
-fn try_decode_arm_branch(opcode: u32) -> Option<ArmInstructionType> {
-    None.or_else(|| try_decode_arm_branch_basic(opcode))
-        .or_else(|| try_decode_arm_branch_exchange(opcode))
-        .or_else(|| try_decode_arm_swi(opcode))
-}
-
 fn try_decode_arm_branch_basic(opcode: u32) -> Option<ArmInstructionType> {
     const BRANCH_MASK: u32 = 0b00001110_00000000_00000000_00000000;
     const BRANCH_MASK_RESULT: u32 = 0b00001010_00000000_00000000_00000000;
@@ -1748,7 +1742,6 @@ impl Cpu {
         write_flags_field: bool,
         write_status_field: bool,
     ) {
-        let _original_mode = self.get_cpu_mode();
         const FLAGS_FIELD_MASK: u32 = 0b11111111_00000000_00000000_00000000;
         const STATUS_FIELD_MASK: u32 = 0b00000000_11111111_00000000_00000000;
         const EXTENSION_FIELD_MASK: u32 = 0b00000000_00000000_11111111_00000000;
@@ -2748,8 +2741,7 @@ impl Display for ArmInstruction {
                     operand_register_rm,
                     operand_register_rs
                 ),
-                MultiplyOperation::Umaal => write!(f, "umaal"),
-                _ => todo!("{:?}", operation),
+                MultiplyOperation::Umaal => write!(f, "umaal TODO"),
             },
             ArmInstructionType::Swi { comment } => write!(f, "swi #{}", comment),
             ArmInstructionType::Blx { .. } => todo!("display blx"),

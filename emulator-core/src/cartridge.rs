@@ -290,7 +290,7 @@ impl Eeprom {
 
         let bit = value.get_bit(0);
         self.rx_bits += 1;
-        self.rx_buffer = (self.rx_buffer << 1) | if bit { 0b1 } else { 0b0 };
+        self.rx_buffer = (self.rx_buffer << 1) | (bit as u64);
 
         match self.status {
             EepromStatus::ReceivingCommand => {
@@ -362,11 +362,7 @@ impl Eeprom {
             self.tx_offset = self.tx_offset.wrapping_add(1);
             self.tx_bits += 1;
 
-            if result_bit {
-                1
-            } else {
-                0
-            }
+            result_bit as u16
         } else {
             1
         }

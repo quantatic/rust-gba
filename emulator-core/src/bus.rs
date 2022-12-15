@@ -605,91 +605,19 @@ impl Bus {
             Self::BG0_CONTROL_BASE..=Self::BG0_CONTROL_END => {
                 self.lcd.read_layer0_bg_control(address & 0b1)
             }
-            Self::BG0_X_OFFSET_BASE..=Self::BG0_X_OFFSET_END => {
-                self.lcd.read_layer0_x_offset(address & 0b1)
-            }
-            Self::BG0_Y_OFFSET_BASE..=Self::BG0_Y_OFFSET_END => {
-                self.lcd.read_layer0_y_offset(address & 0b1)
-            }
 
             Self::BG1_CONTROL_BASE..=Self::BG1_CONTROL_END => {
                 self.lcd.read_layer1_bg_control(address & 0b1)
-            }
-            Self::BG1_X_OFFSET_BASE..=Self::BG1_X_OFFSET_END => {
-                self.lcd.read_layer1_x_offset(address & 0b1)
-            }
-            Self::BG1_Y_OFFSET_BASE..=Self::BG1_Y_OFFSET_END => {
-                self.lcd.read_layer1_y_offset(address & 0b1)
             }
 
             Self::BG2_CONTROL_BASE..=Self::BG2_CONTROL_END => {
                 self.lcd.read_layer2_bg_control(address & 0b1)
             }
-            Self::BG2_TEXT_X_OFFSET_BASE..=Self::BG2_TEXT_X_OFFSET_END => {
-                self.lcd.read_layer2_text_x_offset(address & 0b1)
-            }
-            Self::BG2_TEXT_Y_OFFSET_BASE..=Self::BG2_TEXT_Y_OFFSET_END => {
-                self.lcd.read_layer2_text_y_offset(address & 0b1)
-            }
-            Self::BG2_AFFINE_X_OFFSET_BASE..=Self::BG2_AFFINE_X_OFFSET_END => {
-                self.lcd.read_layer2_affine_x_offset(address & 0b11)
-            }
-            Self::BG2_AFFINE_Y_OFFSET_BASE..=Self::BG2_AFFINE_Y_OFFSET_END => {
-                self.lcd.read_layer2_affine_y_offset(address & 0b11)
-            }
-            Self::BG2_AFFINE_PARAM_A_BASE..=Self::BG2_AFFINE_PARAM_A_END => {
-                self.lcd.read_layer2_affine_param_a(address & 0b1)
-            }
-            Self::BG2_AFFINE_PARAM_B_BASE..=Self::BG2_AFFINE_PARAM_B_END => {
-                self.lcd.read_layer2_affine_param_b(address & 0b1)
-            }
-            Self::BG2_AFFINE_PARAM_C_BASE..=Self::BG2_AFFINE_PARAM_C_END => {
-                self.lcd.read_layer2_affine_param_c(address & 0b1)
-            }
-            Self::BG2_AFFINE_PARAM_D_BASE..=Self::BG2_AFFINE_PARAM_D_END => {
-                self.lcd.read_layer2_affine_param_d(address & 0b1)
-            }
 
             Self::BG3_CONTROL_BASE..=Self::BG3_CONTROL_END => {
                 self.lcd.read_layer3_bg_control(address & 0b1)
             }
-            Self::BG3_TEXT_X_OFFSET_BASE..=Self::BG3_TEXT_X_OFFSET_END => {
-                self.lcd.read_layer3_text_x_offset(address & 0b1)
-            }
-            Self::BG3_TEXT_Y_OFFSET_BASE..=Self::BG3_TEXT_Y_OFFSET_END => {
-                self.lcd.read_layer3_text_y_offset(address & 0b1)
-            }
-            Self::BG3_AFFINE_X_OFFSET_BASE..=Self::BG3_AFFINE_X_OFFSET_END => {
-                self.lcd.read_layer3_affine_x_offset(address & 0b11)
-            }
-            Self::BG3_AFFINE_Y_OFFSET_BASE..=Self::BG3_AFFINE_Y_OFFSET_END => {
-                self.lcd.read_layer3_affine_y_offset(address & 0b11)
-            }
-            Self::BG3_AFFINE_PARAM_A_BASE..=Self::BG3_AFFINE_PARAM_A_END => {
-                self.lcd.read_layer3_affine_param_a(address & 0b1)
-            }
-            Self::BG3_AFFINE_PARAM_B_BASE..=Self::BG3_AFFINE_PARAM_B_END => {
-                self.lcd.read_layer3_affine_param_b(address & 0b1)
-            }
-            Self::BG3_AFFINE_PARAM_C_BASE..=Self::BG3_AFFINE_PARAM_C_END => {
-                self.lcd.read_layer3_affine_param_c(address & 0b1)
-            }
-            Self::BG3_AFFINE_PARAM_D_BASE..=Self::BG3_AFFINE_PARAM_D_END => {
-                self.lcd.read_layer3_affine_param_d(address & 0b1)
-            }
 
-            Self::WINDOW_0_HORIZONTAL_BASE..=Self::WINDOW_0_HORIZONTAL_END => {
-                self.lcd.read_window_0_horizontal(address & 0b1)
-            }
-            Self::WINDOW_1_HORIZONTAL_BASE..=Self::WINDOW_1_HORIZONTAL_END => {
-                self.lcd.read_window_1_horizontal(address & 0b1)
-            }
-            Self::WINDOW_0_VERTICAL_BASE..=Self::WINDOW_0_VERTICAL_END => {
-                self.lcd.read_window_0_vertical(address & 0b1)
-            }
-            Self::WINDOW_1_VERTICAL_BASE..=Self::WINDOW_1_VERTICAL_END => {
-                self.lcd.read_window_1_vertical(address & 0b1)
-            }
             Self::WINDOW_IN_CONTROL_BASE..=Self::WINDOW_IN_CONTROL_END => {
                 self.lcd.read_window_in_control(address & 0b1)
             }
@@ -697,17 +625,11 @@ impl Bus {
                 self.lcd.read_window_out_control(address & 0b1)
             }
 
-            Self::MOSAIC_SIZE_BASE..=Self::MOSAIC_SIZE_END => {
-                self.lcd.read_mosaic_size(address & 0b1)
-            }
             Self::BLEND_CONTROL_BASE..=Self::BLEND_CONTROL_END => {
                 self.lcd.read_color_effects_selection(address & 0b1)
             }
             Self::BLEND_ALPHA_BASE..=Self::BLEND_ALPHA_END => {
                 self.lcd.read_alpha_blending_coefficients(address & 0b1)
-            }
-            Self::BLEND_BRIGHTNESS_BASE..=Self::BLEND_BRIGHTNESS_END => {
-                self.lcd.read_brightness_coefficient(address & 0b1)
             }
 
             Self::SOUND_PWM_CONTROL_BASE..=Self::SOUND_PWM_CONTROL_END => {
@@ -716,54 +638,18 @@ impl Bus {
 
             Self::SOUND_BASE..=Self::SOUND_END => 0,
 
-            Self::DMA_0_SOURCE_BASE..=Self::DMA_0_SOURCE_END => {
-                self.dma_infos[0].read_source_addr(address & 0b11)
-            }
-            Self::DMA_0_DEST_BASE..=Self::DMA_0_DEST_END => {
-                self.dma_infos[0].read_dest_addr(address & 0b11)
-            }
-            Self::DMA_0_WORD_COUNT_BASE..=Self::DMA_0_WORD_COUNT_END => {
-                self.dma_infos[0].read_word_count(address & 0b1)
-            }
             Self::DMA_0_CONTROL_BASE..=Self::DMA_0_CONTROL_END => {
                 self.dma_infos[0].read_dma_control(address & 0b1)
             }
 
-            Self::DMA_1_SOURCE_BASE..=Self::DMA_1_SOURCE_END => {
-                self.dma_infos[1].read_source_addr(address & 0b11)
-            }
-            Self::DMA_1_DEST_BASE..=Self::DMA_1_DEST_END => {
-                self.dma_infos[1].read_dest_addr(address & 0b11)
-            }
-            Self::DMA_1_WORD_COUNT_BASE..=Self::DMA_1_WORD_COUNT_END => {
-                self.dma_infos[1].read_word_count(address & 0b1)
-            }
             Self::DMA_1_CONTROL_BASE..=Self::DMA_1_CONTROL_END => {
                 self.dma_infos[1].read_dma_control(address & 0b1)
             }
 
-            Self::DMA_2_SOURCE_BASE..=Self::DMA_2_SOURCE_END => {
-                self.dma_infos[2].read_source_addr(address & 0b11)
-            }
-            Self::DMA_2_DEST_BASE..=Self::DMA_2_DEST_END => {
-                self.dma_infos[2].read_dest_addr(address & 0b11)
-            }
-            Self::DMA_2_WORD_COUNT_BASE..=Self::DMA_2_WORD_COUNT_END => {
-                self.dma_infos[2].read_word_count(address & 0b1)
-            }
             Self::DMA_2_CONTROL_BASE..=Self::DMA_2_CONTROL_END => {
                 self.dma_infos[2].read_dma_control(address & 0b1)
             }
 
-            Self::DMA_3_SOURCE_BASE..=Self::DMA_3_SOURCE_END => {
-                self.dma_infos[3].read_source_addr(address & 0b11)
-            }
-            Self::DMA_3_DEST_BASE..=Self::DMA_3_DEST_END => {
-                self.dma_infos[3].read_dest_addr(address & 0b11)
-            }
-            Self::DMA_3_WORD_COUNT_BASE..=Self::DMA_3_WORD_COUNT_END => {
-                self.dma_infos[3].read_word_count(address & 0b1)
-            }
             Self::DMA_3_CONTROL_BASE..=Self::DMA_3_CONTROL_END => {
                 self.dma_infos[3].read_dma_control(address & 0b1)
             }
@@ -1404,6 +1290,18 @@ impl Bus {
                 self.board_wram[(actual_offset + 1) as usize] = le_bytes[1];
                 self.board_wram[(actual_offset + 2) as usize] = le_bytes[2];
                 self.board_wram[(actual_offset + 3) as usize] = le_bytes[3];
+            }
+            Self::TIMER_0_COUNTER_RELOAD_BASE..=Self::TIMER_0_CONTROL_END => {
+                self.timers[0].write_timer_counter_reload_word(value)
+            }
+            Self::TIMER_1_COUNTER_RELOAD_BASE..=Self::TIMER_1_CONTROL_END => {
+                self.timers[1].write_timer_counter_reload_word(value)
+            }
+            Self::TIMER_2_COUNTER_RELOAD_BASE..=Self::TIMER_2_CONTROL_END => {
+                self.timers[2].write_timer_counter_reload_word(value)
+            }
+            Self::TIMER_3_COUNTER_RELOAD_BASE..=Self::TIMER_3_CONTROL_END => {
+                self.timers[3].write_timer_counter_reload_word(value)
             }
             Self::OAM_BASE..=Self::OAM_END => {
                 let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;

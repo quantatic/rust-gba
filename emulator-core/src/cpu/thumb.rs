@@ -1,9 +1,6 @@
 use crate::BitManipulation;
 
-use super::{
-    arm::ArmInstructionType, Cpu, ExceptionType, InstructionCondition, InstructionCyclesInfo,
-    Register, ShiftType,
-};
+use super::{Cpu, ExceptionType, InstructionCondition, InstructionCyclesInfo, Register, ShiftType};
 
 use std::{cmp::Ordering, fmt::Display, ops::RangeInclusive};
 

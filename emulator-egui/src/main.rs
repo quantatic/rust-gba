@@ -12,10 +12,7 @@ use std::{
 };
 
 use eframe::{
-    egui::{
-        self, Checkbox, CollapsingHeader, Label, ScrollArea, Slider, TextEdit, TextStyle,
-        TextureOptions, Ui,
-    },
+    egui::{self, CollapsingHeader, ScrollArea, Slider, TextEdit, TextStyle, TextureOptions, Ui},
     epaint::ColorImage,
 };
 use emulator_core::{
@@ -382,13 +379,13 @@ impl MyEguiApp {
                 for i in 0..self.num_save_states.load(Ordering::SeqCst) {
                     ui.horizontal(|ui| {
                         ui.label(format!("Save State {}", i));
-                        if ui.button(format!("Load")).clicked() {
+                        if ui.button("Load").clicked() {
                             self.emulator_command_sender
                                 .send(EmulatorCommand::LoadSaveState(i))
                                 .unwrap();
                         }
 
-                        if ui.button(format!("Save")).clicked() {
+                        if ui.button("Save").clicked() {
                             self.emulator_command_sender
                                 .send(EmulatorCommand::UpdateSaveState(i))
                                 .unwrap();
@@ -563,14 +560,14 @@ impl MyEguiApp {
                 for breakpoint in breakpoints_lock.iter_mut() {
                     ui.horizontal(|ui| {
                         ui.add(
-                            Slider::new(&mut breakpoint.address, 0..=0x1000_0000)
+                            Slider::new(&mut breakpoint.address, 0..=0xFFFF_FFFF)
                                 .hexadecimal(8, false, true),
                         );
                         ui.checkbox(&mut breakpoint.active, "Active");
 
                         let mut stopped_at =
                             breakpoint.address == self.disassembly_info.lock().unwrap().pc;
-                        ui.add_enabled(false, Checkbox::new(&mut stopped_at, "Stopped"));
+                        ui.checkbox(&mut stopped_at, "Stopped");
                     });
                 }
 

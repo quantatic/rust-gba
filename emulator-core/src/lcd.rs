@@ -1168,7 +1168,9 @@ impl Lcd {
     where
         u16: DataAccess<T>,
     {
-        self.color_effects_selection = self.color_effects_selection.set_data(value, index)
+        const COLOR_EFFECTS_SELECTION_WRITE_MASK: u16 = 0b0011_1111_1111_1111;
+        self.color_effects_selection = self.color_effects_selection.set_data(value, index);
+        self.color_effects_selection &= COLOR_EFFECTS_SELECTION_WRITE_MASK;
     }
 
     pub fn read_alpha_blending_coefficients<T>(&self, index: u32) -> T
@@ -1182,7 +1184,9 @@ impl Lcd {
     where
         u16: DataAccess<T>,
     {
-        self.alpha_coefficients = self.alpha_coefficients.set_data(value, index)
+        const ALPHA_BLENDING_COEFFICIENT_WRITE_MASK: u16 = 0b0001_1111_0001_1111;
+        self.alpha_coefficients = self.alpha_coefficients.set_data(value, index);
+        self.alpha_coefficients &= ALPHA_BLENDING_COEFFICIENT_WRITE_MASK;
     }
 
     pub fn read_brightness_coefficient<T>(&self, index: u32) -> T
@@ -1266,7 +1270,7 @@ impl Lcd {
     where
         u16: DataAccess<T>,
     {
-        const WIN_IN_WRITE_MASK: u16 = 0b00111111_00111111;
+        const WIN_IN_WRITE_MASK: u16 = 0b0011_1111_0011_1111;
         self.window_in_control = self.window_in_control.set_data(value, index);
         self.window_in_control &= WIN_IN_WRITE_MASK;
     }
@@ -1282,7 +1286,7 @@ impl Lcd {
     where
         u16: DataAccess<T>,
     {
-        const WIN_OUT_WRITE_MASK: u16 = 0b00111111_00111111;
+        const WIN_OUT_WRITE_MASK: u16 = 0b0011_1111_0011_1111;
         self.window_out_control = self.window_out_control.set_data(value, index);
         self.window_out_control &= WIN_OUT_WRITE_MASK;
     }

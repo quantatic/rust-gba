@@ -142,7 +142,7 @@ impl Layer0 {
     where
         u16: DataAccess<T>,
     {
-        const BG0_CONTROL_WRITE_MASK: u16 = 0b11011111_11111111;
+        const BG0_CONTROL_WRITE_MASK: u16 = 0b1101_1111_1111_1111;
         self.bg_control = self.bg_control.set_data(value, index);
         self.bg_control &= BG0_CONTROL_WRITE_MASK;
     }

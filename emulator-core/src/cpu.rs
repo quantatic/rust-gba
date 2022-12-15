@@ -1,10 +1,7 @@
 pub mod arm;
 pub mod thumb;
 
-use std::cell::Cell;
-
 use std::fmt::Display;
-use std::rc::Rc;
 use std::{fmt::Debug, ops::RangeInclusive};
 
 use crate::bus::Bus;

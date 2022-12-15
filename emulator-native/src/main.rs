@@ -12,8 +12,6 @@ use winit::{
 
 use emulator_core::{calculate_lcd_checksum, Cartridge, Cpu, Key, Lcd, CYCLES_PER_SECOND};
 
-const DEBUG_AND_PANIC_ON_LOOP: bool = true;
-
 #[derive(Debug, Parser)]
 struct Args {
     rom: String,
