@@ -14,7 +14,7 @@ use crate::BitManipulation;
 use self::arm::ArmInstruction;
 use self::thumb::ThumbInstruction;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct ModeRegisters {
     r0: u32,
     r1: u32,
@@ -35,6 +35,7 @@ struct ModeRegisters {
     spsr: u32,
 }
 
+#[derive(Clone)]
 pub struct Cpu {
     current_registers: ModeRegisters,
     r0: u32,

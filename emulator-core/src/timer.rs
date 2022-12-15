@@ -10,7 +10,7 @@ enum PrescalerInterval {
     Div1024,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Timer {
     tick: u64,
     counter: u16,

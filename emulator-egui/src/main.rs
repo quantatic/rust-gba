@@ -4,7 +4,7 @@ use std::{
     fs::File,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         mpsc::{channel, Sender},
         Arc, Mutex,
     },
@@ -12,7 +12,10 @@ use std::{
 };
 
 use eframe::{
-    egui::{self, ScrollArea, Slider, TextEdit, TextStyle, TextureOptions, Ui},
+    egui::{
+        self, Checkbox, CollapsingHeader, Label, ScrollArea, Slider, TextEdit, TextStyle,
+        TextureOptions, Ui,
+    },
     epaint::ColorImage,
 };
 use emulator_core::{
@@ -38,6 +41,9 @@ enum EmulatorCommand {
     LoadRom(PathBuf),
     KeyPressed(Key),
     KeyReleased(Key),
+    CreateNewSaveState,
+    UpdateSaveState(usize),
+    LoadSaveState(usize),
 }
 
 #[derive(Debug)]
@@ -88,15 +94,23 @@ impl Default for CpuInfo {
     }
 }
 
+#[derive(Clone, Default)]
+struct BreakpointInfo {
+    address: u32,
+    active: bool,
+}
+
 struct MyEguiApp {
     display_buffer: Arc<Mutex<[[Rgb555; Lcd::LCD_WIDTH]; Lcd::LCD_HEIGHT]>>,
     memory_view_info: Arc<Mutex<MemoryViewInfo>>,
     disassembly_info: Arc<Mutex<DisassemblyInfo>>,
     registers_info: Arc<Mutex<Box<[RegisterValue]>>>,
     cpu_info: Arc<Mutex<CpuInfo>>,
+    breakpoints: Arc<Mutex<Vec<BreakpointInfo>>>,
     emulator_command_sender: Sender<EmulatorCommand>,
     step_count: u64,
     cycles_executed: Arc<AtomicU64>,
+    num_save_states: Arc<AtomicUsize>,
 }
 
 impl MyEguiApp {
@@ -120,8 +134,10 @@ impl MyEguiApp {
         }));
         let registers_info = Arc::new(Mutex::new(Box::new([]) as Box<[_]>));
         let cpu_info = Arc::new(Mutex::new(CpuInfo::default()));
+        let breakpoints = Arc::new(Mutex::new(Vec::<BreakpointInfo>::new()));
 
         let cycles_executed = Arc::new(AtomicU64::new(0));
+        let num_save_states = Arc::new(AtomicUsize::new(0));
 
         let (emulator_command_sender, emulator_command_receiver) = channel();
 
@@ -132,6 +148,9 @@ impl MyEguiApp {
             let disassembly_info = Arc::clone(&disassembly_info);
             let registers_info = Arc::clone(&registers_info);
             let cpu_info = Arc::clone(&cpu_info);
+            let breakpoints = Arc::clone(&breakpoints);
+            let num_save_states = Arc::clone(&num_save_states);
+
             thread::spawn(move || {
                 let cartridge = Cartridge::new(
                     include_bytes!("../../emulator-core/tests/suite.gba").as_slice(),
@@ -141,14 +160,22 @@ impl MyEguiApp {
                 let mut cpu = Cpu::new(cartridge);
                 let mut state = EmulatorState::Paused;
 
+                let mut save_states = Vec::new();
+
                 loop {
                     for command in emulator_command_receiver.try_iter() {
                         match command {
                             EmulatorCommand::Pause => state = EmulatorState::Paused,
-                            EmulatorCommand::Run => state = EmulatorState::Running,
+                            EmulatorCommand::Run => {
+                                // on run, ensure that we _always_ run at least one instruction
+                                let old_pc = cpu.get_executing_pc();
+                                while cpu.get_executing_pc() == old_pc {
+                                    cpu.fetch_decode_execute();
+                                }
+                                state = EmulatorState::Running
+                            }
                             EmulatorCommand::Step(count) => {
-                                let cycle_start = cpu.cycle_count();
-                                while (cpu.cycle_count() - cycle_start) < count {
+                                for _ in 0..count {
                                     cpu.fetch_decode_execute();
                                 }
 
@@ -179,13 +206,43 @@ impl MyEguiApp {
                             EmulatorCommand::KeyReleased(key) => {
                                 cpu.bus.keypad.set_pressed(key, false)
                             }
+                            EmulatorCommand::CreateNewSaveState => {
+                                let new_save_state = cpu.clone();
+                                save_states.push(new_save_state);
+                                num_save_states.fetch_add(1, Ordering::SeqCst);
+                            }
+                            EmulatorCommand::UpdateSaveState(idx) => {
+                                if idx > save_states.len() {
+                                    panic!("got a request to update save state at index {}, but only have {} indices available", idx, save_states.len());
+                                }
+
+                                let new_save_state = cpu.clone();
+                                save_states[idx] = new_save_state;
+                            }
+                            EmulatorCommand::LoadSaveState(idx) => {
+                                if idx > save_states.len() {
+                                    panic!("got a request to load save state at index {}, but only have {} indices available", idx, save_states.len());
+                                }
+
+                                cpu = save_states[idx].clone();
+                            }
                         }
                     }
 
                     match state {
                         EmulatorState::Running => {
                             let cycle_start = cpu.cycle_count();
-                            while (cpu.cycle_count() - cycle_start) < (CYCLES_PER_SECOND / 60) {
+                            'frame_loop: while (cpu.cycle_count() - cycle_start)
+                                < (CYCLES_PER_SECOND / 60)
+                            {
+                                for breakpoint in breakpoints.lock().unwrap().iter_mut() {
+                                    if breakpoint.active
+                                        && breakpoint.address == cpu.get_executing_pc()
+                                    {
+                                        state = EmulatorState::Paused;
+                                        break 'frame_loop; // if we hit a breakpoint, immediately stop executing for this frame
+                                    }
+                                }
                                 cpu.fetch_decode_execute();
                             }
                         }
@@ -264,8 +321,8 @@ impl MyEguiApp {
                             };
                             *cpu_info.lock().unwrap() = new_cpu_info;
                         }
-                        cycles_executed.store(cpu.cycle_count(), Ordering::Relaxed);
                     }
+                    cycles_executed.store(cpu.cycle_count(), Ordering::SeqCst);
                 }
             });
         }
@@ -279,6 +336,8 @@ impl MyEguiApp {
             disassembly_info,
             registers_info,
             cpu_info,
+            breakpoints,
+            num_save_states,
         }
     }
 }
@@ -297,19 +356,6 @@ impl MyEguiApp {
                 .unwrap();
         }
 
-        ui.horizontal(|ui| {
-            if ui.button("Step").clicked() {
-                self.emulator_command_sender
-                    .send(EmulatorCommand::Step(self.step_count))
-                    .unwrap();
-            }
-            ui.add(
-                Slider::new(&mut self.step_count, 1..=10_000_000)
-                    .logarithmic(true)
-                    .suffix(" step(s)"),
-            );
-        });
-
         if ui.button("Choose ROM").clicked() {
             let sender = self.emulator_command_sender.clone();
             thread::spawn(move || {
@@ -323,19 +369,33 @@ impl MyEguiApp {
                 }
             });
         }
-    }
 
-    fn stats(&self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            ui.label("CPU Cycles");
-            ui.add(
-                TextEdit::singleline(&mut format!(
-                    "{}",
-                    self.cycles_executed.load(Ordering::Relaxed)
-                ))
-                .interactive(false),
-            );
-        });
+        if ui.button("Create Save State").clicked() {
+            self.emulator_command_sender
+                .send(EmulatorCommand::CreateNewSaveState)
+                .unwrap();
+        }
+
+        egui::CollapsingHeader::new("Save States")
+            .default_open(true)
+            .show(ui, |ui| {
+                for i in 0..self.num_save_states.load(Ordering::SeqCst) {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Save State {}", i));
+                        if ui.button(format!("Load")).clicked() {
+                            self.emulator_command_sender
+                                .send(EmulatorCommand::LoadSaveState(i))
+                                .unwrap();
+                        }
+
+                        if ui.button(format!("Save")).clicked() {
+                            self.emulator_command_sender
+                                .send(EmulatorCommand::UpdateSaveState(i))
+                                .unwrap();
+                        }
+                    });
+                }
+            });
     }
 
     fn emulator_window(&self, ui: &mut Ui) {
@@ -449,6 +509,17 @@ impl MyEguiApp {
     }
 
     fn cpu_info(&self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            ui.label("CPU Cycles");
+            ui.add(
+                TextEdit::singleline(&mut format!(
+                    "{}",
+                    self.cycles_executed.load(Ordering::SeqCst)
+                ))
+                .interactive(false),
+            );
+        });
+
         let cpu_info_lock = self.cpu_info.lock().unwrap();
         let info_fields: [(&str, &dyn Debug); 8] = [
             ("sign flag", &cpu_info_lock.sign_flag),
@@ -468,6 +539,46 @@ impl MyEguiApp {
             });
         }
     }
+
+    fn debugger(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            if ui.button("Step").clicked() {
+                self.emulator_command_sender
+                    .send(EmulatorCommand::Step(self.step_count))
+                    .unwrap();
+            }
+
+            ui.add(
+                Slider::new(&mut self.step_count, 1..=10_000_000)
+                    .logarithmic(true)
+                    .suffix(" step(s)"),
+            );
+        });
+
+        CollapsingHeader::new("Breakpoints")
+            .default_open(true)
+            .show(ui, |ui| {
+                let mut breakpoints_lock = self.breakpoints.lock().unwrap();
+
+                for breakpoint in breakpoints_lock.iter_mut() {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            Slider::new(&mut breakpoint.address, 0..=0x1000_0000)
+                                .hexadecimal(8, false, true),
+                        );
+                        ui.checkbox(&mut breakpoint.active, "Active");
+
+                        let mut stopped_at =
+                            breakpoint.address == self.disassembly_info.lock().unwrap().pc;
+                        ui.add_enabled(false, Checkbox::new(&mut stopped_at, "Stopped"));
+                    });
+                }
+
+                if ui.button("Add Breakpoint").clicked() {
+                    breakpoints_lock.push(BreakpointInfo::default());
+                }
+            });
+    }
 }
 
 impl eframe::App for MyEguiApp {
@@ -475,8 +586,6 @@ impl eframe::App for MyEguiApp {
         ctx.request_repaint();
 
         egui::Window::new("Controls").show(ctx, |ui| self.controls(ui));
-
-        egui::Window::new("Stats").show(ctx, |ui| self.stats(ui));
 
         egui::Window::new("Emulator Window")
             .collapsible(false)
@@ -526,5 +635,6 @@ impl eframe::App for MyEguiApp {
         egui::Window::new("Instruction Disassembler").show(ctx, |ui| self.disassembler(ui));
         egui::Window::new("Register Viewer").show(ctx, |ui| self.register_info(ui));
         egui::Window::new("CPU Info").show(ctx, |ui| self.cpu_info(ui));
+        egui::Window::new("Debugger").show(ctx, |ui| self.debugger(ui));
     }
 }

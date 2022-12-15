@@ -12,6 +12,7 @@ use crate::DataAccess;
 
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
 
+#[derive(Clone)]
 pub struct Bus {
     chip_wram: Box<[u8; 0x8000]>,
     board_wram: Box<[u8; 0x40000]>,

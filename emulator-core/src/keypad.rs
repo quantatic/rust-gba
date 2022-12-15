@@ -16,7 +16,7 @@ pub enum Key {
     L,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Keypad {
     key_status: u16, // 0 = pressed, 1 = released
     interrupt_control: u16,

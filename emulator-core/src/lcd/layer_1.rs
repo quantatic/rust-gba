@@ -4,7 +4,7 @@ use crate::{BitManipulation, DataAccess};
 
 use super::{BgMode, PaletteDepth, Rgb555, TextScreenSize};
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Layer1 {
     bg_control: u16,
     x_offset: u16,

@@ -2,7 +2,7 @@ use crate::DataAccess;
 
 // stub for APU registers for now
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Apu {
     sound_bias: u16,
 }

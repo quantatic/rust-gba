@@ -12,7 +12,7 @@ use crate::{BitManipulation, DataAccess};
 
 use std::{cmp::Ordering, fmt::Debug, ops::RangeInclusive};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum LcdState {
     Visible,
     HBlank,
@@ -432,7 +432,7 @@ impl Rgb555 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Lcd {
     dot: u16,
     vcount: u16,

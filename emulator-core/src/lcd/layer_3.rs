@@ -7,7 +7,7 @@ use super::{
     AffineScreenSize, BgMode, PaletteDepth, Rgb555, TextScreenSize,
 };
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Layer3 {
     bg_control: u16,
     text_x_offset: u16,

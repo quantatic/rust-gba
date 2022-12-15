@@ -30,7 +30,7 @@ pub enum Backup {
 }
 
 #[serde_as]
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Cartridge {
     rom: Vec<u8>,
     backup: Backup,
