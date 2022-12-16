@@ -16,10 +16,16 @@ on:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
+  build-and-test-ubuntu:
+    strategy:
+      matrix:
+        os:
+        - ubuntu-20.04
+        - ubuntu-22.04
+        - ubuntu-latest
+
     # The type of runner that the job will run on
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
 
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
@@ -39,5 +45,58 @@ jobs:
           toolchain: stable
           default: true
 
+      - name: Check formatting
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --check
+
+      - name: Build project
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --all-targets
+
       - name: Run tests
-        run: cargo test --release
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --release --all-targets
+
+  build-and-test-mac:
+    strategy:
+      matrix:
+        os:
+        - macos-11
+        - macos-12
+        - macos-latest
+
+    # The type of runner that the job will run on
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v3
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+
+      - name: Check formatting
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --check
+
+      - name: Build project
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --all-targets
+
+      - name: Run tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --release --all-targets
