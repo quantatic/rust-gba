@@ -19,9 +19,9 @@ pub struct Bus {
     cycle_count: usize,
     interrupt_master_enable: u16,
     interrupt_enable: u16,
-    interrupt_request: u16,
+    interrupt_request: [u16; Self::IRQ_SYNC_BUFFER], // active IRQ is at end
     dma_infos: [DmaInfo; 4],
-    timers: [Timer; 4],
+    pub timers: [Timer; 4],
     open_bus_data: u32,
     pub lcd: Lcd,
     pub apu: Apu,
@@ -30,6 +30,8 @@ pub struct Bus {
 }
 
 impl Bus {
+    pub const IRQ_SYNC_BUFFER: usize = 4; // causes a 3-cycle delay
+
     pub fn new(cartridge: Cartridge) -> Self {
         Self {
             chip_wram: Box::new([0; 0x8000]),
@@ -37,12 +39,12 @@ impl Bus {
             cycle_count: 0,
             interrupt_master_enable: 0,
             interrupt_enable: 0,
-            interrupt_request: 0,
+            interrupt_request: [0; Self::IRQ_SYNC_BUFFER],
             dma_infos: [
-                DmaInfo::default(),
-                DmaInfo::default(),
-                DmaInfo::default(),
-                DmaInfo::default(),
+                DmaInfo::dma_0(),
+                DmaInfo::dma_1(),
+                DmaInfo::dma_2(),
+                DmaInfo::dma_3(),
             ],
             timers: [
                 Timer::default(),
@@ -81,13 +83,95 @@ enum DmaStartTiming {
     Special,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 struct DmaInfo {
     source_addr: u32,
+    source_addr_mask: u32,
+
     dest_addr: u32,
+    dest_addr_mask: u32,
+
     word_count: u16,
+    word_count_mask: u16,
+
     dma_control: u16,
     dma_ongoing: bool,
+
+    read_latch: u32, // DMA open bus returns last read value, not standard open bus value
+}
+
+impl DmaInfo {
+    fn dma_0() -> Self {
+        Self {
+            source_addr: Default::default(),
+            source_addr_mask: 0x07FFFFFF,
+
+            dest_addr: Default::default(),
+            dest_addr_mask: 0x07FFFFFF,
+
+            word_count: Default::default(),
+            word_count_mask: 0x3FFF,
+
+            dma_control: Default::default(),
+            dma_ongoing: false,
+
+            read_latch: Default::default(),
+        }
+    }
+
+    fn dma_1() -> Self {
+        Self {
+            source_addr: Default::default(),
+            source_addr_mask: 0x0FFFFFFF,
+
+            dest_addr: Default::default(),
+            dest_addr_mask: 0x07FFFFFF,
+
+            word_count: Default::default(),
+            word_count_mask: 0x3FFF,
+
+            dma_control: Default::default(),
+            dma_ongoing: false,
+
+            read_latch: Default::default(),
+        }
+    }
+
+    fn dma_2() -> Self {
+        Self {
+            source_addr: Default::default(),
+            source_addr_mask: 0x0FFFFFFF,
+
+            dest_addr: Default::default(),
+            dest_addr_mask: 0x07FFFFFF,
+
+            word_count: Default::default(),
+            word_count_mask: 0x3FFF,
+
+            dma_control: Default::default(),
+            dma_ongoing: false,
+
+            read_latch: Default::default(),
+        }
+    }
+
+    fn dma_3() -> Self {
+        Self {
+            source_addr: Default::default(),
+            source_addr_mask: 0x0FFFFFFF,
+
+            dest_addr: Default::default(),
+            dest_addr_mask: 0x0FFFFFFF,
+
+            word_count: Default::default(),
+            word_count_mask: 0xFFFF,
+
+            dma_control: Default::default(),
+            dma_ongoing: false,
+
+            read_latch: Default::default(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -109,47 +193,26 @@ enum InterruptType {
 }
 
 impl DmaInfo {
-    fn read_source_addr<T>(&self, index: u32) -> T
-    where
-        u32: DataAccess<T>,
-    {
-        self.source_addr.get_data(index)
-    }
-
     fn write_source_addr<T>(&mut self, value: T, index: u32)
     where
         u32: DataAccess<T>,
         T: UpperHex,
     {
-        self.source_addr = self.source_addr.set_data(value, index);
-    }
-
-    fn read_dest_addr<T>(&self, index: u32) -> T
-    where
-        u32: DataAccess<T>,
-    {
-        self.dest_addr.get_data(index)
+        self.source_addr = self.source_addr.set_data(value, index) & self.source_addr_mask;
     }
 
     fn write_dest_addr<T>(&mut self, value: T, index: u32)
     where
         u32: DataAccess<T>,
     {
-        self.dest_addr = self.dest_addr.set_data(value, index);
-    }
-
-    fn read_word_count<T>(&self, index: u32) -> T
-    where
-        u16: DataAccess<T>,
-    {
-        self.word_count.get_data(index)
+        self.dest_addr = self.dest_addr.set_data(value, index) & self.dest_addr_mask;
     }
 
     fn write_word_count<T>(&mut self, value: T, index: u32)
     where
         u16: DataAccess<T>,
     {
-        self.word_count = self.word_count.set_data(value, index);
+        self.word_count = self.word_count.set_data(value, index) & self.word_count_mask;
     }
 
     fn read_dma_control<T>(&self, index: u32) -> T
@@ -204,6 +267,7 @@ impl DmaInfo {
         }
     }
 
+    #[inline(never)]
     fn get_dma_repeat(&self) -> bool {
         const DMA_REPEAT_BIT_INDEX: usize = 9;
 
@@ -257,6 +321,7 @@ impl DmaInfo {
         self.dma_ongoing
     }
 
+    #[inline(never)]
     fn set_dma_ongoing(&mut self, set: bool) {
         self.dma_ongoing = set;
     }
@@ -289,6 +354,10 @@ impl Bus {
         } else {
             self.step_dma(None);
         }
+
+        let new_irq_in = *self.interrupt_request.first().unwrap();
+        self.interrupt_request.rotate_right(1);
+        *self.interrupt_request.first_mut().unwrap() = new_irq_in;
 
         self.cycle_count += 1;
     }
@@ -1384,7 +1453,8 @@ impl Bus {
     where
         u16: DataAccess<T>,
     {
-        self.interrupt_request.get_data(index)
+        let irq = *self.interrupt_request.last().unwrap();
+        irq.get_data(index)
     }
 
     fn write_interrupt_acknowledge<T>(&mut self, value: T, index: u32)
@@ -1394,7 +1464,7 @@ impl Bus {
         let written_value = 0.set_data(value, index);
 
         // any bits which are high in the acknowledge write clear the corresponding IRQ waiting bit.
-        self.interrupt_request &= !written_value;
+        *self.interrupt_request.first_mut().unwrap() &= !written_value;
     }
 }
 
@@ -1421,7 +1491,6 @@ impl Bus {
     fn step_dma(&mut self, state_changes: Option<LcdStateChangeInfo>) {
         for dma_idx in 0..self.dma_infos.len() {
             let dma = &mut self.dma_infos[dma_idx];
-
             let dma_triggered = state_changes.map_or(false, |s| {
                 if dma.get_dma_enable() {
                     match dma.get_dma_start_timing() {
@@ -1440,12 +1509,6 @@ impl Bus {
             }
 
             if dma.get_dma_ongoing() {
-                // println!("{:?}", original_dma_info.get_dma_start_timing());
-                // println!("performing dma transfer");
-                // println!("{:#08X?}", original_dma_info);
-                // println!("dma idx: {}", dma_idx);
-                // println!("---------------");
-
                 let mut dma_source = dma.source_addr;
                 let mut dma_dest = dma.dest_addr;
                 let original_dest = dma_dest;
@@ -1457,36 +1520,60 @@ impl Bus {
                     DmaTransferType::Bit32 => 4,
                 };
 
+                // Any read to an address below this results in an open bus DMA read.
+                const MINIMUM_DMA_ADDRESS: u32 = 0x02000000;
+
                 for _ in 0..dma_length {
+                    let dma = &mut self.dma_infos[dma_idx];
+
                     match transfer_type {
                         DmaTransferType::Bit16 => {
                             let align_addr = |address| address & (!0b1);
-                            let source_data = self.read_halfword_address(align_addr(dma_source));
-                            self.write_halfword_address(source_data, align_addr(dma_dest));
-                            // println!("u16 {:04X} -> [{:08X}]", source_data, dma_dest)
+                            let value = if dma_source < MINIMUM_DMA_ADDRESS {
+                                dma.read_latch as u16
+                            } else {
+                                let result = self.read_halfword_address(align_addr(dma_source));
+                                self.dma_infos[dma_idx].read_latch =
+                                    (u32::from(result) << u16::BITS) | u32::from(result);
+                                result
+                            };
+
+                            self.write_halfword_address(value, align_addr(dma_dest));
                         }
                         DmaTransferType::Bit32 => {
                             let align_addr = |address| address & (!0b11);
-                            let source_data = self.read_word_address(align_addr(dma_source));
-                            self.write_word_address(source_data, align_addr(dma_dest));
-                            // println!("u32 {:08X} -> [{:08X}]", source_data, dma_dest)
-                        }
-                    }
+                            let value = if dma_source < MINIMUM_DMA_ADDRESS {
+                                dma.read_latch
+                            } else {
+                                let result = self.read_word_address(align_addr(dma_source));
+                                self.dma_infos[dma_idx].read_latch = result;
+                                result
+                            };
 
+                            self.write_word_address(value, align_addr(dma_dest));
+                        }
+                    };
+
+                    // for every chunk written, update current latch.
                     let dma = &mut self.dma_infos[dma_idx];
+
                     match dma.get_source_addr_control() {
                         DmaAddrControl::Fixed => {}
-                        DmaAddrControl::Decrement => dma_source -= transfer_size,
+                        DmaAddrControl::Decrement => {
+                            dma_source = dma_source.wrapping_sub(transfer_size)
+                        }
                         DmaAddrControl::Increment | DmaAddrControl::IncrementReload => {
-                            dma_source += transfer_size
+                            dma_source = dma_source.wrapping_add(transfer_size)
                         }
                     };
 
                     match dma.get_dest_addr_control() {
                         DmaAddrControl::Fixed => {}
-                        DmaAddrControl::Decrement => dma_dest -= transfer_size,
+                        DmaAddrControl::Decrement => {
+                            dma_dest = dma_dest.wrapping_sub(transfer_size)
+                        }
                         DmaAddrControl::Increment | DmaAddrControl::IncrementReload => {
-                            dma_dest += transfer_size
+                            dma_dest = dma_dest.wrapping_add(transfer_size)
                         }
                     };
                 }
@@ -1570,14 +1657,23 @@ impl Bus {
             _ => todo!(),
         };
 
-        self.interrupt_request = self.interrupt_request.set_bit(bit_index, true);
+        let old_irq = *self.interrupt_request.first().unwrap();
+        let new_irq = old_irq.set_bit(bit_index, true);
+        *self.interrupt_request.first_mut().unwrap() = new_irq;
     }
 
     pub fn get_irq_pending(&mut self) -> bool {
         if !self.get_interrupts_enabled() {
             false
         } else {
-            (self.interrupt_enable & self.interrupt_request) != 0
+            let irq = *self.interrupt_request.last().unwrap();
+            (self.interrupt_enable & irq) != 0
         }
+    }
+}
+
+impl Bus {
+    pub fn get_interrupt_request_debug(&self) -> [u16; Self::IRQ_SYNC_BUFFER] {
+        self.interrupt_request
     }
 }

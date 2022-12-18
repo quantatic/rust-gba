@@ -160,3 +160,14 @@ impl Timer {
         self.control.get_bit(TIMER_START_STOP_BIT_INDEX)
     }
 }
+
+// Public debugging interface
+impl Timer {
+    pub fn get_current_counter(&self) -> u16 {
+        self.counter
+    }
+
+    pub fn get_current_reload(&self) -> u16 {
+        self.reload
+    }
+}

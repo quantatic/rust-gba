@@ -16,7 +16,7 @@ use eframe::{
     epaint::ColorImage,
 };
 use emulator_core::{
-    Cartridge, Cpu, CpuMode, Instruction, InstructionSet, Key, Lcd, Register, Rgb555,
+    Bus, Cartridge, Cpu, CpuMode, Instruction, InstructionSet, Key, Lcd, Register, Rgb555,
     CYCLES_PER_SECOND,
 };
 use rfd::FileDialog;
@@ -74,6 +74,7 @@ struct CpuInfo {
     fiq_disable: bool,
     instruction_mode: InstructionSet,
     cpu_mode: CpuMode,
+    irq_buffer: [u16; Bus::IRQ_SYNC_BUFFER],
 }
 
 impl Default for CpuInfo {
@@ -87,6 +88,7 @@ impl Default for CpuInfo {
             fiq_disable: false,
             instruction_mode: InstructionSet::Arm,
             cpu_mode: CpuMode::System,
+            irq_buffer: [0; Bus::IRQ_SYNC_BUFFER],
         }
     }
 }
@@ -97,12 +99,19 @@ struct BreakpointInfo {
     active: bool,
 }
 
+#[derive(Clone, Default)]
+struct TimerInfo {
+    reload: u16,
+    counter: u16,
+}
+
 struct MyEguiApp {
     display_buffer: Arc<Mutex<[[Rgb555; Lcd::LCD_WIDTH]; Lcd::LCD_HEIGHT]>>,
     memory_view_info: Arc<Mutex<MemoryViewInfo>>,
     disassembly_info: Arc<Mutex<DisassemblyInfo>>,
     registers_info: Arc<Mutex<Box<[RegisterValue]>>>,
     cpu_info: Arc<Mutex<CpuInfo>>,
+    timer_info: Arc<Mutex<Box<[TimerInfo]>>>,
     breakpoints: Arc<Mutex<Vec<BreakpointInfo>>>,
     emulator_command_sender: Sender<EmulatorCommand>,
     step_count: u64,
@@ -132,6 +141,7 @@ impl MyEguiApp {
         let registers_info = Arc::new(Mutex::new(Box::new([]) as Box<[_]>));
         let cpu_info = Arc::new(Mutex::new(CpuInfo::default()));
         let breakpoints = Arc::new(Mutex::new(Vec::<BreakpointInfo>::new()));
+        let timer_info = Arc::new(Mutex::new(Box::new([]) as Box<[_]>));
 
         let cycles_executed = Arc::new(AtomicU64::new(0));
         let num_save_states = Arc::new(AtomicUsize::new(0));
@@ -146,6 +156,7 @@ impl MyEguiApp {
             let registers_info = Arc::clone(&registers_info);
             let cpu_info = Arc::clone(&cpu_info);
             let breakpoints = Arc::clone(&breakpoints);
+            let timer_info = Arc::clone(&timer_info);
             let num_save_states = Arc::clone(&num_save_states);
 
             thread::spawn(move || {
@@ -179,7 +190,7 @@ impl MyEguiApp {
                                 state = EmulatorState::Paused
                             }
                             EmulatorCommand::LoadRom(path) => {
-                                let file = match File::open(&path) {
+                                let file = match File::open(path) {
                                     Ok(file) => file,
                                     Err(e) => {
                                         println!("{e:?}");
@@ -315,9 +326,24 @@ impl MyEguiApp {
                                 fiq_disable: cpu.get_fiq_disable(),
                                 instruction_mode: cpu.get_instruction_mode(),
                                 cpu_mode: cpu.get_cpu_mode(),
+                                irq_buffer: cpu.bus.get_interrupt_request_debug(),
                             };
                             *cpu_info.lock().unwrap() = new_cpu_info;
                         }
+                    }
+
+                    {
+                        let timer_infos = cpu
+                            .bus
+                            .timers
+                            .iter()
+                            .map(|timer| TimerInfo {
+                                counter: timer.get_current_counter(),
+                                reload: timer.get_current_reload(),
+                            })
+                            .collect::<Box<[_]>>();
+
+                        *timer_info.lock().unwrap() = timer_infos;
                     }
                     cycles_executed.store(cpu.cycle_count(), Ordering::SeqCst);
                 }
@@ -333,6 +359,7 @@ impl MyEguiApp {
             disassembly_info,
             registers_info,
             cpu_info,
+            timer_info,
             breakpoints,
             num_save_states,
         }
@@ -403,9 +430,9 @@ impl MyEguiApp {
             .iter()
             .flat_map(|row| {
                 row.iter().flat_map(|pixel| {
-                    let red = (pixel.red << 3) | (pixel.red >> 2);
-                    let green = (pixel.green << 3) | (pixel.green >> 2);
-                    let blue = (pixel.blue << 3) | (pixel.blue >> 2);
+                    let red = (pixel.red() << 3) | (pixel.red() >> 2);
+                    let green = (pixel.green() << 3) | (pixel.green() >> 2);
+                    let blue = (pixel.blue() << 3) | (pixel.blue() >> 2);
                     [red, green, blue]
                 })
             })
@@ -535,6 +562,46 @@ impl MyEguiApp {
                 ui.add(TextEdit::singleline(&mut format!("{:?}", value)).interactive(false));
             });
         }
+
+        CollapsingHeader::new("Irq Sync Buffer")
+            .default_open(true)
+            .show(ui, |ui| {
+                for (i, irq_val) in cpu_info_lock.irq_buffer.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Idx {}", i));
+                        ui.add(
+                            TextEdit::singleline(&mut format!("{:08b}", irq_val))
+                                .interactive(false),
+                        );
+                    });
+                }
+            });
+
+        CollapsingHeader::new("Timers")
+            .default_open(true)
+            .show(ui, |ui| {
+                let timer_info_lock = self.timer_info.lock().unwrap();
+
+                for (i, info) in timer_info_lock.iter().enumerate() {
+                    ui.collapsing(format!("Timer {}", i), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Counter");
+                            ui.add(
+                                TextEdit::singleline(&mut format!("{:04X}", info.counter))
+                                    .interactive(false),
+                            );
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("Reload");
+                            ui.add(
+                                TextEdit::singleline(&mut format!("{}", info.reload))
+                                    .interactive(false),
+                            );
+                        });
+                    });
+                }
+            });
     }
 
     fn debugger(&mut self, ui: &mut Ui) {

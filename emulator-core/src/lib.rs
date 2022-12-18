@@ -11,6 +11,7 @@ mod timer;
 use bit_manipulation::BitManipulation;
 use data_access::DataAccess;
 
+pub use bus::Bus;
 pub use cartridge::Cartridge;
 pub use cpu::Cpu;
 pub use cpu::CpuMode;
@@ -18,8 +19,7 @@ pub use cpu::Instruction;
 pub use cpu::InstructionSet;
 pub use cpu::Register;
 pub use keypad::Key;
-pub use lcd::Lcd;
-pub use lcd::Rgb555;
+pub use lcd::{Lcd, Rgb555};
 pub const CYCLES_PER_SECOND: u64 = 16_777_216;
 
 pub fn calculate_lcd_checksum(cpu: &Cpu) -> u64 {
@@ -29,9 +29,9 @@ pub fn calculate_lcd_checksum(cpu: &Cpu) -> u64 {
     let mut hasher = Xxh3::default();
 
     for pixel in cpu.bus.lcd.get_buffer().iter().flatten() {
-        hasher.write_u8(pixel.red);
-        hasher.write_u8(pixel.green);
-        hasher.write_u8(pixel.blue);
+        hasher.write_u8(pixel.red());
+        hasher.write_u8(pixel.green());
+        hasher.write_u8(pixel.blue());
     }
 
     hasher.finish()

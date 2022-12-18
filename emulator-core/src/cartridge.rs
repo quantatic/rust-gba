@@ -81,8 +81,7 @@ impl Cartridge {
                     manufacturer,
                 }) => Backup::Flash(Flash::new(device_type, manufacturer)),
                 Some(BackupType::Sram) => Backup::Sram(Sram::default()),
-                Some(BackupType::None) => todo!(),
-                None => {
+                None | Some(BackupType::None) => {
                     log::warn!("falling back to ROM string search for backup detection");
                     let eeprom_match = EEPROM_PATTERN.is_match(&data);
                     let sram_match = SRAM_PATTERN.is_match(&data);

@@ -174,29 +174,68 @@ struct DisplayedSelectionInfo {
     effects_displayed: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Rgb555 {
-    pub red: u8,
-    pub green: u8,
-    pub blue: u8,
-}
+#[derive(Clone, Copy, Default)]
+pub struct Rgb555(u16);
 
 impl Rgb555 {
+    const RED_INTENSITY_BIT_RANGE: RangeInclusive<usize> = 0..=4;
+    const GREEN_INTENSITY_BIT_RANGE: RangeInclusive<usize> = 5..=9;
+    const BLUE_INTENSITY_BIT_RANGE: RangeInclusive<usize> = 10..=14;
+
+    fn new(red: u8, green: u8, blue: u8) -> Self {
+        let inner = 0
+            .set_bit_range(u16::from(red), Self::RED_INTENSITY_BIT_RANGE)
+            .set_bit_range(u16::from(green), Self::GREEN_INTENSITY_BIT_RANGE)
+            .set_bit_range(u16::from(blue), Self::BLUE_INTENSITY_BIT_RANGE);
+
+        Self(inner)
+    }
+
+    fn to_int(self) -> u16 {
+        self.0
+    }
+
+    fn from_int(val: u16) -> Self {
+        Self(val)
+    }
+
+    pub fn red(&self) -> u8 {
+        self.0.get_bit_range(Rgb555::RED_INTENSITY_BIT_RANGE) as u8
+    }
+
+    pub fn green(&self) -> u8 {
+        self.0.get_bit_range(Rgb555::GREEN_INTENSITY_BIT_RANGE) as u8
+    }
+
+    pub fn blue(&self) -> u8 {
+        self.0.get_bit_range(Rgb555::BLUE_INTENSITY_BIT_RANGE) as u8
+    }
+
     const MAX_VALUE: u8 = 31;
 
     fn blend(self, coeff_self: f64, other: Rgb555, coeff_other: f64) -> Self {
         let new_red =
-            ((f64::from(self.red) * coeff_self) + (f64::from(other.red) * coeff_other)) as u8;
-        let new_green =
-            ((f64::from(self.green) * coeff_self) + (f64::from(other.green) * coeff_other)) as u8;
+            ((f64::from(self.red()) * coeff_self) + (f64::from(other.red()) * coeff_other)) as u8;
+        let new_green = ((f64::from(self.green()) * coeff_self)
+            + (f64::from(other.green()) * coeff_other)) as u8;
         let new_blue =
-            ((f64::from(self.blue) * coeff_self) + (f64::from(other.blue) * coeff_other)) as u8;
+            ((f64::from(self.blue()) * coeff_self) + (f64::from(other.blue()) * coeff_other)) as u8;
 
-        Self {
-            red: new_red.min(Self::MAX_VALUE),
-            green: new_green.min(Self::MAX_VALUE),
-            blue: new_blue.min(Self::MAX_VALUE),
-        }
+        Self::new(
+            new_red.min(Self::MAX_VALUE),
+            new_green.min(Self::MAX_VALUE),
+            new_blue.min(Self::MAX_VALUE),
+        )
+    }
+}
+
+impl Debug for Rgb555 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Rgb555")
+            .field("red", &self.red())
+            .field("green", &self.green())
+            .field("blue", &self.blue())
+            .finish()
     }
 }
 
@@ -410,26 +449,6 @@ struct ObjectRotationScalingInfo {
     pub b: u16,
     pub c: u16,
     pub d: u16,
-}
-
-impl Rgb555 {
-    const RED_INTENSITY_BIT_RANGE: RangeInclusive<usize> = 0..=4;
-    const GREEN_INTENSITY_BIT_RANGE: RangeInclusive<usize> = 5..=9;
-    const BLUE_INTENSITY_BIT_RANGE: RangeInclusive<usize> = 10..=14;
-
-    fn to_int(self) -> u16 {
-        0.set_bit_range(u16::from(self.red), Self::RED_INTENSITY_BIT_RANGE)
-            .set_bit_range(u16::from(self.green), Self::GREEN_INTENSITY_BIT_RANGE)
-            .set_bit_range(u16::from(self.blue), Self::BLUE_INTENSITY_BIT_RANGE)
-    }
-
-    fn from_int(val: u16) -> Self {
-        let red = val.get_bit_range(Rgb555::RED_INTENSITY_BIT_RANGE) as u8;
-        let green = val.get_bit_range(Rgb555::GREEN_INTENSITY_BIT_RANGE) as u8;
-        let blue = val.get_bit_range(Rgb555::BLUE_INTENSITY_BIT_RANGE) as u8;
-
-        Self { red, green, blue }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -719,23 +738,20 @@ impl Lcd {
                         };
 
                     if self.special_effect_first_pixel(pixel_type) {
-                        let new_red = pixel_color.red
-                            + ((f64::from(31 - pixel_color.red) * self.get_brightness_coefficient())
-                                as u8);
-                        let new_green = pixel_color.green
-                            + ((f64::from(31 - pixel_color.green)
+                        let new_red = pixel_color.red()
+                            + ((f64::from(31 - pixel_color.red())
                                 * self.get_brightness_coefficient())
                                 as u8);
-                        let new_blue = pixel_color.blue
-                            + ((f64::from(31 - pixel_color.blue)
+                        let new_green = pixel_color.green()
+                            + ((f64::from(31 - pixel_color.green())
+                                * self.get_brightness_coefficient())
+                                as u8);
+                        let new_blue = pixel_color.blue()
+                            + ((f64::from(31 - pixel_color.blue())
                                 * self.get_brightness_coefficient())
                                 as u8);
 
-                        Rgb555 {
-                            red: new_red,
-                            green: new_green,
-                            blue: new_blue,
-                        }
+                        Rgb555::new(new_red, new_green, new_blue)
                     } else {
                         pixel_color
                     }
@@ -756,21 +772,17 @@ impl Lcd {
                         };
 
                     if self.special_effect_first_pixel(pixel_type) {
-                        let new_red = pixel_color.red
-                            - ((f64::from(pixel_color.red) * self.get_brightness_coefficient())
+                        let new_red = pixel_color.red()
+                            - ((f64::from(pixel_color.red()) * self.get_brightness_coefficient())
                                 as u8);
-                        let new_green = pixel_color.green
-                            - ((f64::from(pixel_color.green) * self.get_brightness_coefficient())
+                        let new_green = pixel_color.green()
+                            - ((f64::from(pixel_color.green()) * self.get_brightness_coefficient())
                                 as u8);
-                        let new_blue = pixel_color.blue
-                            - ((f64::from(pixel_color.blue) * self.get_brightness_coefficient())
+                        let new_blue = pixel_color.blue()
+                            - ((f64::from(pixel_color.blue()) * self.get_brightness_coefficient())
                                 as u8);
 
-                        Rgb555 {
-                            red: new_red,
-                            green: new_green,
-                            blue: new_blue,
-                        }
+                        Rgb555::new(new_red, new_green, new_blue)
                     } else {
                         pixel_color
                     }
