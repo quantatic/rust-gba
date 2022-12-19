@@ -269,7 +269,6 @@ impl DmaInfo {
         }
     }
 
-    #[inline(never)]
     fn get_dma_repeat(&self) -> bool {
         const DMA_REPEAT_BIT_INDEX: usize = 9;
 
@@ -323,7 +322,6 @@ impl DmaInfo {
         self.dma_ongoing
     }
 
-    #[inline(never)]
     fn set_dma_ongoing(&mut self, set: bool) {
         self.dma_ongoing = set;
     }

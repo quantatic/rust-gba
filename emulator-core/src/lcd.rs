@@ -1160,11 +1160,16 @@ impl Lcd {
         self.lcd_status.get_data(index)
     }
 
+    // This interface may only modify writable bits in lcd status.
     pub fn write_lcd_status<T>(&mut self, value: T, index: u32)
     where
         u16: DataAccess<T>,
     {
-        self.lcd_status = self.lcd_status.set_data(value, index);
+        // Not all bits in lcd status are writable.
+        const LCD_STATUS_WRITABLE_MASK: u16 = 0b11111111_10111000;
+        let new_status = self.lcd_status.set_data(value, index);
+        self.lcd_status = (new_status & LCD_STATUS_WRITABLE_MASK)
+            | (self.lcd_status & (!LCD_STATUS_WRITABLE_MASK))
     }
 
     pub fn read_mosaic_size<T>(&self, index: u32) -> T
