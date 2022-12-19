@@ -1856,10 +1856,8 @@ impl Cpu {
             }
             SingleDataMemoryAccessSize::HalfWord => self
                 .bus
-                .write_halfword_address(value as u16, actual_address & (!0b1)),
-            SingleDataMemoryAccessSize::Word => {
-                self.bus.write_word_address(value, actual_address & (!0b11))
-            }
+                .write_halfword_address(value as u16, actual_address),
+            SingleDataMemoryAccessSize::Word => self.bus.write_word_address(value, actual_address),
             _ => todo!("{:?}", access_size),
         };
 
@@ -1954,21 +1952,16 @@ impl Cpu {
 
         let value = match (access_size, sign_extend) {
             (SingleDataMemoryAccessSize::Byte, false) => {
-                self.bus.read_byte_address(data_read_address) as u32
+                self.bus.read_byte_address(data_read_address)
             }
             (SingleDataMemoryAccessSize::Byte, true) => {
                 self.bus.read_byte_address(data_read_address) as i8 as i32 as u32
             }
             (SingleDataMemoryAccessSize::HalfWord, false) => {
-                let hword_aligned = data_read_address & 1 == 0;
-
-                if hword_aligned {
-                    u32::from(self.bus.read_halfword_address(data_read_address))
-                } else {
-                    u32::from(self.bus.read_halfword_address(data_read_address - 1)).rotate_right(8)
-                }
+                self.bus.read_halfword_address(data_read_address)
             }
             (SingleDataMemoryAccessSize::HalfWord, true) => {
+                // LDRSH Rd,[odd]  -->  LDRSB Rd,[odd]         ;sign-expand BYTE value
                 let hword_aligned = data_read_address & 1 == 0;
 
                 if hword_aligned {
@@ -1978,9 +1971,7 @@ impl Cpu {
                 }
             }
             (SingleDataMemoryAccessSize::Word, false) => {
-                let rotate = (data_read_address & 0b11) * 8;
-                let data_aligned = self.bus.read_word_address(data_read_address & (!0b11));
-                data_aligned.rotate_right(rotate)
+                self.bus.read_word_address(data_read_address)
             }
             (SingleDataMemoryAccessSize::Word, true) => unreachable!(),
             _ => todo!("{:?} sign extend: {}", access_size, sign_extend),
@@ -2025,7 +2016,9 @@ impl Cpu {
                             current_address += 4;
                         }
 
-                        let value = self.bus.read_word_address(current_address & (!0b11));
+                        // The mis-aligned low bit(s) are ignored, the memory access goes to a forcibly aligned (rounded-down) memory address.
+                        let aligned_address = current_address & (!0b11);
+                        let value = self.bus.read_word_address(aligned_address);
                         let register = Register::from_index(register_idx as u32);
 
                         r15_written |= matches!(register, Register::R15);
@@ -2053,7 +2046,9 @@ impl Cpu {
                             current_address -= 4;
                         }
 
-                        let value = self.bus.read_word_address(current_address & (!0b11));
+                        // The mis-aligned low bit(s) are ignored, the memory access goes to a forcibly aligned (rounded-down) memory address.
+                        let aligned_address = current_address & (!0b11);
+                        let value = self.bus.read_word_address(aligned_address);
                         let register = Register::from_index(register_idx as u32);
 
                         r15_written |= matches!(register, Register::R15);
@@ -2080,7 +2075,9 @@ impl Cpu {
                 };
             }
 
-            let value = self.bus.read_word_address(current_address & (!0b11));
+            // The mis-aligned low bit(s) are ignored, the memory access goes to a forcibly aligned (rounded-down) memory address.
+            let aligned_address = current_address & (!0b11);
+            let value = self.bus.read_word_address(aligned_address);
             let register = Register::R15;
 
             r15_written |= true;
@@ -2200,8 +2197,7 @@ impl Cpu {
                 self.read_register(register, read_register_pc_calculation)
             };
 
-            self.bus
-                .write_word_address(register_value, current_address & (!0b11));
+            self.bus.write_word_address(register_value, current_address);
 
             if matches!(increment_timing, IncrementTiming::AfterWrite) {
                 current_address += 4;
@@ -2341,16 +2337,11 @@ impl Cpu {
                 self.bus.write_byte_address(new_base_value, base_address);
             }
             SwpAccessSize::Word => {
-                let rotate = (base_address & 0b11) * 8;
-                let old_base_value = self
-                    .bus
-                    .read_word_address(base_address & (!0b11))
-                    .rotate_right(rotate);
+                let old_base_value = self.bus.read_word_address(base_address);
                 let new_base_value = self.read_register(source_register, |_| unreachable!());
 
                 self.write_register(old_base_value, dest_register);
-                self.bus
-                    .write_word_address(new_base_value, base_address & (!0b11));
+                self.bus.write_word_address(new_base_value, base_address);
             }
         }
 

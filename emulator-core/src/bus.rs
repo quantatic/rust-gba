@@ -373,7 +373,7 @@ impl Bus {
     pub fn fetch_thumb_opcode(&mut self, address: u32) -> u16 {
         let result = self.read_halfword_address(address);
         self.open_bus_data = u32::from(result) | (u32::from(result) << 16);
-        result
+        result as u16
     }
 }
 
@@ -646,10 +646,19 @@ impl Bus {
     const GAME_PAK_SRAM_END: u32 = 0x0FFFFFFF;
     const GAME_PAK_SRAM_SIZE: u32 = 0x00010000;
 
-    pub fn read_byte_address(&self, address: u32) -> u8 {
+    fn align_hword(address: u32) -> u32 {
+        address & (!0b1)
+    }
+
+    fn align_word(address: u32) -> u32 {
+        address & (!0b11)
+    }
+
+    // 8-bit read requests still return data on an 8-bit bus.
+    pub fn read_byte_address(&self, address: u32) -> u32 {
         let address = address % Self::MEMORY_SIZE;
 
-        match address {
+        let read_result = match address {
             Self::BIOS_BASE..=Self::BIOS_END => BIOS[address as usize],
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
                 let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
@@ -826,41 +835,45 @@ impl Bus {
                 0
             }
             _ => self.open_bus_data.get_data(address & 0b11),
-        }
+        };
+
+        u32::from(read_result)
     }
 
-    pub fn read_halfword_address(&mut self, address: u32) -> u16 {
-        assert!(address & 0b1 == 0);
+    // Even halfword reads still return data on a 32-bit bus.
+    pub fn read_halfword_address(&mut self, address: u32) -> u32 {
+        // SRAM uses unaligned address to read
+        let unaligned_address = address % Self::MEMORY_SIZE;
+        let aligned_address = Self::align_hword(unaligned_address);
 
-        let address = address % Self::MEMORY_SIZE;
-
-        match address {
+        let read_result = match aligned_address {
             Self::BIOS_BASE..=Self::BIOS_END => {
-                let low_byte = BIOS[address as usize];
-                let high_byte = BIOS[(address + 1) as usize];
+                let low_byte = BIOS[aligned_address as usize];
+                let high_byte = BIOS[(aligned_address + 1) as usize];
 
                 u16::from_le_bytes([low_byte, high_byte])
             }
             Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
-                let actual_offset = (address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
+                let actual_offset = (aligned_address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
                 let low_byte = self.chip_wram[actual_offset as usize];
                 let high_byte = self.chip_wram[(actual_offset + 1) as usize];
 
                 u16::from_le_bytes([low_byte, high_byte])
             }
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
-                let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
+                let actual_offset =
+                    (aligned_address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
                 let low_byte = self.board_wram[actual_offset as usize];
                 let high_byte = self.board_wram[(actual_offset + 1) as usize];
 
                 u16::from_le_bytes([low_byte, high_byte])
             }
             Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
-                let offset = (address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
+                let offset = (aligned_address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
                 self.lcd.read_palette_ram_hword(offset)
             }
             Self::VRAM_BASE..=Self::VRAM_END => {
-                let vram_offset = (address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
+                let vram_offset = (aligned_address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
                 let offset = match vram_offset {
                     Self::VRAM_OFFSET_FIRST_BASE..=Self::VRAM_OFFSET_FIRST_END => vram_offset,
                     Self::VRAM_OFFSET_SECOND_BASE..=Self::VRAM_OFFSET_SECOND_END => {
@@ -872,49 +885,53 @@ impl Bus {
                 self.lcd.read_vram_hword(offset)
             }
             Self::OAM_BASE..=Self::OAM_END => {
-                let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
+                let offset = (aligned_address - Self::OAM_BASE) % Self::OAM_SIZE;
                 self.lcd.read_oam_hword(offset)
             }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => self
                 .cartridge
-                .read_rom_hword(address - Self::WAIT_STATE_1_ROM_BASE),
+                .read_rom_hword(aligned_address - Self::WAIT_STATE_1_ROM_BASE),
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => self
                 .cartridge
-                .read_rom_hword(address - Self::WAIT_STATE_2_ROM_BASE),
+                .read_rom_hword(aligned_address - Self::WAIT_STATE_2_ROM_BASE),
             Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => self
                 .cartridge
-                .read_rom_hword(address - Self::WAIT_STATE_3_ROM_BASE),
+                .read_rom_hword(aligned_address - Self::WAIT_STATE_3_ROM_BASE),
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
-                let offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
-                self.cartridge.read_sram_hword(offset)
+                let offset =
+                    (unaligned_address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
+                let byte = self.cartridge.read_sram_byte(offset);
+                u16::from_be_bytes([byte, byte])
             }
             _ => {
-                let low_byte = self.read_byte_address(address);
-                let high_byte = self.read_byte_address(address + 1);
+                let low_byte = self.read_byte_address(aligned_address) as u8;
+                let high_byte = self.read_byte_address(aligned_address + 1) as u8;
 
                 u16::from_le_bytes([low_byte, high_byte])
             }
-        }
+        };
+
+        let rotate = (unaligned_address & 0b1) * 8;
+        u32::from(read_result).rotate_right(rotate)
     }
 
     pub fn read_word_address(&self, address: u32) -> u32 {
-        assert!(address & 0b11 == 0);
+        let unaligned_address = address % Self::MEMORY_SIZE;
+        let aligned_address = Self::align_word(unaligned_address);
 
-        let address = address % Self::MEMORY_SIZE;
-
-        match address {
+        let read_result = match aligned_address {
             Self::BIOS_BASE..=Self::BIOS_END => {
                 let le_bytes = [
-                    BIOS[address as usize],
-                    BIOS[(address + 1) as usize],
-                    BIOS[(address + 2) as usize],
-                    BIOS[(address + 3) as usize],
+                    BIOS[aligned_address as usize],
+                    BIOS[(aligned_address + 1) as usize],
+                    BIOS[(aligned_address + 2) as usize],
+                    BIOS[(aligned_address + 3) as usize],
                 ];
 
                 u32::from_le_bytes(le_bytes)
             }
             Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
-                let actual_offset = (address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
+                let actual_offset = (aligned_address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
                 let le_bytes = [
                     self.chip_wram[actual_offset as usize],
                     self.chip_wram[(actual_offset + 1) as usize],
@@ -925,7 +942,8 @@ impl Bus {
                 u32::from_le_bytes(le_bytes)
             }
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
-                let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
+                let actual_offset =
+                    (aligned_address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
                 let le_bytes = [
                     self.board_wram[actual_offset as usize],
                     self.board_wram[(actual_offset + 1) as usize],
@@ -936,11 +954,11 @@ impl Bus {
                 u32::from_le_bytes(le_bytes)
             }
             Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
-                let offset = (address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
+                let offset = (aligned_address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
                 self.lcd.read_palette_ram_word(offset)
             }
             Self::VRAM_BASE..=Self::VRAM_END => {
-                let vram_offset = (address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
+                let vram_offset = (aligned_address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
                 let offset = match vram_offset {
                     Self::VRAM_OFFSET_FIRST_BASE..=Self::VRAM_OFFSET_FIRST_END => vram_offset,
                     Self::VRAM_OFFSET_SECOND_BASE..=Self::VRAM_OFFSET_SECOND_END => {
@@ -952,33 +970,38 @@ impl Bus {
                 self.lcd.read_vram_word(offset)
             }
             Self::OAM_BASE..=Self::OAM_END => {
-                let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
+                let offset = (aligned_address - Self::OAM_BASE) % Self::OAM_SIZE;
                 self.lcd.read_oam_word(offset)
             }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => self
                 .cartridge
-                .read_rom_word(address - Self::WAIT_STATE_1_ROM_BASE),
+                .read_rom_word(aligned_address - Self::WAIT_STATE_1_ROM_BASE),
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => self
                 .cartridge
-                .read_rom_word(address - Self::WAIT_STATE_2_ROM_BASE),
+                .read_rom_word(aligned_address - Self::WAIT_STATE_2_ROM_BASE),
             Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => self
                 .cartridge
-                .read_rom_word(address - Self::WAIT_STATE_3_ROM_BASE),
+                .read_rom_word(aligned_address - Self::WAIT_STATE_3_ROM_BASE),
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
-                let offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
-                self.cartridge.read_sram_word(offset)
+                let offset =
+                    (unaligned_address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
+                let byte = self.cartridge.read_sram_byte(offset);
+                u32::from_be_bytes([byte, byte, byte, byte])
             }
             _ => {
                 let le_bytes = [
-                    self.read_byte_address(address),
-                    self.read_byte_address(address + 1),
-                    self.read_byte_address(address + 2),
-                    self.read_byte_address(address + 3),
+                    self.read_byte_address(aligned_address) as u8,
+                    self.read_byte_address(aligned_address + 1) as u8,
+                    self.read_byte_address(aligned_address + 2) as u8,
+                    self.read_byte_address(aligned_address + 3) as u8,
                 ];
 
                 u32::from_le_bytes(le_bytes)
             }
-        }
+        };
+
+        let rotate = (unaligned_address & 0b11) * 8;
+        read_result.rotate_right(rotate)
     }
 
     pub fn write_byte_address(&mut self, value: u8, address: u32) {
@@ -1271,36 +1294,36 @@ impl Bus {
     }
 
     pub fn write_halfword_address(&mut self, value: u16, address: u32) {
-        assert!(address & 0b1 == 0);
+        let unaligned_address = address % Self::MEMORY_SIZE;
+        let aligned_address = Self::align_hword(unaligned_address);
 
-        let address = address % Self::MEMORY_SIZE;
-
-        match address {
+        match aligned_address {
             Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
-                let actual_offset = (address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
+                let actual_offset = (aligned_address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
                 let [low_byte, high_byte] = value.to_le_bytes();
 
                 self.chip_wram[actual_offset as usize] = low_byte;
                 self.chip_wram[(actual_offset + 1) as usize] = high_byte;
             }
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
-                let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
+                let actual_offset =
+                    (aligned_address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
                 let [low_byte, high_byte] = value.to_le_bytes();
 
                 self.board_wram[actual_offset as usize] = low_byte;
                 self.board_wram[(actual_offset + 1) as usize] = high_byte;
             }
             Self::OAM_BASE..=Self::OAM_END => {
-                let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
+                let offset = (aligned_address - Self::OAM_BASE) % Self::OAM_SIZE;
 
                 self.lcd.write_oam_hword(value, offset);
             }
             Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
-                let offset = (address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
+                let offset = (aligned_address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
                 self.lcd.write_palette_ram_hword(value, offset)
             }
             Self::VRAM_BASE..=Self::VRAM_END => {
-                let vram_offset = (address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
+                let vram_offset = (aligned_address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
                 let offset = match vram_offset {
                     Self::VRAM_OFFSET_FIRST_BASE..=Self::VRAM_OFFSET_FIRST_END => vram_offset,
                     Self::VRAM_OFFSET_SECOND_BASE..=Self::VRAM_OFFSET_SECOND_END => {
@@ -1313,37 +1336,37 @@ impl Bus {
             }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
                 self.cartridge
-                    .write_rom_hword(value, address - Self::WAIT_STATE_1_ROM_BASE);
+                    .write_rom_hword(value, aligned_address - Self::WAIT_STATE_1_ROM_BASE);
             }
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
                 self.cartridge
-                    .write_rom_hword(value, address - Self::WAIT_STATE_2_ROM_BASE);
+                    .write_rom_hword(value, aligned_address - Self::WAIT_STATE_2_ROM_BASE);
             }
             Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => {
                 self.cartridge
-                    .write_rom_hword(value, address - Self::WAIT_STATE_3_ROM_BASE);
+                    .write_rom_hword(value, aligned_address - Self::WAIT_STATE_3_ROM_BASE);
             }
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
-                let offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
-                self.cartridge.write_sram_hword(value, offset);
+                let offset =
+                    (unaligned_address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
+                self.cartridge.write_sram_byte(value as u8, offset);
             }
             _ => {
                 let [low_byte, high_byte] = value.to_le_bytes();
 
-                self.write_byte_address(low_byte, address);
-                self.write_byte_address(high_byte, address + 1);
+                self.write_byte_address(low_byte, aligned_address);
+                self.write_byte_address(high_byte, aligned_address + 1);
             }
         }
     }
 
     pub fn write_word_address(&mut self, value: u32, address: u32) {
-        assert!(address & 0b11 == 0);
+        let unaligned_address = address % Self::MEMORY_SIZE;
+        let aligned_address = Self::align_word(unaligned_address);
 
-        let address = address % Self::MEMORY_SIZE;
-
-        match address % Self::MEMORY_SIZE {
+        match aligned_address % Self::MEMORY_SIZE {
             Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
-                let actual_offset = (address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
+                let actual_offset = (aligned_address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
                 let le_bytes = value.to_le_bytes();
 
                 self.chip_wram[actual_offset as usize] = le_bytes[0];
@@ -1352,7 +1375,8 @@ impl Bus {
                 self.chip_wram[(actual_offset + 3) as usize] = le_bytes[3];
             }
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
-                let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
+                let actual_offset =
+                    (aligned_address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
                 let le_bytes = value.to_le_bytes();
 
                 self.board_wram[actual_offset as usize] = le_bytes[0];
@@ -1373,16 +1397,16 @@ impl Bus {
                 self.timers[3].write_timer_counter_reload_word(value)
             }
             Self::OAM_BASE..=Self::OAM_END => {
-                let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
+                let offset = (aligned_address - Self::OAM_BASE) % Self::OAM_SIZE;
 
                 self.lcd.write_oam_word(value, offset);
             }
             Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
-                let offset = (address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
+                let offset = (aligned_address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
                 self.lcd.write_palette_ram_word(value, offset)
             }
             Self::VRAM_BASE..=Self::VRAM_END => {
-                let vram_offset = (address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
+                let vram_offset = (aligned_address - Self::VRAM_BASE) % Self::VRAM_FULL_SIZE;
                 let offset = match vram_offset {
                     Self::VRAM_OFFSET_FIRST_BASE..=Self::VRAM_OFFSET_FIRST_END => vram_offset,
                     Self::VRAM_OFFSET_SECOND_BASE..=Self::VRAM_OFFSET_SECOND_END => {
@@ -1395,25 +1419,26 @@ impl Bus {
             }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
                 self.cartridge
-                    .write_rom_word(value, address - Self::WAIT_STATE_1_ROM_BASE);
+                    .write_rom_word(value, aligned_address - Self::WAIT_STATE_1_ROM_BASE);
             }
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
                 self.cartridge
-                    .write_rom_word(value, address - Self::WAIT_STATE_2_ROM_BASE);
+                    .write_rom_word(value, aligned_address - Self::WAIT_STATE_2_ROM_BASE);
             }
             Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => {
                 self.cartridge
-                    .write_rom_word(value, address - Self::WAIT_STATE_3_ROM_BASE);
+                    .write_rom_word(value, aligned_address - Self::WAIT_STATE_3_ROM_BASE);
             }
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
-                let offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
-                self.cartridge.write_sram_word(value, offset);
+                let offset =
+                    (unaligned_address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
+                self.cartridge.write_sram_byte(value as u8, offset);
             }
             _ => {
                 for (offset, byte) in value.to_le_bytes().into_iter().enumerate() {
                     let offset = offset as u32;
 
-                    self.write_byte_address(byte, address + offset);
+                    self.write_byte_address(byte, aligned_address + offset);
                 }
             }
         }
@@ -1533,9 +1558,8 @@ impl Bus {
                                 dma.read_latch as u16
                             } else {
                                 let result = self.read_halfword_address(align_addr(dma_source));
-                                self.dma_infos[dma_idx].read_latch =
-                                    (u32::from(result) << u16::BITS) | u32::from(result);
-                                result
+                                self.dma_infos[dma_idx].read_latch = (result << u16::BITS) | result;
+                                result as u16
                             };
 
                             self.write_halfword_address(value, align_addr(dma_dest));

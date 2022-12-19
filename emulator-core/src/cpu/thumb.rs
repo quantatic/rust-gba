@@ -1565,15 +1565,10 @@ impl Cpu {
                 self.bus.read_byte_address(real_address) as i8 as i32 as u32
             }
             (ThumbLoadStoreDataSize::HalfWord, false) => {
-                let hword_aligned = real_address & 1 == 0;
-
-                if hword_aligned {
-                    u32::from(self.bus.read_halfword_address(real_address))
-                } else {
-                    u32::from(self.bus.read_halfword_address(real_address - 1)).rotate_right(8)
-                }
+                self.bus.read_halfword_address(real_address)
             }
             (ThumbLoadStoreDataSize::HalfWord, true) => {
+                // LDRSH Rd,[odd]  -->  LDRSB Rd,[odd]         ;sign-expand BYTE value
                 let hword_aligned = real_address & 1 == 0;
 
                 if hword_aligned {
@@ -1582,11 +1577,7 @@ impl Cpu {
                     self.bus.read_byte_address(real_address) as i8 as i32 as u32
                 }
             }
-            (ThumbLoadStoreDataSize::Word, false) => {
-                let rotate = (real_address & 0b11) * 8;
-                let data_aligned = self.bus.read_word_address(real_address & (!0b11));
-                data_aligned.rotate_right(rotate)
-            }
+            (ThumbLoadStoreDataSize::Word, false) => self.bus.read_word_address(real_address),
             _ => unreachable!(),
         };
 
@@ -1621,10 +1612,10 @@ impl Cpu {
                 .write_byte_address(source_register_value as u8, real_address),
             ThumbLoadStoreDataSize::HalfWord => self
                 .bus
-                .write_halfword_address(source_register_value as u16, real_address & (!0b1)),
+                .write_halfword_address(source_register_value as u16, real_address),
             ThumbLoadStoreDataSize::Word => self
                 .bus
-                .write_word_address(source_register_value, real_address & (!0b11)),
+                .write_word_address(source_register_value, real_address),
         }
 
         self.advance_pc_for_thumb_instruction();
@@ -1693,7 +1684,7 @@ impl Cpu {
 
             let new_r13 = self.read_register(Register::R13, |_| unreachable!()) - 4;
             self.write_register(new_r13, Register::R13);
-            self.bus.write_word_address(lr_value, new_r13 & (!0b11));
+            self.bus.write_word_address(lr_value, new_r13);
         }
 
         for (register_idx, register_pushed) in register_bit_list.into_iter().enumerate().rev() {
@@ -1703,8 +1694,7 @@ impl Cpu {
 
                 let new_r13 = self.read_register(Register::R13, |_| unreachable!()) - 4;
                 self.write_register(new_r13, Register::R13);
-                self.bus
-                    .write_word_address(pushed_register_value, new_r13 & (!0b11));
+                self.bus.write_word_address(pushed_register_value, new_r13);
             }
         }
 
@@ -1716,7 +1706,9 @@ impl Cpu {
             if register_popped {
                 let popped_register = Register::from_index(register_idx as u32);
                 let old_r13 = self.read_register(Register::R13, |_| unreachable!());
-                let popped_register_value = self.bus.read_word_address(old_r13 & (!0b11));
+                let old_r13_aligned = old_r13 & (!0b11);
+                // R13 is always force-aligned for push/pop operations.
+                let popped_register_value = self.bus.read_word_address(old_r13_aligned);
 
                 self.write_register(old_r13 + 4, Register::R13);
 
@@ -1729,7 +1721,8 @@ impl Cpu {
         if pop_pc {
             // POP {PC} ignores the least significant bit of the return address (processor remains in thumb state even if bit0 was cleared).
             let old_r13 = self.read_register(Register::R13, |_| unreachable!());
-            let pc_value = self.bus.read_word_address(old_r13 & (!0b11)) & (!1);
+            let old_r13_aligned = old_r13 & (!0b11);
+            let pc_value = self.bus.read_word_address(old_r13_aligned) & (!1);
 
             self.write_register(old_r13 + 4, Register::R13);
             self.write_register(pc_value, Register::R15);
@@ -1778,8 +1771,7 @@ impl Cpu {
                 self.read_register(register, |pc| pc + 2)
             };
 
-            self.bus
-                .write_word_address(register_value, current_address & (!0b11));
+            self.bus.write_word_address(register_value, current_address);
 
             current_address += 4;
         }

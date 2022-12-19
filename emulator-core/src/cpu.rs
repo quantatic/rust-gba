@@ -1074,7 +1074,7 @@ impl Cpu {
                 Instruction::ArmInstruction(instruction)
             }
             InstructionSet::Thumb => {
-                let opcode = self.bus.read_halfword_address(address);
+                let opcode = self.bus.read_halfword_address(address) as u16;
                 let instruction = thumb::decode_thumb(opcode);
                 Instruction::ThumbInstruction(instruction)
             }

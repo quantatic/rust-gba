@@ -213,32 +213,12 @@ impl Cartridge {
         }
     }
 
-    pub fn read_sram_hword(&self, offset: u32) -> u16 {
-        // unreachable!()
-        log::warn!("reading hword from sram at offset 0x{:08X}", offset);
-        0
-    }
-
-    pub fn read_sram_word(&self, offset: u32) -> u32 {
-        // unreachable!()
-        log::warn!("reading word from sram at offset 0x{:08X}", offset);
-        0
-    }
-
     pub fn write_sram_byte(&mut self, value: u8, offset: u32) {
         match &mut self.backup {
             Backup::Flash(flash) => flash.write_byte(value, offset),
             Backup::Sram(sram) => sram.write_byte(value, offset),
             _ => unreachable!(),
         }
-    }
-
-    pub fn write_sram_hword(&mut self, _value: u16, _offset: u32) {
-        // unreachable!()
-    }
-
-    pub fn write_sram_word(&mut self, _value: u32, _offset: u32) {
-        // unreachable!()
     }
 }
 
@@ -539,8 +519,8 @@ impl Flash {
 #[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Sram {
-    #[serde_as(as = "Box<[_; 0x8000]>")]
-    data: Box<[u8; 0x8000]>,
+    #[serde_as(as = "Box<[_; 0x10000]>")]
+    data: Box<[u8; 0x10000]>,
 }
 
 #[serde_as]
@@ -553,7 +533,7 @@ struct Foo {
 impl Default for Sram {
     fn default() -> Self {
         Self {
-            data: Box::new([0; 0x8000]),
+            data: Box::new([0; 0x10000]),
         }
     }
 }
