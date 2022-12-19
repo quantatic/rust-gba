@@ -70,7 +70,9 @@ fn main() -> Result<()> {
         .build()?
     };
 
+    println!("initializing cart");
     let cartridge = Cartridge::new(rom_file, save_data)?;
+    println!("cart initialized");
     let mut cpu = Cpu::new(cartridge);
 
     let init = Instant::now();

@@ -268,7 +268,6 @@ impl MyEguiApp {
                                 memory_view_info_lock.buffer[offset] = cpu.bus.read_byte_address(
                                     memory_view_info_lock.offset + (offset as u32),
                                 )
-                                    as u8;
                             }
                         }
 

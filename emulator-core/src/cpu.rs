@@ -695,6 +695,10 @@ impl Cpu {
             Register::Cpsr => self.cpsr,
         }
     }
+
+    fn pc(&self) -> u32 {
+        self.read_register(Register::R15, |pc| pc)
+    }
 }
 
 pub enum Instruction {

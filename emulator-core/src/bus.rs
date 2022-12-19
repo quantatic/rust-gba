@@ -23,6 +23,7 @@ pub struct Bus {
     dma_infos: [DmaInfo; 4],
     pub timers: [Timer; 4],
     open_bus_data: u32,
+    open_bus_bios_data: u32, // most recently fetched BIOS opcode
     pub lcd: Lcd,
     pub apu: Apu,
     pub keypad: Keypad,
@@ -53,6 +54,7 @@ impl Bus {
                 Timer::default(),
             ],
             open_bus_data: 0,
+            open_bus_bios_data: 0,
             lcd: Lcd::default(),
             apu: Apu::default(),
             keypad: Keypad::default(),
@@ -364,15 +366,31 @@ impl Bus {
 }
 
 impl Bus {
+    fn is_in_bios(address: u32) -> bool {
+        let address = address % Self::MEMORY_SIZE;
+        (Self::BIOS_BASE..Self::BIOS_END).contains(&address)
+    }
+
     pub fn fetch_arm_opcode(&mut self, address: u32) -> u32 {
         let result = self.read_word_address(address);
+
         self.open_bus_data = result;
+        if Self::is_in_bios(address) {
+            self.open_bus_bios_data = result
+        }
+
         result
     }
 
     pub fn fetch_thumb_opcode(&mut self, address: u32) -> u16 {
         let result = self.read_halfword_address(address);
-        self.open_bus_data = u32::from(result) | (u32::from(result) << 16);
+
+        let open_bus_result = u32::from(result) | (u32::from(result) << 16);
+        self.open_bus_data = open_bus_result;
+        if Self::is_in_bios(address) {
+            self.open_bus_bios_data = open_bus_result;
+        }
+
         result as u16
     }
 }
@@ -655,10 +673,10 @@ impl Bus {
     }
 
     // 8-bit read requests still return data on an 8-bit bus.
-    pub fn read_byte_address(&self, address: u32) -> u32 {
+    pub fn read_byte_address(&self, address: u32) -> u8 {
         let address = address % Self::MEMORY_SIZE;
 
-        let read_result = match address {
+        match address {
             Self::BIOS_BASE..=Self::BIOS_END => BIOS[address as usize],
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
                 let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
@@ -835,18 +853,15 @@ impl Bus {
                 0
             }
             _ => self.open_bus_data.get_data(address & 0b11),
-        };
-
-        u32::from(read_result)
+        }
     }
 
-    // Even halfword reads still return data on a 32-bit bus.
-    pub fn read_halfword_address(&mut self, address: u32) -> u32 {
+    pub fn read_halfword_address(&mut self, address: u32) -> u16 {
         // SRAM uses unaligned address to read
         let unaligned_address = address % Self::MEMORY_SIZE;
         let aligned_address = Self::align_hword(unaligned_address);
 
-        let read_result = match aligned_address {
+        match aligned_address {
             Self::BIOS_BASE..=Self::BIOS_END => {
                 let low_byte = BIOS[aligned_address as usize];
                 let high_byte = BIOS[(aligned_address + 1) as usize];
@@ -909,17 +924,14 @@ impl Bus {
 
                 u16::from_le_bytes([low_byte, high_byte])
             }
-        };
-
-        let rotate = (unaligned_address & 0b1) * 8;
-        u32::from(read_result).rotate_right(rotate)
+        }
     }
 
     pub fn read_word_address(&self, address: u32) -> u32 {
         let unaligned_address = address % Self::MEMORY_SIZE;
         let aligned_address = Self::align_word(unaligned_address);
 
-        let read_result = match aligned_address {
+        match aligned_address {
             Self::BIOS_BASE..=Self::BIOS_END => {
                 let le_bytes = [
                     BIOS[aligned_address as usize],
@@ -998,10 +1010,7 @@ impl Bus {
 
                 u32::from_le_bytes(le_bytes)
             }
-        };
-
-        let rotate = (unaligned_address & 0b11) * 8;
-        read_result.rotate_right(rotate)
+        }
     }
 
     pub fn write_byte_address(&mut self, value: u8, address: u32) {
@@ -1558,7 +1567,8 @@ impl Bus {
                                 dma.read_latch as u16
                             } else {
                                 let result = self.read_halfword_address(align_addr(dma_source));
-                                self.dma_infos[dma_idx].read_latch = (result << u16::BITS) | result;
+                                self.dma_infos[dma_idx].read_latch =
+                                    (u32::from(result) << u16::BITS) | u32::from(result);
                                 result as u16
                             };
 

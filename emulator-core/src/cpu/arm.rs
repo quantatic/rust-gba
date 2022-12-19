@@ -1952,13 +1952,14 @@ impl Cpu {
 
         let value = match (access_size, sign_extend) {
             (SingleDataMemoryAccessSize::Byte, false) => {
-                self.bus.read_byte_address(data_read_address)
+                self.bus.read_byte_address(data_read_address) as u32
             }
             (SingleDataMemoryAccessSize::Byte, true) => {
                 self.bus.read_byte_address(data_read_address) as i8 as i32 as u32
             }
             (SingleDataMemoryAccessSize::HalfWord, false) => {
-                self.bus.read_halfword_address(data_read_address)
+                let rotation = (data_read_address & 0b1) * 8;
+                u32::from(self.bus.read_halfword_address(data_read_address)).rotate_right(rotation)
             }
             (SingleDataMemoryAccessSize::HalfWord, true) => {
                 // LDRSH Rd,[odd]  -->  LDRSB Rd,[odd]         ;sign-expand BYTE value
@@ -1971,7 +1972,10 @@ impl Cpu {
                 }
             }
             (SingleDataMemoryAccessSize::Word, false) => {
-                self.bus.read_word_address(data_read_address)
+                let rotation = (data_read_address & 0b11) * 8;
+                self.bus
+                    .read_word_address(data_read_address)
+                    .rotate_right(rotation)
             }
             (SingleDataMemoryAccessSize::Word, true) => unreachable!(),
             _ => todo!("{:?} sign extend: {}", access_size, sign_extend),
@@ -2017,8 +2021,7 @@ impl Cpu {
                         }
 
                         // The mis-aligned low bit(s) are ignored, the memory access goes to a forcibly aligned (rounded-down) memory address.
-                        let aligned_address = current_address & (!0b11);
-                        let value = self.bus.read_word_address(aligned_address);
+                        let value = self.bus.read_word_address(current_address);
                         let register = Register::from_index(register_idx as u32);
 
                         r15_written |= matches!(register, Register::R15);
@@ -2047,8 +2050,7 @@ impl Cpu {
                         }
 
                         // The mis-aligned low bit(s) are ignored, the memory access goes to a forcibly aligned (rounded-down) memory address.
-                        let aligned_address = current_address & (!0b11);
-                        let value = self.bus.read_word_address(aligned_address);
+                        let value = self.bus.read_word_address(current_address);
                         let register = Register::from_index(register_idx as u32);
 
                         r15_written |= matches!(register, Register::R15);
@@ -2076,8 +2078,7 @@ impl Cpu {
             }
 
             // The mis-aligned low bit(s) are ignored, the memory access goes to a forcibly aligned (rounded-down) memory address.
-            let aligned_address = current_address & (!0b11);
-            let value = self.bus.read_word_address(aligned_address);
+            let value = self.bus.read_word_address(current_address);
             let register = Register::R15;
 
             r15_written |= true;
@@ -2337,7 +2338,11 @@ impl Cpu {
                 self.bus.write_byte_address(new_base_value, base_address);
             }
             SwpAccessSize::Word => {
-                let old_base_value = self.bus.read_word_address(base_address);
+                let rotate = (base_address & 0b11) * 8;
+                let old_base_value = self
+                    .bus
+                    .read_word_address(base_address)
+                    .rotate_right(rotate);
                 let new_base_value = self.read_register(source_register, |_| unreachable!());
 
                 self.write_register(old_base_value, dest_register);
