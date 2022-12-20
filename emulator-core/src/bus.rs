@@ -13,6 +13,12 @@ use crate::DataAccess;
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
 
 #[derive(Clone)]
+enum BiosReadBehavior {
+    TrueValue,
+    PrefetchValue,
+}
+
+#[derive(Clone)]
 pub struct Bus {
     chip_wram: Box<[u8; 0x8000]>,
     board_wram: Box<[u8; 0x40000]>,
@@ -24,6 +30,7 @@ pub struct Bus {
     pub timers: [Timer; 4],
     open_bus_data: u32,
     open_bus_bios_data: u32, // most recently fetched BIOS opcode
+    bios_read_behavior: BiosReadBehavior,
     pub lcd: Lcd,
     pub apu: Apu,
     pub keypad: Keypad,
@@ -55,6 +62,7 @@ impl Bus {
             ],
             open_bus_data: 0,
             open_bus_bios_data: 0,
+            bios_read_behavior: BiosReadBehavior::TrueValue,
             lcd: Lcd::default(),
             apu: Apu::default(),
             keypad: Keypad::default(),
@@ -366,27 +374,40 @@ impl Bus {
 impl Bus {
     fn is_in_bios(address: u32) -> bool {
         let address = address % Self::MEMORY_SIZE;
-        (Self::BIOS_BASE..Self::BIOS_END).contains(&address)
+        (Self::BIOS_BASE..=Self::BIOS_END).contains(&address)
     }
 
     pub fn fetch_arm_opcode(&mut self, address: u32) -> u32 {
+        if Self::is_in_bios(address) {
+            self.bios_read_behavior = BiosReadBehavior::TrueValue;
+        } else {
+            self.bios_read_behavior = BiosReadBehavior::PrefetchValue;
+        }
+
         let result = self.read_word_address(address);
 
         self.open_bus_data = result;
         if Self::is_in_bios(address) {
-            self.open_bus_bios_data = result
+            self.open_bus_bios_data = result;
         }
 
         result
     }
 
     pub fn fetch_thumb_opcode(&mut self, address: u32) -> u16 {
+        if Self::is_in_bios(address) {
+            self.bios_read_behavior = BiosReadBehavior::TrueValue;
+        } else {
+            self.bios_read_behavior = BiosReadBehavior::PrefetchValue;
+        }
+
         let result = self.read_halfword_address(address);
 
         let open_bus_result = u32::from(result) | (u32::from(result) << 16);
         self.open_bus_data = open_bus_result;
+
         if Self::is_in_bios(address) {
-            self.open_bus_bios_data = open_bus_result;
+            self.open_bus_bios_data = u32::from(result);
         }
 
         result as u16
@@ -670,12 +691,14 @@ impl Bus {
         address & (!0b11)
     }
 
-    // 8-bit read requests still return data on an 8-bit bus.
     pub fn read_byte_address(&self, address: u32) -> u8 {
         let address = address % Self::MEMORY_SIZE;
 
         match address {
-            Self::BIOS_BASE..=Self::BIOS_END => BIOS[address as usize],
+            Self::BIOS_BASE..=Self::BIOS_END => match self.bios_read_behavior {
+                BiosReadBehavior::PrefetchValue => self.open_bus_bios_data.get_data(address & 0b11),
+                BiosReadBehavior::TrueValue => BIOS[address as usize],
+            },
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
                 let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
                 self.board_wram[actual_offset as usize]
@@ -860,12 +883,6 @@ impl Bus {
         let aligned_address = Self::align_hword(unaligned_address);
 
         match aligned_address {
-            Self::BIOS_BASE..=Self::BIOS_END => {
-                let low_byte = BIOS[aligned_address as usize];
-                let high_byte = BIOS[(aligned_address + 1) as usize];
-
-                u16::from_le_bytes([low_byte, high_byte])
-            }
             Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
                 let actual_offset = (aligned_address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
                 let low_byte = self.chip_wram[actual_offset as usize];
@@ -930,16 +947,6 @@ impl Bus {
         let aligned_address = Self::align_word(unaligned_address);
 
         match aligned_address {
-            Self::BIOS_BASE..=Self::BIOS_END => {
-                let le_bytes = [
-                    BIOS[aligned_address as usize],
-                    BIOS[(aligned_address + 1) as usize],
-                    BIOS[(aligned_address + 2) as usize],
-                    BIOS[(aligned_address + 3) as usize],
-                ];
-
-                u32::from_le_bytes(le_bytes)
-            }
             Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
                 let actual_offset = (aligned_address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
                 let le_bytes = [

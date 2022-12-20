@@ -226,6 +226,37 @@ mod tests {
     }
 
     #[test]
+    fn suite_memory() {
+        const INITIAL_CHECKSUM: u64 = 0x3B32CCEB3BAE455B;
+        const MEMORY_TEST_SELECTED_CHECKSUM: u64 = 0x3B32CCEB3BAE455B;
+        const MEMORY_SUCCESS_SCREEN_CHECKSUM: u64 = 0x7849B12FEBF63283;
+
+        let source = include_bytes!("../tests/suite.gba");
+        let cartridge = Cartridge::new(source.as_slice(), None).unwrap();
+        let mut cpu = Cpu::new(cartridge);
+
+        // skip boot screen
+        while cpu.cycle_count() < 100_000_000 {
+            cpu.fetch_decode_execute();
+        }
+
+        assert_checksum(&cpu, INITIAL_CHECKSUM);
+
+        assert_checksum(&cpu, MEMORY_TEST_SELECTED_CHECKSUM);
+
+        press_key(&mut cpu, Key::A);
+
+        let start_cycles = cpu.cycle_count();
+
+        // Memory test takes a while, so wait an extra second for test to run.
+        while cpu.cycle_count() - start_cycles < CYCLES_PER_SECOND {
+            cpu.fetch_decode_execute();
+        }
+
+        assert_checksum(&cpu, MEMORY_SUCCESS_SCREEN_CHECKSUM);
+    }
+
+    #[test]
     fn suite_shifter() {
         const INITIAL_CHECKSUM: u64 = 0x3B32CCEB3BAE455B;
         const SHIFTER_TEST_SELECTED_CHECKSUM: u64 = 0x44BFA86E38A2027E;
