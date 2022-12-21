@@ -835,10 +835,7 @@ impl Lcd {
         let mut obj_window = false;
 
         for obj in self.obj_attributes.iter() {
-            let (sprite_tile_width, sprite_tile_height) = match obj.get_obj_tile_dims() {
-                Some(dims) => dims,
-                None => continue,
-            };
+            let Some((sprite_tile_width, sprite_tile_height)) = obj.get_obj_tile_dims() else { continue };
 
             let sprite_width = sprite_tile_width * TILE_SIZE;
             let sprite_height = sprite_tile_height * TILE_SIZE;

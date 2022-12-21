@@ -346,7 +346,7 @@ impl Bus {
         if self.cycle_count % 4 == 0 {
             let state_changes = self.lcd.step();
 
-            self.step_dma(Some(state_changes));
+            self.inform_dma_state_change(state_changes);
 
             if state_changes.vblank_entered && self.lcd.get_vblank_irq_enable() {
                 self.request_interrupt(InterruptType::VBlank);
@@ -359,9 +359,9 @@ impl Bus {
             if state_changes.vcount_matched && self.lcd.get_vcount_irq_enable() {
                 self.request_interrupt(InterruptType::VCount);
             }
-        } else {
-            self.step_dma(None);
         }
+
+        self.step_dma();
 
         let new_irq_in = *self.interrupt_request.first().unwrap();
         self.interrupt_request.rotate_right(1);
@@ -1527,26 +1527,28 @@ impl Bus {
             .get_bit(INTERRUPT_MASTER_ENABLE_BIT_INDEX)
     }
 
-    fn step_dma(&mut self, state_changes: Option<LcdStateChangeInfo>) {
-        for dma_idx in 0..self.dma_infos.len() {
-            let dma = &mut self.dma_infos[dma_idx];
-            let dma_triggered = state_changes.map_or(false, |s| {
-                if dma.get_dma_enable() {
-                    match dma.get_dma_start_timing() {
-                        DmaStartTiming::Immediately => false,
-                        DmaStartTiming::VBlank => s.vblank_entered,
-                        DmaStartTiming::HBlank => s.hblank_entered,
-                        DmaStartTiming::Special => false,
-                    }
-                } else {
-                    false
-                }
-            });
+    fn inform_dma_state_change(&mut self, state_changes: LcdStateChangeInfo) {
+        for dma in self.dma_infos.iter_mut() {
+            if !dma.get_dma_enable() {
+                continue;
+            }
+
+            let dma_triggered = match dma.get_dma_start_timing() {
+                DmaStartTiming::Immediately => false,
+                DmaStartTiming::VBlank => state_changes.vblank_entered,
+                DmaStartTiming::HBlank => state_changes.hblank_entered,
+                DmaStartTiming::Special => false,
+            };
 
             if dma_triggered {
                 dma.set_dma_ongoing(true);
             }
+        }
+    }
 
+    fn step_dma(&mut self) {
+        for dma_idx in 0..self.dma_infos.len() {
+            let dma = &mut self.dma_infos[dma_idx];
             if dma.get_dma_ongoing() {
                 let mut dma_source = dma.source_addr;
                 let mut dma_dest = dma.dest_addr;
