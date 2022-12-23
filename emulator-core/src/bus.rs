@@ -372,13 +372,25 @@ impl Bus {
 }
 
 impl Bus {
-    fn is_in_bios(address: u32) -> bool {
+    fn is_bios(address: u32) -> bool {
         let address = address % Self::MEMORY_SIZE;
         (Self::BIOS_BASE..=Self::BIOS_END).contains(&address)
     }
 
+    fn is_rom(address: u32) -> bool {
+        let address = address % Self::MEMORY_SIZE;
+        let wait_state_1 =
+            (Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END).contains(&address);
+        let wait_state_2 =
+            (Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END).contains(&address);
+        let wait_state_3 =
+            (Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END).contains(&address);
+
+        wait_state_1 | wait_state_2 | wait_state_3
+    }
+
     pub fn fetch_arm_opcode(&mut self, address: u32) -> u32 {
-        if Self::is_in_bios(address) {
+        if Self::is_bios(address) {
             self.bios_read_behavior = BiosReadBehavior::TrueValue;
         } else {
             self.bios_read_behavior = BiosReadBehavior::PrefetchValue;
@@ -387,7 +399,7 @@ impl Bus {
         let result = self.read_word_address(address);
 
         self.open_bus_data = result;
-        if Self::is_in_bios(address) {
+        if Self::is_bios(address) {
             self.open_bus_bios_data = result;
         }
 
@@ -395,7 +407,7 @@ impl Bus {
     }
 
     pub fn fetch_thumb_opcode(&mut self, address: u32) -> u16 {
-        if Self::is_in_bios(address) {
+        if Self::is_bios(address) {
             self.bios_read_behavior = BiosReadBehavior::TrueValue;
         } else {
             self.bios_read_behavior = BiosReadBehavior::PrefetchValue;
@@ -406,7 +418,7 @@ impl Bus {
         let open_bus_result = u32::from(result) | (u32::from(result) << 16);
         self.open_bus_data = open_bus_result;
 
-        if Self::is_in_bios(address) {
+        if Self::is_bios(address) {
             self.open_bus_bios_data = u32::from(result);
         }
 
@@ -1598,15 +1610,24 @@ impl Bus {
                     // for every chunk written, update current latch.
                     let dma = &mut self.dma_infos[dma_idx];
 
-                    match dma.get_source_addr_control() {
-                        DmaAddrControl::Fixed => {}
-                        DmaAddrControl::Decrement => {
-                            dma_source = dma_source.wrapping_sub(transfer_size)
-                        }
-                        DmaAddrControl::Increment | DmaAddrControl::IncrementReload => {
-                            dma_source = dma_source.wrapping_add(transfer_size)
-                        }
-                    };
+                    // DMA uses sequential cycles even for decrement.
+                    // ROM is the only region that cares about sequential cycles,
+                    // which means that moving DMA from ROM _always_ increments.
+                    //
+                    // TODO: Does this apply to fixed? Does this affect final dma source address?
+                    if Self::is_rom(dma_source) {
+                        dma_source = dma_source.wrapping_add(transfer_size)
+                    } else {
+                        match dma.get_source_addr_control() {
+                            DmaAddrControl::Fixed => {}
+                            DmaAddrControl::Decrement => {
+                                dma_source = dma_source.wrapping_sub(transfer_size)
+                            }
+                            DmaAddrControl::Increment | DmaAddrControl::IncrementReload => {
+                                dma_source = dma_source.wrapping_add(transfer_size)
+                            }
+                        };
+                    }
 
                     match dma.get_dest_addr_control() {
                         DmaAddrControl::Fixed => {}
