@@ -224,6 +224,10 @@ impl ArmInstruction {
     pub(super) fn instruction_type(&self) -> ArmInstructionType {
         self.instruction_type
     }
+
+    pub(super) fn instruction_condition(&self) -> InstructionCondition {
+        self.condition
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1455,7 +1459,7 @@ impl Cpu {
         }
     }
 
-    fn advance_pc_for_arm_instruction(&mut self) {
+    pub(super) fn advance_pc_for_arm_instruction(&mut self) {
         let old_pc = self.read_register(Register::R15, |pc| pc);
         let new_pc = old_pc.wrapping_add(4);
         self.write_register(new_pc, Register::R15);

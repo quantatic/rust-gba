@@ -1,10 +1,14 @@
 use dynasmrt::{
-    dynasm, x64::X64Relocation, Assembler, AssemblyOffset, DynasmApi, ExecutableBuffer,
+    dynasm, x64::X64Relocation, Assembler, AssemblyOffset, DynasmApi, DynasmLabelApi,
+    ExecutableBuffer,
 };
 
 use crate::{Cpu, Register};
 
-use super::arm::{ArmInstruction, ArmInstructionType};
+use super::{
+    arm::{ArmInstruction, ArmInstructionType},
+    InstructionCondition,
+};
 
 pub struct JitInstruction {
     buffer: ExecutableBuffer,
@@ -26,11 +30,20 @@ impl Cpu {
         let start = assembler.offset();
         dynasm!(assembler
             ; .arch x64
-            // ; int3
             ; push rbp
             ; mov rbp, rsp
             ; push rdi
             ; sub rsp, 8
+        );
+
+        dynasm!(assembler
+            ; mov rdi, [rbp - 8]
+            ; mov rsi, instruction.instruction_condition() as _
+            ; mov rax, QWORD Self::jit_evaluate_instruction_condition as _
+            ; int3
+            ; call rax
+            ; cmp rax, 0
+            ; je ->condition_failed
         );
 
         match instruction.instruction_type() {
@@ -40,18 +53,34 @@ impl Cpu {
                     ; mov rsi, Register::R15 as _
                     ; mov rax, QWORD Self::jit_read_register as i64
                     ; call rax
+
                     ; add eax, offset
+
                     ; mov rdi, [rbp - 8]
                     ; mov esi, eax
                     ; mov rdx, Register::R15 as _
                     ; mov rax, QWORD Self::jit_write_register as i64
                     ; call rax
+
+                    ; mov rdi, [rbp - 8]
+                    ; mov rax, QWORD Self::jit_flush_prefetch as i64
+                    ; call rax
+                    ; jmp ->cleanup
                 );
             }
             _ => return None,
         }
 
+        // if condition fails, ensure we still advance PC
         dynasm!(assembler
+            ; ->condition_failed:
+            ; mov rdi, [rbp - 8]
+            ; mov rax, QWORD Self::jit_advance_pc_for_arm_instruction as i64
+            ; call rax
+        );
+
+        dynasm!(assembler
+            ; ->cleanup:
             ; mov rsp, rbp
             ; pop rbp
             ; ret
@@ -68,9 +97,21 @@ impl Cpu {
     }
 
     extern "sysv64" fn jit_write_register(&mut self, value: u32, register: Register) {
-        println!("value: {:08X}", value);
-        println!("register: {:?}", register);
         self.write_register(value, register);
-        println!("done writing register");
+    }
+
+    extern "sysv64" fn jit_flush_prefetch(&mut self) {
+        self.flush_prefetch();
+    }
+
+    extern "sysv64" fn jit_advance_pc_for_arm_instruction(&mut self) {
+        self.advance_pc_for_arm_instruction();
+    }
+
+    extern "sysv64" fn jit_evaluate_instruction_condition(
+        &self,
+        condition: InstructionCondition,
+    ) -> bool {
+        self.evaluate_instruction_condition(condition)
     }
 }

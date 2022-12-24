@@ -286,6 +286,7 @@ impl Display for Register {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[repr(i8)]
 pub enum InstructionCondition {
     Equal,
     NotEqual,
