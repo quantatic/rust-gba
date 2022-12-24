@@ -412,4 +412,36 @@ mod tests {
 
         assert_checksum(&cpu, DMA_SUCCESS_SCREEN_CHECKSUM);
     }
+
+    #[test]
+    fn openbuster() {
+        const SCREEN_CHECKSUMS: &[u64] = &[
+            0x3B65E15802C43DC1, // IWRAM - LDRB
+            0xD04B19A7B4641F90, // IWRAM - STRB
+            0x95BBB22BA233B656, // IWRAM - LDRH
+            0x2D336CF7F9C81FA7, // EWRAM - LDRB/LDRH (0)
+            0x6DCC7C311AFC714B, // EWRAM - LDRB/LDRH (1)
+            0x43C0582E38FE5868, // MMIO - LDRB/LDRH (0)
+            0x52060C8F3830A037, // MMIO - LDRB/LDRH (1)
+            0x15F16BEADE6D951F, // VRAM - LDRB/LDRH (0)
+            0xF10287B271137E86, // VRAM - LDRB/LDRH (1)
+        ];
+        const ALL_PASSED_CHECKSUM: u64 = 0x444CF2773FFA0FBA; // passed: 144 total: 144
+
+        let source = include_bytes!("../tests/openbuster.gba");
+        let cartridge = Cartridge::new(source.as_slice(), None).unwrap();
+        let mut cpu = Cpu::new(cartridge);
+
+        // skip boot screen
+        while cpu.cycle_count() < 100_000_000 {
+            cpu.fetch_decode_execute();
+        }
+
+        for &screen_checksum in SCREEN_CHECKSUMS {
+            assert_checksum(&cpu, screen_checksum);
+            press_key(&mut cpu, Key::A);
+        }
+
+        assert_checksum(&cpu, ALL_PASSED_CHECKSUM);
+    }
 }

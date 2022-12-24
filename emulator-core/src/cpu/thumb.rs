@@ -1555,7 +1555,7 @@ impl Cpu {
             }
         };
 
-        let real_address = base_address + base_offset;
+        let real_address = base_address.wrapping_add(base_offset);
 
         let result_value = match (size, sign_extend) {
             (ThumbLoadStoreDataSize::Byte, false) => {

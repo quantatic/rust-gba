@@ -1070,21 +1070,6 @@ impl Cpu {
 
 // Methods intended for external introspection
 impl Cpu {
-    pub fn disassemble(&mut self, address: u32) -> Instruction {
-        match self.get_instruction_mode() {
-            InstructionSet::Arm => {
-                let opcode = self.bus.read_word_address(address);
-                let instruction = arm::decode_arm(opcode);
-                Instruction::ArmInstruction(instruction)
-            }
-            InstructionSet::Thumb => {
-                let opcode = self.bus.read_halfword_address(address) as u16;
-                let instruction = thumb::decode_thumb(opcode);
-                Instruction::ThumbInstruction(instruction)
-            }
-        }
-    }
-
     pub fn get_instruction_width(&self) -> u32 {
         match self.get_instruction_mode() {
             InstructionSet::Arm => 4,
