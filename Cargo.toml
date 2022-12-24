@@ -1,5 +1,6 @@
 [workspace]
 members = [
+	"emulator-barebones",
 	"emulator-core",
 	"emulator-egui",
 	"emulator-native",

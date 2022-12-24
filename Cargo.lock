@@ -1000,6 +1000,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "emulator-barebones"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap 4.0.29",
+ "emulator-core",
+ "env_logger",
+ "log",
+]
+
+[[package]]
 name = "emulator-core"
 version = "0.2.0"
 dependencies = [
