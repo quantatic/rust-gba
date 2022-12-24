@@ -91,6 +91,28 @@ mod tests {
 
     simple_ppu_test!(m3_demo, "../tests/m3_demo.gba", 0x7F4A2DFC61FC7E34);
 
+    // https://github.com/PeterLemon/GBA
+    simple_ppu_test!(
+        peter_obj_4bpp,
+        "../tests/peter_obj_4bpp.gba",
+        0xEED8117DDF639EA1
+    );
+    simple_ppu_test!(
+        peter_obj_8bpp,
+        "../tests/peter_obj_8bpp.gba",
+        0xEED8117DDF639EA1
+    );
+    simple_ppu_test!(
+        peter_bg_rot_zoom_mode_3,
+        "../tests/peter_bg_rot_zoom_mode_3.gba",
+        0x541BB4DE9702EBA3
+    );
+    simple_ppu_test!(
+        peter_bg_rot_zoom_mode_4,
+        "../tests/peter_bg_rot_zoom_mode_4.gba",
+        0x2C965A651DE49697
+    );
+
     simple_ppu_test!(
         armwrestler_simple,
         "../tests/armwrestler.gba",
