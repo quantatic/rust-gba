@@ -128,6 +128,14 @@ impl Layer0 {
             BgMode::Mode2 | BgMode::Mode3 | BgMode::Mode4 | BgMode::Mode5 | BgMode::Invalid => None,
         }
     }
+
+    pub fn handle_vblank(&mut self) {
+        // no-op
+    }
+
+    pub fn handle_hblank(&mut self) {
+        // no-op
+    }
 }
 
 impl Layer0 {

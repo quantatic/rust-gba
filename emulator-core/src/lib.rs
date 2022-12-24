@@ -108,6 +108,11 @@ mod tests {
         0x541BB4DE9702EBA3
     );
     simple_ppu_test!(
+        peter_bg_mode_7,
+        "../tests/peter_bg_mode_7.gba",
+        0xAC2C3F9B277E6CB1
+    );
+    simple_ppu_test!(
         peter_bg_rot_zoom_mode_4,
         "../tests/peter_bg_rot_zoom_mode_4.gba",
         0x2C965A651DE49697

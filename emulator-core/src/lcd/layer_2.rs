@@ -18,6 +18,9 @@ pub(super) struct Layer2 {
     affine_b: u16,
     affine_c: u16,
     affine_d: u16,
+
+    affine_x_offset_latch: f64,
+    affine_y_offset_latch: f64,
 }
 
 impl Layer2 {
@@ -144,12 +147,10 @@ impl Layer2 {
                 let y = f64::from(pixel_y);
 
                 let a = self.get_affine_param_a();
-                let b = self.get_affine_param_b();
                 let c = self.get_affine_param_c();
-                let d = self.get_affine_param_d();
 
-                let actual_x = (x * a) + (y * b) + self.get_affine_x_offset();
-                let actual_y = (x * c) + (y * d) + self.get_affine_y_offset();
+                let actual_x = (x * a) + self.get_affine_x_offset_latch();
+                let actual_y = (x * c) + self.get_affine_y_offset_latch();
 
                 let map_data_base = self.bg_map_data_base() as usize;
                 let tile_data_base = self.bg_tile_data_base() as usize;
@@ -282,6 +283,16 @@ impl Layer2 {
             BgMode::Invalid => None,
         }
     }
+
+    pub fn handle_vblank(&mut self) {
+        self.affine_x_offset_latch = word_fixed_point_to_float(self.affine_x_offset);
+        self.affine_y_offset_latch = word_fixed_point_to_float(self.affine_y_offset);
+    }
+
+    pub fn handle_hblank(&mut self) {
+        self.affine_x_offset_latch += self.get_affine_param_b();
+        self.affine_y_offset_latch += self.get_affine_param_d();
+    }
 }
 
 impl Layer2 {
@@ -331,7 +342,8 @@ impl Layer2 {
     where
         u32: DataAccess<T>,
     {
-        self.affine_x_offset = self.affine_x_offset.set_data(value, index)
+        self.affine_x_offset = self.affine_x_offset.set_data(value, index);
+        self.affine_x_offset_latch = word_fixed_point_to_float(self.affine_x_offset);
     }
 
     pub fn read_affine_x_offset<T>(&self, index: u32) -> T
@@ -345,7 +357,8 @@ impl Layer2 {
     where
         u32: DataAccess<T>,
     {
-        self.affine_y_offset = self.affine_y_offset.set_data(value, index)
+        self.affine_y_offset = self.affine_y_offset.set_data(value, index);
+        self.affine_y_offset_latch = word_fixed_point_to_float(self.affine_y_offset);
     }
 
     pub fn read_affine_y_offset<T>(&self, index: u32) -> T
@@ -477,12 +490,12 @@ impl Layer2 {
         self.text_y_offset.get_bit_range(Y_OFFSET_BIT_RANGE)
     }
 
-    fn get_affine_x_offset(&self) -> f64 {
-        word_fixed_point_to_float(self.affine_x_offset)
+    fn get_affine_x_offset_latch(&self) -> f64 {
+        self.affine_x_offset_latch
     }
 
-    fn get_affine_y_offset(&self) -> f64 {
-        word_fixed_point_to_float(self.affine_y_offset)
+    fn get_affine_y_offset_latch(&self) -> f64 {
+        self.affine_y_offset_latch
     }
 
     fn get_affine_param_a(&self) -> f64 {

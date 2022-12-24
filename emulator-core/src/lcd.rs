@@ -557,12 +557,22 @@ impl Lcd {
                 hblank_entered = true;
                 self.set_hblank_flag(true);
                 self.state = LcdState::HBlank;
+
+                self.layer_0.handle_hblank();
+                self.layer_1.handle_hblank();
+                self.layer_2.handle_hblank();
+                self.layer_3.handle_hblank();
             }
         } else if self.vcount == 160 && self.dot == 0 {
             vblank_entered = true;
             self.set_vblank_flag(true);
             self.state = LcdState::VBlank;
             std::mem::swap(&mut self.buffer, &mut self.back_buffer);
+
+            self.layer_0.handle_vblank();
+            self.layer_1.handle_vblank();
+            self.layer_2.handle_vblank();
+            self.layer_3.handle_vblank();
         }
 
         if matches!(self.state, LcdState::Visible) {
