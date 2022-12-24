@@ -444,4 +444,20 @@ mod tests {
 
         assert_checksum(&cpu, ALL_PASSED_CHECKSUM);
     }
+
+    #[test]
+    fn bios_open_bus() {
+        const PASS_CHECKSUM: u64 = 0xC01DFDB8318FFCE5;
+
+        let source = include_bytes!("../tests/bios_open_bus.gba");
+        let cartridge = Cartridge::new(source.as_slice(), None).unwrap();
+        let mut cpu = Cpu::new(cartridge);
+
+        // skip boot screen
+        while cpu.cycle_count() < 100_000_000 {
+            cpu.fetch_decode_execute();
+        }
+
+        assert_checksum(&cpu, PASS_CHECKSUM);
+    }
 }
