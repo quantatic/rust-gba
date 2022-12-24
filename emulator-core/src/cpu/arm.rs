@@ -1823,9 +1823,9 @@ impl Cpu {
         };
 
         let offset_address = if offset_info.sign {
-            base_address - offset_amount
+            base_address.wrapping_sub(offset_amount)
         } else {
-            base_address + offset_amount
+            base_address.wrapping_add(offset_amount)
         };
 
         // "including R15=PC+12"

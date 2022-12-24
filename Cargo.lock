@@ -994,6 +994,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "emulator-core",
+ "env_logger",
  "rfd",
 ]
 

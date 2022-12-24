@@ -28,7 +28,7 @@ pub struct Bus {
     interrupt_request: [u16; Self::IRQ_SYNC_BUFFER], // active IRQ is at end
     dma_infos: [DmaInfo; 4],
     pub timers: [Timer; 4],
-    open_bus_data: u32,
+    pub open_bus_data: u32,
     open_bus_bios_data: u32, // most recently fetched BIOS opcode
     bios_read_behavior: BiosReadBehavior,
     pub lcd: Lcd,
@@ -373,12 +373,10 @@ impl Bus {
 
 impl Bus {
     fn is_bios(address: u32) -> bool {
-        let address = address % Self::MEMORY_SIZE;
         (Self::BIOS_BASE..=Self::BIOS_END).contains(&address)
     }
 
     fn is_rom(address: u32) -> bool {
-        let address = address % Self::MEMORY_SIZE;
         let wait_state_1 =
             (Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END).contains(&address);
         let wait_state_2 =
@@ -419,7 +417,7 @@ impl Bus {
         self.open_bus_data = open_bus_result;
 
         if Self::is_bios(address) {
-            self.open_bus_bios_data = u32::from(result);
+            self.open_bus_bios_data = u32::from(open_bus_result);
         }
 
         result as u16
@@ -427,8 +425,6 @@ impl Bus {
 }
 
 impl Bus {
-    const MEMORY_SIZE: u32 = 0x10000000;
-
     const BIOS_BASE: u32 = 0x00000000;
     const BIOS_END: u32 = 0x00003FFF;
 
@@ -704,8 +700,6 @@ impl Bus {
     }
 
     pub fn read_byte_address(&self, address: u32) -> u8 {
-        let address = address % Self::MEMORY_SIZE;
-
         match address {
             Self::BIOS_BASE..=Self::BIOS_END => match self.bios_read_behavior {
                 BiosReadBehavior::PrefetchValue => self.open_bus_bios_data.get_data(address & 0b11),
@@ -891,7 +885,7 @@ impl Bus {
 
     pub fn read_halfword_address(&mut self, address: u32) -> u16 {
         // SRAM uses unaligned address to read
-        let unaligned_address = address % Self::MEMORY_SIZE;
+        let unaligned_address = address;
         let aligned_address = Self::align_hword(unaligned_address);
 
         match aligned_address {
@@ -955,7 +949,7 @@ impl Bus {
     }
 
     pub fn read_word_address(&self, address: u32) -> u32 {
-        let unaligned_address = address % Self::MEMORY_SIZE;
+        let unaligned_address = address;
         let aligned_address = Self::align_word(unaligned_address);
 
         match aligned_address {
@@ -1031,7 +1025,7 @@ impl Bus {
     }
 
     pub fn write_byte_address(&mut self, value: u8, address: u32) {
-        let address = address % Self::MEMORY_SIZE;
+        let address = address;
 
         match address {
             Self::BIOS_BASE..=Self::BIOS_END => {
@@ -1320,7 +1314,7 @@ impl Bus {
     }
 
     pub fn write_halfword_address(&mut self, value: u16, address: u32) {
-        let unaligned_address = address % Self::MEMORY_SIZE;
+        let unaligned_address = address;
         let aligned_address = Self::align_hword(unaligned_address);
 
         match aligned_address {
@@ -1387,10 +1381,10 @@ impl Bus {
     }
 
     pub fn write_word_address(&mut self, value: u32, address: u32) {
-        let unaligned_address = address % Self::MEMORY_SIZE;
+        let unaligned_address = address;
         let aligned_address = Self::align_word(unaligned_address);
 
-        match aligned_address % Self::MEMORY_SIZE {
+        match aligned_address {
             Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
                 let actual_offset = (aligned_address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
                 let le_bytes = value.to_le_bytes();

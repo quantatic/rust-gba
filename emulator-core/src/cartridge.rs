@@ -217,7 +217,13 @@ impl Cartridge {
         match &mut self.backup {
             Backup::Flash(flash) => flash.write_byte(value, offset),
             Backup::Sram(sram) => sram.write_byte(value, offset),
-            _ => unreachable!(),
+            _ => {
+                log::error!(
+                    "attempted to write value {:02X} at SRAM offset {:08X}",
+                    value,
+                    offset
+                )
+            }
         }
     }
 }

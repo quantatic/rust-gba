@@ -22,6 +22,8 @@ use emulator_core::{
 use rfd::FileDialog;
 
 fn main() {
+    env_logger::init();
+
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
         "Rust GBA Emulator",
@@ -75,6 +77,7 @@ struct CpuInfo {
     instruction_mode: InstructionSet,
     cpu_mode: CpuMode,
     irq_buffer: [u16; Bus::IRQ_SYNC_BUFFER],
+    open_bus_data: u32,
 }
 
 impl Default for CpuInfo {
@@ -89,6 +92,7 @@ impl Default for CpuInfo {
             instruction_mode: InstructionSet::Arm,
             cpu_mode: CpuMode::System,
             irq_buffer: [0; Bus::IRQ_SYNC_BUFFER],
+            open_bus_data: Default::default(),
         }
     }
 }
@@ -327,6 +331,7 @@ impl MyEguiApp {
                                 instruction_mode: cpu.get_instruction_mode(),
                                 cpu_mode: cpu.get_cpu_mode(),
                                 irq_buffer: cpu.bus.get_interrupt_request_debug(),
+                                open_bus_data: cpu.bus.open_bus_data,
                             };
                             *cpu_info.lock().unwrap() = new_cpu_info;
                         }
@@ -562,6 +567,14 @@ impl MyEguiApp {
                 ui.add(TextEdit::singleline(&mut format!("{:?}", value)).interactive(false));
             });
         }
+
+        ui.horizontal(|ui| {
+            ui.label("open bus");
+            ui.add(
+                TextEdit::singleline(&mut format!("{:08X}", cpu_info_lock.open_bus_data))
+                    .interactive(false),
+            );
+        });
 
         CollapsingHeader::new("Irq Sync Buffer")
             .default_open(true)

@@ -387,7 +387,7 @@ impl Cpu {
             Register::R15 => match instruction_mode {
                 InstructionSet::Arm => {
                     if value & 0b11 != 0 {
-                        log::warn!(
+                        log::info!(
                             "writing to ARM PC with unaligned value: 0x{:08X}, force aligning",
                             value
                         );
@@ -396,7 +396,7 @@ impl Cpu {
                 }
                 InstructionSet::Thumb => {
                     if value & 0b1 != 0 {
-                        log::warn!(
+                        log::info!(
                             "writing to Thumb PC with unaligned value: 0x{:08X}, force aligning",
                             value
                         );
