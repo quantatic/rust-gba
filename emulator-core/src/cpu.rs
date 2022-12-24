@@ -1,4 +1,5 @@
 pub mod arm;
+mod jit;
 pub mod thumb;
 
 use std::fmt::Display;
@@ -212,6 +213,7 @@ pub enum CpuMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i8)]
 pub enum Register {
     R0,
     R1,
@@ -765,7 +767,12 @@ impl Cpu {
                         self.handle_exception(ExceptionType::InterruptRequest);
                         1
                     } else {
-                        self.execute_arm(decoded);
+                        if let Some(jit) = Self::try_jit(decoded) {
+                            jit.execute(self);
+                        } else {
+                            self.execute_arm(decoded);
+                        };
+
                         let cycle_info = decoded.instruction_type().cycles_info();
 
                         let result = cycle_info.i + cycle_info.n + cycle_info.s;

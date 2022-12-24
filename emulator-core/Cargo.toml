@@ -8,6 +8,7 @@ resolver = "2"
 
 [dependencies]
 anyhow = "1.0.66"
+dynasmrt = "1.2.3"
 lazy_static = "1.4.0"
 log = "0.4.17"
 phf = { version = "0.11.1", features = ["macros"] }
