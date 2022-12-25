@@ -422,7 +422,7 @@ impl Cpu {
 
 
                     ; mov rdi, [rbp - 8]
-                    ; mov edi, eax
+                    ; mov esi, eax
                     ; mov rax, QWORD Self::jit_read_word_address as _
                     ; call rax
 
