@@ -205,20 +205,20 @@ impl Cpu {
             ; mov rdi, base_register as _
             ;; call_self!(assembler, Self::jit_read_register)
 
-            ; mov QWORD [rbp - 16], rax // rbp - 16, base_address
+            ; sub rsp, 0x20 // allocate 4 more slots on stack
 
-            ; sub rsp, 16 // allocate more space on stack
+            ; mov [rsp + 0x18], rax // rsp + 0x18, base_address
         );
 
-        // rbp - 24, offset_amount
+        // rsp + 0x10, offset_amount
         match offset_info.value {
             SingleDataTransferOffsetValue::Immediate { offset } => dynasm!(assembler
-                ; mov DWORD [rbp - 24], offset as _
+                ; mov DWORD [rsp + 0x10], offset as _
             ),
             SingleDataTransferOffsetValue::Register { offset_register } => dynasm!(assembler
                 ; mov rdi, offset_register as _
                 ;; call_self!(assembler, Self::jit_read_register)
-                ; mov DWORD [rbp - 24], eax
+                ; mov DWORD [rsp + 0x10], eax
             ),
             SingleDataTransferOffsetValue::RegisterImmediate {
                 shift_amount,
@@ -267,12 +267,12 @@ impl Cpu {
                         if shift_amount == 0 {
                             dynasm!(assembler
                                 ; shr eax, 1
-                                ; mov DWORD [rbp - 32], eax // save in >> 1
+                                ; mov DWORD [rsp + 0x8], eax // save in >> 1
 
                                 ;; call_self!(assembler, Self::jit_get_carry_flag)
 
                                 ; shl eax, 31
-                                ; or eax, DWORD [rbp - 32]
+                                ; or eax, DWORD [rsp + 0x8]
                             );
                         } else {
                             dynasm!(assembler
@@ -283,53 +283,49 @@ impl Cpu {
                 }
 
                 dynasm!(assembler
-                    ; mov DWORD [rbp - 24], eax
+                    ; mov DWORD [rsp + 0x10], eax
                 );
             }
         }
 
-        // [rbp - 32], offset address
+        // [rsp + 0x8], offset address
         if offset_info.sign {
             dynasm!(assembler
-                ; mov eax, [rbp - 16]
-                ; sub eax, [rbp - 24]
-                ; mov [rbp - 32], eax
+                ; mov eax, [rsp + 0x18]
+                ; sub eax, [rsp + 0x10]
+                ; mov [rsp + 0x8], eax
             );
         } else {
             dynasm!(assembler
-                ; mov eax, [rbp - 16]
-                ; add eax, [rbp - 24]
-                ; mov [rbp - 32], eax
+                ; mov eax, [rsp + 0x18]
+                ; add eax, [rsp + 0x10]
+                ; mov [rsp + 0x8], eax
             );
         }
-
-        dynasm!(assembler
-            ; sub rsp, 16
-        );
 
         // eax, data_read_address
         match index_type {
             SingleDataTransferIndexType::PostIndex { .. } => {
                 // post index always has write-back
                 dynasm!(assembler
-                    ; mov edi, [rbp - 32]
+                    ; mov edi, [rsp + 0x8]
                     ; mov rsi, base_register as _
                     ;; call_self!(assembler, Self::jit_write_register)
 
-                    ; mov eax, [rbp - 16]
+                    ; mov eax, [rsp + 0x18]
                 );
             }
             SingleDataTransferIndexType::PreIndex { write_back } => {
                 if write_back {
                     dynasm!(assembler
-                        ; mov edi, [rbp - 32]
+                        ; mov edi, [rsp + 0x8]
                         ; mov rsi, base_register as _
                         ;; call_self!(assembler, Self::jit_write_register)
                     );
                 }
 
                 dynasm!(assembler
-                    ; mov eax, [rbp - 32]
+                    ; mov eax, [rsp + 0x8]
                 );
             }
         }
@@ -354,19 +350,19 @@ impl Cpu {
                     ; mov ecx, eax
                     ; and ecx, 1
                     ; shl cl, 3 // * 8
-                    ; mov [rbp - 40], cl // save cl through function call
+                    ; mov [rsp], cl // save cl through function call
 
                     ; mov edi, eax
                     ;; call_self!(assembler, Self::jit_read_halfword_address)
 
-                    ; mov cl, [rbp - 40]
+                    ; mov cl, [rsp]
                     ; ror eax, cl
                 );
             }
             (SingleDataMemoryAccessSize::HalfWord, true) => {
                 // LDRSH Rd,[odd]  -->  LDRSB Rd,[odd]         ;sign-expand BYTE value
                 dynasm!(assembler
-                    ; bt eax, 1 // if carry flag set, unaligned
+                    ; bt eax, 0 // if carry flag set, unaligned
                     ; jc >unaligned
 
                     ; aligned:
@@ -378,7 +374,7 @@ impl Cpu {
                     ; unaligned:
                     ; mov edi, eax
                     ;; call_self!(assembler, Self::jit_read_byte_address)
-                    ; movsx eax, ax
+                    ; movsx eax, al
 
                     ; after:
                 );
@@ -388,13 +384,13 @@ impl Cpu {
                     ; mov ecx, eax
                     ; and ecx, 0b11 // & 0b11
                     ; shl cl, 3 // * 8
-                    ; mov [rbp - 40], cl
+                    ; mov [rsp], cl
 
 
                     ; mov edi, eax
                     ;; call_self!(assembler, Self::jit_read_word_address)
 
-                    ; mov cl, [rbp - 40]
+                    ; mov cl, [rsp]
                     ; ror eax, cl
                 );
             }
@@ -417,6 +413,11 @@ impl Cpu {
                 ;; call_self!(assembler, Self::advance_pc_for_arm_instruction)
             );
         }
+
+        // clean up stack
+        dynasm!(assembler
+            ; add rsp, 0x20
+        )
     }
 
     fn emit_conditional_check(
