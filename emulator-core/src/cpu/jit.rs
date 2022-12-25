@@ -178,7 +178,7 @@ impl Cpu {
             ; sub rsp, 8
             ; push rax
 
-            ; mov dil, cl
+            ; movzx rdi, cl // looks like booleans need to be sign extended
             ;; call_self!(assembler, Self::jit_set_cpu_state_bit)
 
             ; pop rax
@@ -207,7 +207,7 @@ impl Cpu {
 
             ; sub rsp, 0x20 // allocate 4 more slots on stack
 
-            ; mov [rsp + 0x18], rax // rsp + 0x18, base_address
+            ; mov QWORD [rsp + 0x18], rax // rsp + 0x18, base_address
         );
 
         // rsp + 0x10, offset_amount
@@ -291,15 +291,15 @@ impl Cpu {
         // [rsp + 0x8], offset address
         if offset_info.sign {
             dynasm!(assembler
-                ; mov eax, [rsp + 0x18]
-                ; sub eax, [rsp + 0x10]
-                ; mov [rsp + 0x8], eax
+                ; mov eax, DWORD [rsp + 0x18]
+                ; sub eax, DWORD [rsp + 0x10]
+                ; mov DWORD [rsp + 0x8], eax
             );
         } else {
             dynasm!(assembler
-                ; mov eax, [rsp + 0x18]
-                ; add eax, [rsp + 0x10]
-                ; mov [rsp + 0x8], eax
+                ; mov eax, DWORD [rsp + 0x18]
+                ; add eax, DWORD [rsp + 0x10]
+                ; mov DWORD [rsp + 0x8], eax
             );
         }
 
@@ -308,24 +308,24 @@ impl Cpu {
             SingleDataTransferIndexType::PostIndex { .. } => {
                 // post index always has write-back
                 dynasm!(assembler
-                    ; mov edi, [rsp + 0x8]
+                    ; mov edi, DWORD [rsp + 0x8]
                     ; mov rsi, base_register as _
                     ;; call_self!(assembler, Self::jit_write_register)
 
-                    ; mov eax, [rsp + 0x18]
+                    ; mov eax, DWORD [rsp + 0x18]
                 );
             }
             SingleDataTransferIndexType::PreIndex { write_back } => {
                 if write_back {
                     dynasm!(assembler
-                        ; mov edi, [rsp + 0x8]
+                        ; mov edi, DWORD [rsp + 0x8]
                         ; mov rsi, base_register as _
                         ;; call_self!(assembler, Self::jit_write_register)
                     );
                 }
 
                 dynasm!(assembler
-                    ; mov eax, [rsp + 0x8]
+                    ; mov eax, DWORD [rsp + 0x8]
                 );
             }
         }
@@ -350,12 +350,12 @@ impl Cpu {
                     ; mov ecx, eax
                     ; and ecx, 1
                     ; shl cl, 3 // * 8
-                    ; mov [rsp], cl // save cl through function call
+                    ; mov BYTE [rsp], cl // save cl through function call
 
                     ; mov edi, eax
                     ;; call_self!(assembler, Self::jit_read_halfword_address)
 
-                    ; mov cl, [rsp]
+                    ; mov cl, BYTE [rsp]
                     ; ror eax, cl
                 );
             }
@@ -384,13 +384,13 @@ impl Cpu {
                     ; mov ecx, eax
                     ; and ecx, 0b11 // & 0b11
                     ; shl cl, 3 // * 8
-                    ; mov [rsp], cl
+                    ; mov BYTE [rsp], cl
 
 
                     ; mov edi, eax
                     ;; call_self!(assembler, Self::jit_read_word_address)
 
-                    ; mov cl, [rsp]
+                    ; mov cl, BYTE [rsp]
                     ; ror eax, cl
                 );
             }
@@ -504,7 +504,7 @@ impl Cpu {
                 ; push rax
                 ; push rax
                 ;; call_self!(assembler, Self::jit_get_overflow_flag)
-                ; cmp [rsp], al
+                ; cmp BYTE [rsp], al
                 ; pop rax
                 ; pop rax
                 ; je =>pass_label
@@ -515,7 +515,7 @@ impl Cpu {
                 ; push rax
                 ; push rax
                 ;; call_self!(assembler, Self::jit_get_overflow_flag)
-                ; cmp [rsp], al
+                ; cmp BYTE [rsp], al
                 ; pop rax
                 ; pop rax
                 ; jne =>pass_label
@@ -529,7 +529,7 @@ impl Cpu {
                 ; push rax
                 ; push rax
                 ;; call_self!(assembler, Self::jit_get_overflow_flag)
-                ; cmp [rsp], al
+                ; cmp BYTE [rsp], al
                 ; pop rax
                 ; pop rax
                 ; je =>pass_label
@@ -543,7 +543,7 @@ impl Cpu {
                 ; push rax
                 ; push rax
                 ;; call_self!(assembler, Self::jit_get_overflow_flag)
-                ; cmp [rsp], al
+                ; cmp BYTE [rsp], al
                 ; pop rax
                 ; pop rax
                 ; jne =>pass_label
