@@ -46,9 +46,9 @@ impl Cpu {
         if !matches!(
             instruction.instruction_type(),
             ArmInstructionType::B { .. }
-                | ArmInstructionType::Bl { .. }
-                | ArmInstructionType::Bx { .. }
-                | ArmInstructionType::Ldr { .. }
+            //     | ArmInstructionType::Bl { .. }
+            //     | ArmInstructionType::Bx { .. }
+            //     | ArmInstructionType::Ldr { .. }
         ) {
             return None;
         }
@@ -60,6 +60,9 @@ impl Cpu {
             ; .arch x64
             ; push rbp
             ; mov rbp, rsp
+            ; push r12
+            ; sub rsp, 8
+
             ; mov r12, rdi // r12 contains self
         );
 
@@ -108,6 +111,8 @@ impl Cpu {
 
         dynasm!(assembler
             ; ->cleanup:
+            ; add rsp, 8
+            ; pop r12
             ; mov rsp, rbp
             ; pop rbp
             ; ret
