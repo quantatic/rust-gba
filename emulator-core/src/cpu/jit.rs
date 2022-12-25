@@ -45,10 +45,9 @@ impl Cpu {
     pub fn try_jit(instruction: ArmInstruction) -> Option<JitInstruction> {
         if !matches!(
             instruction.instruction_type(),
-            ArmInstructionType::B { .. }
-            //     | ArmInstructionType::Bl { .. }
-            //     | ArmInstructionType::Bx { .. }
-            //     | ArmInstructionType::Ldr { .. }
+            ArmInstructionType::B { .. } //     | ArmInstructionType::Bl { .. }
+                                         //     | ArmInstructionType::Bx { .. }
+                                         //     | ArmInstructionType::Ldr { .. }
         ) {
             return None;
         }
@@ -500,17 +499,23 @@ impl Cpu {
             ),
             InstructionCondition::SignedGreaterOrEqual => dynasm!(assembler
                 ;; call_self!(assembler, Self::jit_get_sign_flag)
-                ; mov cl, al
+                ; push rax
+                ; push rax
                 ;; call_self!(assembler, Self::jit_get_overflow_flag)
-                ; cmp al, cl
+                ; cmp [rsp], al
+                ; pop rax
+                ; pop rax
                 ; je =>pass_label
                 ; jmp =>fail_label
             ),
             InstructionCondition::SignedLessThan => dynasm!(assembler
                 ;; call_self!(assembler, Self::jit_get_sign_flag)
-                ; mov cl, al
+                ; push rax
+                ; push rax
                 ;; call_self!(assembler, Self::jit_get_overflow_flag)
-                ; cmp al, cl
+                ; cmp [rsp], al
+                ; pop rax
+                ; pop rax
                 ; jne =>pass_label
                 ; jmp =>fail_label
             ),
@@ -519,9 +524,12 @@ impl Cpu {
                 ; cmp al, false as _
                 ; jne =>fail_label
                 ;; call_self!(assembler, Self::jit_get_sign_flag)
-                ; mov cl, al
+                ; push rax
+                ; push rax
                 ;; call_self!(assembler, Self::jit_get_overflow_flag)
-                ; cmp al, cl
+                ; cmp [rsp], al
+                ; pop rax
+                ; pop rax
                 ; je =>pass_label
                 ; jmp =>fail_label
             ),
@@ -530,9 +538,12 @@ impl Cpu {
                 ; cmp al, true as _
                 ; je =>pass_label
                 ;; call_self!(assembler, Self::jit_get_sign_flag)
-                ; mov cl, al
+                ; push rax
+                ; push rax
                 ;; call_self!(assembler, Self::jit_get_overflow_flag)
-                ; cmp al, cl
+                ; cmp [rsp], al
+                ; pop rax
+                ; pop rax
                 ; jne =>pass_label
                 ; jmp =>fail_label
             ),
@@ -540,7 +551,8 @@ impl Cpu {
     }
 
     extern "sysv64" fn jit_read_register(&self, register: Register) -> u32 {
-        self.read_register(register, |pc| pc)
+        let result = self.read_register(register, |pc| pc);
+        result
     }
 
     extern "sysv64" fn jit_write_register(&mut self, value: u32, register: Register) {
