@@ -359,7 +359,7 @@ impl Cpu {
             (SingleDataMemoryAccessSize::Byte, false) => {
                 dynasm!(assembler
                     ; mov rdi, [rbp - 8]
-                    ; mov edi, eax
+                    ; mov esi, eax
                     ; mov rax, QWORD Self::jit_read_byte_address as _
                     ; call rax
                 );
@@ -367,7 +367,7 @@ impl Cpu {
             (SingleDataMemoryAccessSize::Byte, true) => {
                 dynasm!(assembler
                     ; mov rdi, [rbp - 8]
-                    ; mov edi, eax
+                    ; mov esi, eax
                     ; mov rax, QWORD Self::jit_read_byte_address as _
                     ; call rax
                     ; movsx eax, al
@@ -405,7 +405,7 @@ impl Cpu {
 
                     ; unaligned:
                     ; mov rdi, [rbp - 8]
-                    ; mov edi, eax
+                    ; mov esi, eax
                     ; mov rax, QWORD Self::jit_read_byte_address as _
                     ; call rax
                     ; movsx eax, ax
