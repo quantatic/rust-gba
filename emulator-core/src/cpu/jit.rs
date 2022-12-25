@@ -105,7 +105,6 @@ impl Cpu {
         dynasm!(assembler
             ; jmp ->cleanup
             ; =>fail_label
-            ; mov rdi, [rbp - 8]
             ;; call_self!(assembler, Self::jit_advance_pc_for_arm_instruction)
         );
 
