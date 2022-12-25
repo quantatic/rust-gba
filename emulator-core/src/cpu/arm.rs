@@ -5,13 +5,13 @@ use crate::{BitManipulation, DataAccess};
 use std::fmt::Display;
 use std::ops::RangeInclusive;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(super) enum OffsetModifierType {
     AddToBase,
     SubtractFromBase,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(super) enum SingleDataMemoryAccessSize {
     Byte,
     HalfWord,
@@ -19,7 +19,7 @@ pub(super) enum SingleDataMemoryAccessSize {
     DoubleWord,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(super) enum ArmInstructionType {
     B {
         offset: i32,
@@ -28,9 +28,6 @@ pub(super) enum ArmInstructionType {
         offset: i32,
     },
     Bx {
-        operand: Register,
-    },
-    Blx {
         operand: Register,
     },
     Ldr {
@@ -201,9 +198,7 @@ impl ArmInstructionType {
                 InstructionCyclesInfo { i: 0, n: 1, s: 2 }
             }
             // Execution Time: 2S + 1N
-            ArmInstructionType::Bx { .. } | ArmInstructionType::Blx { .. } => {
-                InstructionCyclesInfo { i: 0, n: 1, s: 2 }
-            }
+            ArmInstructionType::Bx { .. } => InstructionCyclesInfo { i: 0, n: 1, s: 2 },
             // Execution Time: 2S+1N
             ArmInstructionType::Swi { .. } => InstructionCyclesInfo { i: 0, n: 1, s: 2 },
             // TODO: Implement proper logic here for multiplication timings.
@@ -214,7 +209,7 @@ impl ArmInstructionType {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct ArmInstruction {
     instruction_type: ArmInstructionType,
     condition: InstructionCondition,
@@ -230,49 +225,49 @@ impl ArmInstruction {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum SingleDataTransferIndexType {
     PostIndex { non_privileged: bool },
     PreIndex { write_back: bool },
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum BlockDataTransferIndexType {
     PostIndex,
     PreIndex,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 enum SingleDataTransferType {
     Ldr,
     Str,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum BlockDataTransferType {
     Ldm,
     Stm,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum PsrTransferType {
     Mrs,
     Msr,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum PsrTransferPsr {
     Cpsr,
     Spsr,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct SingleDataTransferOffsetInfo {
-    value: SingleDataTransferOffsetValue,
-    sign: bool,
+    pub value: SingleDataTransferOffsetValue,
+    pub sign: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum SingleDataTransferOffsetValue {
     Immediate {
         offset: u32,
@@ -287,7 +282,7 @@ pub enum SingleDataTransferOffsetValue {
     },
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum AluSecondOperandInfo {
     Register {
         shift_info: ArmRegisterOrImmediate,
@@ -300,7 +295,7 @@ pub enum AluSecondOperandInfo {
     },
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum SwpAccessSize {
     Word,
     Byte,
@@ -447,13 +442,13 @@ impl Cpu {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum ArmRegisterOrImmediate {
     Immediate(u32),
     Register(Register),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum AluOperation {
     And,
     Eor,
@@ -473,7 +468,7 @@ pub enum AluOperation {
     Mvn,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum MultiplyOperation {
     Mul,
     Mla,
@@ -484,7 +479,7 @@ pub enum MultiplyOperation {
     Smlal,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum MsrSourceInfo {
     Register(Register),
     Immediate { value: u32 },
@@ -618,7 +613,6 @@ fn try_decode_arm_branch_exchange(opcode: u32) -> Option<ArmInstructionType> {
             match opcode.get_bit_range(OPCODE_BIT_RANGE) {
                 0b0001 => ArmInstructionType::Bx { operand },
                 0b0010 => todo!("Jazelle bytecode"),
-                0b0011 => ArmInstructionType::Blx { operand },
                 _ => unreachable!(),
             }
         })
@@ -2744,7 +2738,6 @@ impl Display for ArmInstruction {
                 MultiplyOperation::Umaal => write!(f, "umaal TODO"),
             },
             ArmInstructionType::Swi { comment } => write!(f, "swi #{}", comment),
-            ArmInstructionType::Blx { .. } => todo!("display blx"),
             ArmInstructionType::Swp {
                 access_size,
                 base_register,

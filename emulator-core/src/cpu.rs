@@ -2,7 +2,9 @@ pub mod arm;
 mod jit;
 pub mod thumb;
 
+use std::collections::HashMap;
 use std::fmt::Display;
+use std::rc::Rc;
 use std::{fmt::Debug, ops::RangeInclusive};
 
 use crate::bus::Bus;
@@ -10,6 +12,7 @@ use crate::cartridge::Cartridge;
 use crate::BitManipulation;
 
 use self::arm::ArmInstruction;
+use self::jit::JitInstruction;
 use self::thumb::ThumbInstruction;
 
 #[derive(Clone, Default)]
@@ -33,7 +36,6 @@ struct ModeRegisters {
     spsr: u32,
 }
 
-#[derive(Clone)]
 pub struct Cpu {
     current_registers: ModeRegisters,
     r0: u32,
@@ -78,6 +80,8 @@ pub struct Cpu {
     prefetch_opcode: Option<u32>,
     pre_decode_arm: Option<ArmInstruction>,
     pre_decode_thumb: Option<ThumbInstruction>,
+
+    jit_cache: HashMap<ArmInstruction, Rc<JitInstruction>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -149,6 +153,8 @@ impl Cpu {
             pre_decode_arm: None,
             prefetch_opcode: None,
             pre_decode_thumb: None,
+
+            jit_cache: HashMap::new(),
         }
     }
 
@@ -212,7 +218,7 @@ pub enum CpuMode {
     System,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 #[repr(i8)]
 pub enum Register {
     R0,
@@ -285,7 +291,7 @@ impl Display for Register {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 #[repr(i8)]
 pub enum InstructionCondition {
     Equal,
@@ -335,7 +341,7 @@ pub enum InstructionSet {
     Thumb,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum ShiftType {
     Lsl,
     Lsr,
@@ -768,11 +774,16 @@ impl Cpu {
                         self.handle_exception(ExceptionType::InterruptRequest);
                         1
                     } else {
-                        if let Some(jit) = Self::try_jit(decoded) {
+                        if let Some(jit) = self.jit_cache.get(&decoded) {
+                            let jit = Rc::clone(jit);
                             jit.execute(self);
+                        } else if let Some(jit) = Self::try_jit(decoded) {
+                            println!("new cached jit instruction: {:?}", decoded);
+                            jit.execute(self);
+                            self.jit_cache.insert(decoded, Rc::new(jit));
                         } else {
                             self.execute_arm(decoded);
-                        };
+                        }
 
                         let cycle_info = decoded.instruction_type().cycles_info();
 
