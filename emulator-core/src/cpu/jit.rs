@@ -45,9 +45,10 @@ impl Cpu {
     pub fn try_jit(instruction: ArmInstruction) -> Option<JitInstruction> {
         if !matches!(
             instruction.instruction_type(),
-            ArmInstructionType::B { .. } //     | ArmInstructionType::Bl { .. }
-                                         //     | ArmInstructionType::Bx { .. }
-                                         //     | ArmInstructionType::Ldr { .. }
+            ArmInstructionType::B { .. }
+                | ArmInstructionType::Bl { .. }
+                | ArmInstructionType::Bx { .. }
+                | ArmInstructionType::Ldr { .. }
         ) {
             return None;
         }
