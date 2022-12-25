@@ -28,6 +28,7 @@ impl Cpu {
         let mut assembler: Assembler<X64Relocation> = Assembler::new().unwrap();
 
         let start = assembler.offset();
+        return None;
         dynasm!(assembler
             ; .arch x64
             ; push rbp
@@ -40,9 +41,8 @@ impl Cpu {
             ; mov rdi, [rbp - 8]
             ; mov rsi, instruction.instruction_condition() as _
             ; mov rax, QWORD Self::jit_evaluate_instruction_condition as _
-            ; int3
             ; call rax
-            ; cmp rax, 0
+            ; cmp al, 0
             ; je ->condition_failed
         );
 
@@ -51,7 +51,7 @@ impl Cpu {
                 dynasm!(assembler
                     ; mov rdi, [rbp - 8]
                     ; mov rsi, Register::R15 as _
-                    ; mov rax, QWORD Self::jit_read_register as i64
+                    ; mov rax, QWORD Self::jit_read_register as _
                     ; call rax
 
                     ; add eax, offset
@@ -59,11 +59,11 @@ impl Cpu {
                     ; mov rdi, [rbp - 8]
                     ; mov esi, eax
                     ; mov rdx, Register::R15 as _
-                    ; mov rax, QWORD Self::jit_write_register as i64
+                    ; mov rax, QWORD Self::jit_write_register as _
                     ; call rax
 
                     ; mov rdi, [rbp - 8]
-                    ; mov rax, QWORD Self::jit_flush_prefetch as i64
+                    ; mov rax, QWORD Self::jit_flush_prefetch as _
                     ; call rax
                     ; jmp ->cleanup
                 );
