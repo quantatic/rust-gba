@@ -29,6 +29,18 @@ impl JitInstruction {
     }
 }
 
+macro_rules! call_self {
+    ($ops:ident, $addr:expr) => {
+        dynasm!($ops
+            ; mov rcx, rdx
+            ; mov rdx, rsi
+            ; mov rsi, rdi
+            ; mov rdi, r12
+            ; mov rax, QWORD $addr as _
+            ; call rax
+        );
+    }
+}
 impl Cpu {
     pub fn try_jit(instruction: ArmInstruction) -> Option<JitInstruction> {
         if !matches!(
@@ -48,8 +60,7 @@ impl Cpu {
             ; .arch x64
             ; push rbp
             ; mov rbp, rsp
-            ; push rdi
-            ; sub rsp, 8
+            ; mov r12, rdi // r12 contains self
         );
 
         let pass_label = assembler.new_dynamic_label();
@@ -92,8 +103,7 @@ impl Cpu {
             ; jmp ->cleanup
             ; =>fail_label
             ; mov rdi, [rbp - 8]
-            ; mov rax, QWORD Self::jit_advance_pc_for_arm_instruction as i64
-            ; call rax
+            ;; call_self!(assembler, Self::jit_advance_pc_for_arm_instruction)
         );
 
         dynasm!(assembler
@@ -111,67 +121,51 @@ impl Cpu {
 
     fn emit_arm_b(assembler: &mut Assembler<X64Relocation>, offset: i32) {
         dynasm!(assembler
-            ; mov rdi, [rbp - 8]
-            ; mov rsi, Register::R15 as _
-            ; mov rax, QWORD Self::jit_read_register as _
-            ; call rax
+            ; mov rdi, Register::R15 as _
+            ;; call_self!(assembler, Self::jit_read_register)
 
             ; add eax, offset
 
-            ; mov rdi, [rbp - 8]
-            ; mov esi, eax
-            ; mov rdx, Register::R15 as _
-            ; mov rax, QWORD Self::jit_write_register as _
-            ; call rax
+            ; mov edi, eax
+            ; mov rsi, Register::R15 as _
+            ;; call_self!(assembler, Self::jit_write_register)
 
-            ; mov rdi, [rbp - 8]
-            ; mov rax, QWORD Self::jit_flush_prefetch as _
-            ; call rax
+            ;; call_self!(assembler, Self::jit_flush_prefetch)
         );
     }
 
     fn emit_arm_bl(assembler: &mut Assembler<X64Relocation>, offset: i32) {
         dynasm!(assembler
             ; sub rsp, 8
-            ; push r12
+            ; push r13
 
-            ; mov rdi, [rbp - 8]
-            ; mov rsi, Register::R15 as _
-            ; mov rax, QWORD Self::jit_read_register as _
-            ; call rax
+            ; mov rdi, Register::R15 as _
+            ;; call_self!(assembler, Self::jit_read_register)
 
-            ; mov r12d, eax
+            ; mov r13d, eax
             ; sub eax, 4
 
-            ; mov rdi, [rbp - 8]
-            ; mov esi, eax
-            ; mov rdx, Register::R14 as _
-            ; mov rax, QWORD Self::jit_write_register as _
-            ; call rax
+            ; mov edi, eax
+            ; mov rsi, Register::R14 as _
+            ;; call_self!(assembler, Self::jit_write_register)
 
-            ; add r12d, offset
+            ; add r13d, offset
 
-            ; mov rdi, [rbp - 8]
-            ; mov esi, r12d
-            ; mov rdx, Register::R15 as _
-            ; mov rax, QWORD Self::jit_write_register as _
-            ; call rax
+            ; mov edi, r13d
+            ; mov rsi, Register::R15 as _
+            ;; call_self!(assembler, Self::jit_write_register)
 
-            ; pop r12
+            ; pop r13
             ; add rsp, 8
 
-            ; mov rdi, [rbp - 8]
-            ; mov rax, QWORD Self::jit_flush_prefetch as _
-            ; call rax
+            ;; call_self!(assembler, Self::jit_flush_prefetch)
         );
     }
 
     fn emit_arm_bx(assembler: &mut Assembler<X64Relocation>, operand: Register) {
         dynasm!(assembler
-            ; mov rdi, [rbp - 8]
-            ; mov rsi, operand as _
-            ; mov rax, QWORD Self::jit_read_register as _
-            ; call rax
+            ; mov rdi, operand as _
+            ;; call_self!(assembler, Self::jit_read_register)
 
             ; mov ecx, eax
             ; and ecx, 1 // state bit
@@ -180,23 +174,17 @@ impl Cpu {
             ; sub rsp, 8
             ; push rax
 
-            ; mov rdi, [rbp - 8]
-            ; mov sil, cl
-            ; mov rax, QWORD Self::jit_set_cpu_state_bit as _
-            ; call rax
+            ; mov dil, cl
+            ;; call_self!(assembler, Self::jit_set_cpu_state_bit)
 
             ; pop rax
             ; add rsp, 8
 
-            ; mov rdi, [rbp - 8]
-            ; mov esi, eax
-            ; mov rdx, Register::R15 as _
-            ; mov rax, QWORD Self::jit_write_register as _
-            ; call rax
+            ; mov edi, eax
+            ; mov rsi, Register::R15 as _
+            ;; call_self!(assembler, Self::jit_write_register)
 
-            ; mov rdi, [rbp - 8]
-            ; mov rax, QWORD Self::jit_flush_prefetch as _
-            ; call rax
+            ;; call_self!(assembler, Self::jit_flush_prefetch)
         );
     }
 
@@ -210,10 +198,8 @@ impl Cpu {
         sign_extend: bool,
     ) {
         dynasm!(assembler
-            ; mov rdi, [rbp - 8]
-            ; mov rsi, base_register as _
-            ; mov rax, QWORD Self::jit_read_register as _
-            ; call rax
+            ; mov rdi, base_register as _
+            ;; call_self!(assembler, Self::jit_read_register)
 
             ; mov QWORD [rbp - 16], rax // rbp - 16, base_address
 
@@ -226,10 +212,8 @@ impl Cpu {
                 ; mov DWORD [rbp - 24], offset as _
             ),
             SingleDataTransferOffsetValue::Register { offset_register } => dynasm!(assembler
-                ; mov rdi, [rbp - 8]
-                ; mov rsi, offset_register as _
-                ; mov rax, QWORD Self::jit_read_register as _
-                ; call rax
+                ; mov rdi, offset_register as _
+                ;; call_self!(assembler, Self::jit_read_register)
                 ; mov DWORD [rbp - 24], eax
             ),
             SingleDataTransferOffsetValue::RegisterImmediate {
@@ -238,10 +222,8 @@ impl Cpu {
                 offset_register,
             } => {
                 dynasm!(assembler
-                    ; mov rdi, [rbp - 8]
-                    ; mov rsi, offset_register as _
-                    ; mov rax, QWORD Self::jit_read_register as _
-                    ; call rax
+                    ; mov rdi, offset_register as _
+                    ;; call_self!(assembler, Self::jit_read_register)
                 );
 
                 // offset base in eax
@@ -283,9 +265,7 @@ impl Cpu {
                                 ; shr eax, 1
                                 ; mov DWORD [rbp - 32], eax // save in >> 1
 
-                                ; mov rdi, [rbp - 8]
-                                ; mov rax, QWORD Self::jit_get_carry_flag as _
-                                ; call rax
+                                ;; call_self!(assembler, Self::jit_get_carry_flag)
 
                                 ; shl eax, 31
                                 ; or eax, DWORD [rbp - 32]
@@ -328,11 +308,9 @@ impl Cpu {
             SingleDataTransferIndexType::PostIndex { .. } => {
                 // post index always has write-back
                 dynasm!(assembler
-                    ; mov rdi, [rbp - 8]
-                    ; mov esi, [rbp - 32]
-                    ; mov rdx, base_register as _
-                    ; mov rax, Self::jit_write_register as _
-                    ; call rax
+                    ; mov edi, [rbp - 32]
+                    ; mov rsi, base_register as _
+                    ;; call_self!(assembler, Self::jit_write_register)
 
                     ; mov eax, [rbp - 16]
                 );
@@ -340,11 +318,9 @@ impl Cpu {
             SingleDataTransferIndexType::PreIndex { write_back } => {
                 if write_back {
                     dynasm!(assembler
-                        ; mov rdi, [rbp - 8]
-                        ; mov esi, [rbp - 32]
-                        ; mov rdx, base_register as _
-                        ; mov rax, Self::jit_write_register as _
-                        ; call rax
+                        ; mov edi, [rbp - 32]
+                        ; mov rsi, base_register as _
+                        ;; call_self!(assembler, Self::jit_write_register)
                     );
                 }
 
@@ -358,18 +334,14 @@ impl Cpu {
         match (access_size, sign_extend) {
             (SingleDataMemoryAccessSize::Byte, false) => {
                 dynasm!(assembler
-                    ; mov rdi, [rbp - 8]
-                    ; mov esi, eax
-                    ; mov rax, QWORD Self::jit_read_byte_address as _
-                    ; call rax
+                    ; mov edi, eax
+                    ;; call_self!(assembler, Self::jit_read_byte_address)
                 );
             }
             (SingleDataMemoryAccessSize::Byte, true) => {
                 dynasm!(assembler
-                    ; mov rdi, [rbp - 8]
-                    ; mov esi, eax
-                    ; mov rax, QWORD Self::jit_read_byte_address as _
-                    ; call rax
+                    ; mov edi, eax
+                    ;; call_self!(assembler, Self::jit_read_byte_address)
                     ; movsx eax, al
                 );
             }
@@ -380,10 +352,8 @@ impl Cpu {
                     ; shl cl, 3 // * 8
                     ; mov [rbp - 40], cl // save cl through function call
 
-                    ; mov rdi, [rbp - 8]
                     ; mov edi, eax
-                    ; mov rax, QWORD Self::jit_read_halfword_address as _
-                    ; call rax
+                    ;; call_self!(assembler, Self::jit_read_halfword_address)
 
                     ; mov cl, [rbp - 40]
                     ; ror eax, cl
@@ -396,18 +366,14 @@ impl Cpu {
                     ; jc >unaligned
 
                     ; aligned:
-                    ; mov rdi, [rbp - 8]
                     ; mov edi, eax
-                    ; mov rax, QWORD Self::jit_read_halfword_address as _
-                    ; call rax
+                    ;; call_self!(assembler, Self::jit_read_halfword_address)
                     ; movsx eax, ax
                     ; jmp >after
 
                     ; unaligned:
-                    ; mov rdi, [rbp - 8]
-                    ; mov esi, eax
-                    ; mov rax, QWORD Self::jit_read_byte_address as _
-                    ; call rax
+                    ; mov edi, eax
+                    ;; call_self!(assembler, Self::jit_read_byte_address)
                     ; movsx eax, ax
 
                     ; after:
@@ -421,10 +387,8 @@ impl Cpu {
                     ; mov [rbp - 40], cl
 
 
-                    ; mov rdi, [rbp - 8]
-                    ; mov esi, eax
-                    ; mov rax, QWORD Self::jit_read_word_address as _
-                    ; call rax
+                    ; mov edi, eax
+                    ;; call_self!(assembler, Self::jit_read_word_address)
 
                     ; mov cl, [rbp - 40]
                     ; ror eax, cl
@@ -435,24 +399,18 @@ impl Cpu {
         };
 
         dynasm!(assembler
-            ; mov rdi, [rbp - 8]
-            ; mov esi, eax
-            ; mov rdx, destination_register as _
-            ; mov rax, QWORD Self::jit_write_register as _
-            ; call rax
+            ; mov edi, eax
+            ; mov rsi, destination_register as _
+            ;; call_self!(assembler, Self::jit_write_register)
         );
 
         if matches!(destination_register, Register::R15) {
             dynasm!(assembler
-                ; mov rdi, [rbp - 8]
-                ; mov rax, QWORD Self::flush_prefetch as _
-                ; call rax
+                ;; call_self!(assembler, Self::jit_flush_prefetch)
             );
         } else {
             dynasm!(assembler
-                ; mov rdi, [rbp - 8]
-                ; mov rax, QWORD Self::advance_pc_for_arm_instruction as _
-                ; call rax
+                ;; call_self!(assembler, Self::advance_pc_for_arm_instruction)
             );
         }
     }
@@ -463,38 +421,6 @@ impl Cpu {
         pass_label: DynamicLabel,
         fail_label: DynamicLabel,
     ) {
-        fn emit_get_zero(assembler: &mut Assembler<X64Relocation>) {
-            dynasm!(assembler
-                ; mov rdi, [rbp - 8]
-                ; mov rax, QWORD Cpu::jit_get_zero_flag as _
-                ; call rax
-            );
-        }
-
-        fn emit_get_carry(assembler: &mut Assembler<X64Relocation>) {
-            dynasm!(assembler
-                ; mov rdi, [rbp - 8]
-                ; mov rax, QWORD Cpu::jit_get_carry_flag as _
-                ; call rax
-            );
-        }
-
-        fn emit_get_sign(assembler: &mut Assembler<X64Relocation>) {
-            dynasm!(assembler
-                ; mov rdi, [rbp - 8]
-                ; mov rax, QWORD Cpu::jit_get_sign_flag as _
-                ; call rax
-            );
-        }
-
-        fn emit_get_overflow(assembler: &mut Assembler<X64Relocation>) {
-            dynasm!(assembler
-                ; mov rdi, [rbp - 8]
-                ; mov rax, QWORD Cpu::jit_get_overflow_flag as _
-                ; call rax
-            );
-        }
-
         match condition {
             InstructionCondition::Always => dynasm!(assembler
                 ; jmp =>pass_label
@@ -503,105 +429,105 @@ impl Cpu {
                 ; jmp =>fail_label
             ),
             InstructionCondition::Equal => dynasm!(assembler
-                ;; emit_get_zero(assembler)
+                ;; call_self!(assembler, Self::jit_get_zero_flag)
                 ; cmp al, true as _
                 ; je =>pass_label
                 ; jmp =>fail_label
             ),
             InstructionCondition::NotEqual => dynasm!(assembler
-                ;; emit_get_zero(assembler)
+                ;; call_self!(assembler, Self::jit_get_zero_flag)
                 ; cmp al, false as _
                 ; je =>pass_label
                 ; jmp => fail_label
             ),
             InstructionCondition::UnsignedHigherOrSame => dynasm!(assembler
-                ;; emit_get_carry(assembler)
+                ;; call_self!(assembler, Self::jit_get_carry_flag)
                 ; cmp al, true as _
                 ; je =>pass_label
                 ; jmp =>fail_label
             ),
             InstructionCondition::UnsignedLower => dynasm!(assembler
-                ;; emit_get_carry(assembler)
+                ;; call_self!(assembler, Self::jit_get_carry_flag)
                 ; cmp al, false as _
                 ; je =>pass_label
                 ; jmp =>fail_label
             ),
             InstructionCondition::SignedNegative => dynasm!(assembler
-                ;; emit_get_sign(assembler)
+                ;; call_self!(assembler, Self::jit_get_sign_flag)
                 ; cmp al, true as _
                 ; je =>pass_label
                 ; jmp =>fail_label
             ),
             InstructionCondition::SignedPositiveOrZero => dynasm!(assembler
-                ;; emit_get_sign(assembler)
+                ;; call_self!(assembler, Self::jit_get_sign_flag)
                 ; cmp al, false as _
                 ; je =>pass_label
                 ; jmp =>fail_label
             ),
             InstructionCondition::SignedOverflow => dynasm!(assembler
-                ;; emit_get_overflow(assembler)
+                ;; call_self!(assembler, Self::jit_get_overflow_flag)
                 ; cmp al, true as _
                 ; je =>pass_label
                 ; jmp =>fail_label
             ),
             InstructionCondition::SignedNoOverflow => dynasm!(assembler
-                ;; emit_get_overflow(assembler)
+                ;; call_self!(assembler, Self::jit_get_overflow_flag)
                 ; cmp al, false as _
                 ; je =>pass_label
                 ; jmp =>fail_label
             ),
             InstructionCondition::UnsignedHigher => dynasm!(assembler
-                ;; emit_get_carry(assembler)
+                ;; call_self!(assembler, Self::jit_get_carry_flag)
                 ; cmp al, true as _
                 ; jne =>fail_label
-                ;; emit_get_zero(assembler)
+                ;; call_self!(assembler, Self::jit_get_zero_flag)
                 ; cmp al, true as _
                 ; je =>fail_label
                 ; jmp =>pass_label
             ),
             InstructionCondition::UnsignedLowerOrSame => dynasm!(assembler
-                ;; emit_get_carry(assembler)
+                ;; call_self!(assembler, Self::jit_get_carry_flag)
                 ; cmp al, false as _
                 ; je =>pass_label
-                ;; emit_get_zero(assembler)
+                ;; call_self!(assembler, Self::jit_get_zero_flag)
                 ; cmp al, true as _
                 ; je =>pass_label
                 ; jmp =>fail_label
             ),
             InstructionCondition::SignedGreaterOrEqual => dynasm!(assembler
-                ;; emit_get_sign(assembler)
+                ;; call_self!(assembler, Self::jit_get_sign_flag)
                 ; mov cl, al
-                ;; emit_get_overflow(assembler)
+                ;; call_self!(assembler, Self::jit_get_overflow_flag)
                 ; cmp al, cl
                 ; je =>pass_label
                 ; jmp =>fail_label
             ),
             InstructionCondition::SignedLessThan => dynasm!(assembler
-                ;; emit_get_sign(assembler)
+                ;; call_self!(assembler, Self::jit_get_sign_flag)
                 ; mov cl, al
-                ;; emit_get_overflow(assembler)
+                ;; call_self!(assembler, Self::jit_get_overflow_flag)
                 ; cmp al, cl
                 ; jne =>pass_label
                 ; jmp =>fail_label
             ),
             InstructionCondition::SignedGreaterThan => dynasm!(assembler
-                ;; emit_get_zero(assembler)
+                ;; call_self!(assembler, Self::jit_get_zero_flag)
                 ; cmp al, false as _
                 ; jne =>fail_label
-                ;; emit_get_sign(assembler)
+                ;; call_self!(assembler, Self::jit_get_sign_flag)
                 ; mov cl, al
-                ;; emit_get_overflow(assembler)
+                ;; call_self!(assembler, Self::jit_get_overflow_flag)
                 ; cmp al, cl
                 ; je =>pass_label
                 ; jmp =>fail_label
             ),
             InstructionCondition::SignedLessOrEqual => dynasm!(assembler
-                ;; emit_get_zero(assembler)
+                ;; call_self!(assembler, Self::jit_get_zero_flag)
                 ; cmp al, true as _
                 ; je =>pass_label
-                ;; emit_get_sign(assembler)
+                ;; call_self!(assembler, Self::jit_get_sign_flag)
                 ; mov cl, al
-                ;; emit_get_overflow(assembler)
+                ;; call_self!(assembler, Self::jit_get_overflow_flag)
                 ; cmp al, cl
                 ; jne =>pass_label
                 ; jmp =>fail_label
