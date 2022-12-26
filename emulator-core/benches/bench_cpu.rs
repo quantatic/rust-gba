@@ -20,7 +20,7 @@ pub fn basic_cpu_benchmark(c: &mut Criterion) {
                         Cpu::new(cartridge)
                     },
                     |cpu| {
-                        while cpu.cycle_count() < num_steps {
+                        while cpu.bus.cycle_count() < num_steps {
                             cpu.fetch_decode_execute();
                         }
                     },

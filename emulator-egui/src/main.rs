@@ -226,8 +226,8 @@ impl MyEguiApp {
 
                     match state {
                         EmulatorState::Running => {
-                            let cycle_start = cpu.cycle_count();
-                            'frame_loop: while (cpu.cycle_count() - cycle_start)
+                            let cycle_start = cpu.bus.cycle_count();
+                            'frame_loop: while (cpu.bus.cycle_count() - cycle_start)
                                 < (CYCLES_PER_SECOND / 60)
                             {
                                 for breakpoint in breakpoints.lock().unwrap().iter_mut() {
@@ -318,7 +318,7 @@ impl MyEguiApp {
 
                         *timer_info.lock().unwrap() = timer_infos;
                     }
-                    cycles_executed.store(cpu.cycle_count(), Ordering::SeqCst);
+                    cycles_executed.store(cpu.bus.cycle_count(), Ordering::SeqCst);
                 }
             });
         }

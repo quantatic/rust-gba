@@ -72,7 +72,6 @@ pub struct Cpu {
     r14_und: u32,
     spsr_und: u32,
     cpsr: u32,
-    cycle_count: u64,
     pub bus: Bus,
     prefetch_opcode: Option<u32>,
     pre_decode_arm: Option<ArmInstruction>,
@@ -143,16 +142,11 @@ impl Cpu {
             r14_und: 0,
             spsr_und: 0,
             cpsr,
-            cycle_count: 0,
             bus: Bus::new(cartridge),
             pre_decode_arm: None,
             prefetch_opcode: None,
             pre_decode_thumb: None,
         }
-    }
-
-    pub fn cycle_count(&self) -> u64 {
-        self.cycle_count
     }
 }
 
@@ -735,7 +729,7 @@ impl Cpu {
         let irq_wanted = !self.get_irq_disable() && self.bus.get_irq_pending();
         let pc = self.read_register(Register::R15, |pc| pc);
 
-        let cycles_taken = match self.get_instruction_mode() {
+        match self.get_instruction_mode() {
             InstructionSet::Arm => {
                 if pc % 4 != 0 {
                     unreachable!("unaligned ARM pc");
@@ -743,9 +737,6 @@ impl Cpu {
 
                 let decoded_instruction = self.pre_decode_arm;
                 let prefetched_opcode = self.prefetch_opcode;
-
-                self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(pc));
-                self.pre_decode_arm = prefetched_opcode.map(arm::decode_arm);
 
                 if let Some(decoded) = decoded_instruction {
                     // IRQ must only be dispatched when the pipeline is full.
@@ -763,17 +754,16 @@ impl Cpu {
                     // for the same reasons.
                     if irq_wanted {
                         self.handle_exception(ExceptionType::InterruptRequest);
-                        1
                     } else {
                         self.execute_arm(decoded);
-                        let cycle_info = decoded.instruction_type().cycles_info();
-
-                        let result = cycle_info.i + cycle_info.n + cycle_info.s;
-                        u8::max(result, 1)
                     }
                 } else {
+                    log::warn!("ARM prefetch buffer isn't full, just decoding this tick!");
+
+                    self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(pc));
+                    self.pre_decode_arm = prefetched_opcode.map(arm::decode_arm);
+
                     self.write_register(pc + 4, Register::R15);
-                    1
                 }
             }
             InstructionSet::Thumb => {
@@ -791,26 +781,14 @@ impl Cpu {
                 if let Some(decoded) = decoded_instruction {
                     if irq_wanted {
                         self.handle_exception(ExceptionType::InterruptRequest);
-                        1
                     } else {
                         self.execute_thumb(decoded);
-                        let cycle_info = decoded.instruction_type().cycles_info();
-
-                        let result = cycle_info.i + cycle_info.n + cycle_info.s;
-                        u8::max(result, 1)
                     }
                 } else {
                     self.write_register(pc + 2, Register::R15);
-                    1
                 }
             }
         };
-
-        for _ in 0..cycles_taken {
-            self.bus.step();
-        }
-
-        self.cycle_count += u64::from(cycles_taken);
     }
 
     fn flush_prefetch(&mut self) {
