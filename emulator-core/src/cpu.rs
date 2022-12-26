@@ -778,7 +778,7 @@ impl Cpu {
                             let jit = Rc::clone(jit);
                             jit.execute(self);
                         } else if let Some(jit) = Self::try_jit(decoded) {
-                            println!("new cached jit instruction: {:?}", decoded);
+                            // println!("new cached jit instruction: {:?}", decoded);
                             jit.execute(self);
                             self.jit_cache.insert(decoded, Rc::new(jit));
                         } else {
