@@ -168,13 +168,15 @@ impl Cartridge {
             Backup::Eeprom(eeprom) if offset > 0x1FFFF00 || (offset as usize) >= self.rom.len() => {
                 eeprom.read_hword()
             }
-            _ => {
-                let low_byte = self.read_rom_byte(offset);
-                let high_byte = self.read_rom_byte(offset + 1);
-
-                u16::from_le_bytes([low_byte, high_byte])
-            }
+            _ => self.read_rom_hword_debug(offset),
         }
+    }
+
+    pub fn read_rom_hword_debug(&self, offset: u32) -> u16 {
+        let low_byte = self.read_rom_byte(offset);
+        let high_byte = self.read_rom_byte(offset + 1);
+
+        u16::from_le_bytes([low_byte, high_byte])
     }
 
     pub fn read_rom_word(&self, offset: u32) -> u32 {
