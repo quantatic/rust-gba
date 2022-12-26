@@ -1269,13 +1269,13 @@ impl Lcd {
                             + (usize::from(tile_offset_y) * 4)
                             + (usize::from(tile_offset_x) / 2);
 
-                        let tile_data = self.vram[tile_idx];
-
                         // Ignore out of bounds tile reads, for now.
                         // TODO: Investigate the HW behavior of these OOB accesses.
                         if tile_idx >= self.vram.len() {
                             continue;
                         }
+
+                        let tile_data = self.vram[tile_idx];
 
                         let palette_idx_low = if tile_offset_x % 2 == 0 {
                             tile_data.get_bit_range(0..=3)
