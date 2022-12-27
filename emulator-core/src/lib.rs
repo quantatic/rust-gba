@@ -69,7 +69,7 @@ mod tests {
                 let cartridge = Cartridge::new(source.as_slice(), None).unwrap();
                 let mut cpu = Cpu::new(cartridge);
 
-                while cpu.bus.cycle_count() < 100_000_000 {
+                while cpu.bus.cycle_count() < 125_000_000 {
                     cpu.fetch_decode_execute();
                 }
 
