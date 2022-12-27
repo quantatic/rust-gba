@@ -753,7 +753,7 @@ impl Bus {
         result
     }
 
-    pub(super) fn read_byte_address_debug(&self, address: u32) -> u8 {
+    pub fn read_byte_address_debug(&self, address: u32) -> u8 {
         match address {
             Self::BIOS_BASE..=Self::BIOS_END => match self.bios_read_behavior {
                 BiosReadBehavior::PrefetchValue => self.open_bus_bios_data.get_data(address & 0b11),
@@ -1050,7 +1050,7 @@ impl Bus {
         }
     }
 
-    pub(super) fn read_halfword_address_debug(&self, address: u32) -> u16 {
+    pub fn read_halfword_address_debug(&self, address: u32) -> u16 {
         // SRAM uses unaligned address to read
         let unaligned_address = address;
         let aligned_address = Self::align_hword(unaligned_address);
@@ -1186,7 +1186,7 @@ impl Bus {
         result
     }
 
-    pub(super) fn read_word_address_debug(&self, address: u32) -> u32 {
+    pub fn read_word_address_debug(&self, address: u32) -> u32 {
         let unaligned_address = address;
         let aligned_address = Self::align_word(unaligned_address);
 

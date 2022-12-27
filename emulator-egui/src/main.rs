@@ -51,8 +51,15 @@ enum EmulatorState {
     Paused,
 }
 
+struct MemoryViewInfo {
+    offset: u32,
+    buffer: Box<[u8; 0x1000]>,
+}
+
 struct DisassemblyInfo {
     pc: u32,
+    buffer: Box<[Instruction; 0x1000]>,
+    instruction_width: u32,
 }
 
 struct RegisterValue {
@@ -104,6 +111,7 @@ struct TimerInfo {
 
 struct MyEguiApp {
     display_buffer: Arc<Mutex<[[Rgb555; Lcd::LCD_WIDTH]; Lcd::LCD_HEIGHT]>>,
+    memory_view_info: Arc<Mutex<MemoryViewInfo>>,
     disassembly_info: Arc<Mutex<DisassemblyInfo>>,
     registers_info: Arc<Mutex<Box<[RegisterValue]>>>,
     cpu_info: Arc<Mutex<CpuInfo>>,
@@ -125,7 +133,15 @@ impl MyEguiApp {
         let display_buffer = Arc::new(Mutex::new(
             [[Rgb555::default(); Lcd::LCD_WIDTH]; Lcd::LCD_HEIGHT],
         ));
-        let disassembly_info = Arc::new(Mutex::new(DisassemblyInfo { pc: 0x00000000 }));
+        let memory_view_info = Arc::new(Mutex::new(MemoryViewInfo {
+            buffer: Box::new([0; 0x1000]),
+            offset: 0x00000000,
+        }));
+        let disassembly_info = Arc::new(Mutex::new(DisassemblyInfo {
+            buffer: Box::new(array::from_fn(|_| Instruction::default())),
+            pc: 0x00000000,
+            instruction_width: 0,
+        }));
         let registers_info = Arc::new(Mutex::new(Box::new([]) as Box<[_]>));
         let cpu_info = Arc::new(Mutex::new(CpuInfo::default()));
         let breakpoints = Arc::new(Mutex::new(Vec::<BreakpointInfo>::new()));
@@ -139,6 +155,7 @@ impl MyEguiApp {
         {
             let display_buffer = Arc::clone(&display_buffer);
             let cycles_executed = Arc::clone(&cycles_executed);
+            let memory_view_info = Arc::clone(&memory_view_info);
             let disassembly_info = Arc::clone(&disassembly_info);
             let registers_info = Arc::clone(&registers_info);
             let cpu_info = Arc::clone(&cpu_info);
@@ -249,11 +266,27 @@ impl MyEguiApp {
                             .lock()
                             .unwrap()
                             .copy_from_slice(cpu.bus.lcd.get_buffer());
+                        {
+                            let mut memory_view_info_lock = memory_view_info.lock().unwrap();
+                            for offset in 0..memory_view_info_lock.buffer.len() {
+                                memory_view_info_lock.buffer[offset] =
+                                    cpu.bus.read_byte_address_debug(
+                                        memory_view_info_lock.offset + (offset as u32),
+                                    )
+                            }
+                        }
 
                         {
                             let executing_pc = cpu.get_executing_pc();
 
                             let mut disassembly_info_lock = disassembly_info.lock().unwrap();
+                            let instruction_width = cpu.get_instruction_width();
+                            for offset in 0..disassembly_info_lock.buffer.len() {
+                                disassembly_info_lock.buffer[offset] = cpu.disassemble(
+                                    executing_pc + ((offset as u32) * instruction_width),
+                                );
+                            }
+                            disassembly_info_lock.instruction_width = cpu.get_instruction_width();
                             disassembly_info_lock.pc = executing_pc;
                         }
 
@@ -328,6 +361,7 @@ impl MyEguiApp {
             emulator_command_sender,
             step_count: 1,
             cycles_executed,
+            memory_view_info,
             disassembly_info,
             registers_info,
             cpu_info,
@@ -416,6 +450,79 @@ impl MyEguiApp {
             .load_texture("gba-texture", image, TextureOptions::NEAREST);
 
         ui.image(texture.id(), ui.available_size());
+    }
+
+    fn memory_viewer(&self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Memory Address: ");
+            ui.add(
+                Slider::new(
+                    &mut self.memory_view_info.lock().unwrap().offset,
+                    0x00000000..=0xFFFFFFFF,
+                )
+                .step_by(16.)
+                .hexadecimal(8, false, true),
+            )
+        });
+
+        let mut view_string = String::new();
+        {
+            let memory_view_info_lock = self.memory_view_info.lock().unwrap();
+            let view_start = memory_view_info_lock.offset;
+            for (offset, value) in memory_view_info_lock.buffer.iter().copied().enumerate() {
+                if offset % 0x10 == 0 {
+                    view_string.push_str(&format!("{:08X}:", view_start + (offset as u32)))
+                }
+
+                view_string.push_str(&format!(" {:02X}", value));
+
+                if offset % 0x10 == 0xF {
+                    view_string.push('\n');
+                }
+            }
+        }
+
+        ScrollArea::vertical().show(ui, |ui| {
+            ui.add(
+                TextEdit::multiline(&mut view_string)
+                    .interactive(false)
+                    .font(TextStyle::Monospace)
+                    .layouter(&mut |ui, val, wrap_width| {
+                        ui.fonts().layout_no_wrap(
+                            val.to_string(),
+                            TextStyle::Monospace.resolve(ui.style()),
+                            ui.visuals().widgets.inactive.text_color(),
+                        )
+                    }),
+            );
+        });
+    }
+
+    fn disassembler(&self, ui: &mut Ui) {
+        let mut view_string = String::new();
+        {
+            let disassembly_info_lock = self.disassembly_info.lock().unwrap();
+            for (offset, instruction) in disassembly_info_lock.buffer.iter().enumerate() {
+                let address = disassembly_info_lock.pc
+                    + (disassembly_info_lock.instruction_width * (offset as u32));
+                view_string.push_str(&format!("{:08X}: {}\n", address, instruction));
+            }
+        }
+
+        ScrollArea::vertical().show(ui, |ui| {
+            ui.add(
+                TextEdit::multiline(&mut view_string)
+                    .interactive(false)
+                    .font(TextStyle::Monospace)
+                    .layouter(&mut |ui, val, wrap_width| {
+                        ui.fonts().layout_no_wrap(
+                            val.to_string(),
+                            TextStyle::Monospace.resolve(ui.style()),
+                            ui.visuals().widgets.inactive.text_color(),
+                        )
+                    }),
+            );
+        });
     }
 
     fn register_info(&self, ui: &mut Ui) {
@@ -602,6 +709,8 @@ impl eframe::App for MyEguiApp {
             };
         }
 
+        egui::Window::new("Memory Viewer").show(ctx, |ui| self.memory_viewer(ui));
+        egui::Window::new("Instruction Disassembler").show(ctx, |ui| self.disassembler(ui));
         egui::Window::new("Register Viewer").show(ctx, |ui| self.register_info(ui));
         egui::Window::new("CPU Info").show(ctx, |ui| self.cpu_info(ui));
         egui::Window::new("Debugger").show(ctx, |ui| self.debugger(ui));

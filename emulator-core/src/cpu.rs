@@ -739,6 +739,7 @@ impl Cpu {
                 let prefetched_opcode = self.prefetch_opcode;
 
                 if let Some(decoded) = decoded_instruction {
+                    // println!("{:?}", decoded);
                     // IRQ must only be dispatched when the pipeline is full.
                     //
                     // The return value we push in the IRQ handler is based on the current value of
@@ -758,8 +759,6 @@ impl Cpu {
                         self.execute_arm(decoded);
                     }
                 } else {
-                    log::warn!("ARM prefetch buffer isn't full, just decoding this tick!");
-
                     self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(pc));
                     self.pre_decode_arm = prefetched_opcode.map(arm::decode_arm);
 
@@ -774,10 +773,6 @@ impl Cpu {
                 let decoded_instruction = self.pre_decode_thumb;
                 let prefetched_opcode = self.prefetch_opcode;
 
-                self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(pc)));
-                self.pre_decode_thumb =
-                    prefetched_opcode.map(|prefetch| thumb::decode_thumb(prefetch as u16));
-
                 if let Some(decoded) = decoded_instruction {
                     if irq_wanted {
                         self.handle_exception(ExceptionType::InterruptRequest);
@@ -785,6 +780,10 @@ impl Cpu {
                         self.execute_thumb(decoded);
                     }
                 } else {
+                    self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(pc)));
+                    self.pre_decode_thumb =
+                        prefetched_opcode.map(|prefetch| thumb::decode_thumb(prefetch as u16));
+
                     self.write_register(pc + 2, Register::R15);
                 }
             }
@@ -1048,6 +1047,21 @@ impl Cpu {
 
 // Methods intended for external introspection
 impl Cpu {
+    pub fn disassemble(&self, address: u32) -> Instruction {
+        match self.get_instruction_mode() {
+            InstructionSet::Arm => {
+                let opcode = self.bus.read_word_address_debug(address);
+                let instruction = arm::decode_arm(opcode);
+                Instruction::ArmInstruction(instruction)
+            }
+            InstructionSet::Thumb => {
+                let opcode = self.bus.read_halfword_address_debug(address) as u16;
+                let instruction = thumb::decode_thumb(opcode);
+                Instruction::ThumbInstruction(instruction)
+            }
+        }
+    }
+
     pub fn get_instruction_width(&self) -> u32 {
         match self.get_instruction_mode() {
             InstructionSet::Arm => 4,
