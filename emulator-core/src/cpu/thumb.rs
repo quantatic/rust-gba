@@ -1464,9 +1464,6 @@ impl Cpu {
         self.set_sign_flag(signed_result < 0);
         self.set_zero_flag(unsigned_result == 0);
 
-        // Assert that we never write out to R15 -- if we did, we would have to flush prefetch in this case
-        assert!(!matches!(destination_register, Register::R15));
-
         if matches!(
             operation,
             ThumbRegisterOperation::Lsl
@@ -1488,6 +1485,9 @@ impl Cpu {
         ) {
             self.write_register(unsigned_result, destination_register);
         }
+
+        // Assert that we never write out to R15 -- if we did, we would have to flush prefetch in this case
+        assert!(!matches!(destination_register, Register::R15));
 
         self.write_register(old_pc + 2, Register::R15);
     }
@@ -1654,7 +1654,6 @@ impl Cpu {
         self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
 
         if self.evaluate_instruction_condition(condition) {
-            let old_pc = self.read_register(Register::R15, |pc| pc);
             let new_pc = old_pc.wrapping_add(offset as u32);
             self.write_register(new_pc, Register::R15);
 
@@ -1689,14 +1688,13 @@ impl Cpu {
         self.pre_decode_thumb = self.prefetch_opcode.map(|op| decode_thumb(op as u16));
         self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
 
-        let old_pc = self.read_register(Register::R15, |pc| pc);
         let old_lr = self.read_register(Register::R14, |_| unreachable!());
 
         let new_pc = old_lr.wrapping_add(u32::from(offset));
         let new_lr = (old_pc - 2) | 1;
 
-        self.write_register(new_pc, Register::R15);
         self.write_register(new_lr, Register::R14);
+        self.write_register(new_pc, Register::R15);
 
         self.pre_decode_thumb = Some(decode_thumb(self.bus.fetch_thumb_opcode(new_pc)));
         self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(new_pc + 2)));
@@ -1722,24 +1720,24 @@ impl Cpu {
 
         let new_pc = operand_value & (!1);
 
-        self.write_register(new_pc, Register::R15);
-
         match self.get_instruction_mode() {
             InstructionSet::Arm => {
                 // still cycle 2
-                self.write_register(new_pc + 8, Register::R15);
                 self.pre_decode_arm = Some(decode_arm(self.bus.fetch_arm_opcode(new_pc)));
 
                 // cycle 3
                 self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(new_pc + 4));
+
+                self.write_register(new_pc + 8, Register::R15);
             }
             InstructionSet::Thumb => {
                 // still cycle 2
-                self.write_register(new_pc + 4, Register::R15);
                 self.pre_decode_thumb = Some(decode_thumb(self.bus.fetch_thumb_opcode(new_pc)));
 
                 // cycle 3
                 self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(new_pc + 2)));
+
+                self.write_register(new_pc + 4, Register::R15);
             }
         };
     }
@@ -1948,42 +1946,6 @@ impl Cpu {
         // Ensure that the base register can never be R15, so we can unconditionally just increment PC.
         assert!(!matches!(dest_register, Register::R15));
         self.write_register(old_pc + 2, Register::R15);
-    }
-
-    fn execute_thumb_swi(&mut self) {
-        log::trace!("HANDLING Thumb SWI!");
-
-        // step 1: prefetch, but don't bother saving it anywhere.
-        let old_pc = self.read_register(Register::R15, |pc| pc);
-        self.bus.fetch_thumb_opcode(old_pc);
-
-        // SVC (SWI) Exception
-        //
-        // Determine return information. SPSR is to be the current CPSR, after changing the IT[]
-        // bits to give them the correct values for the following instruction, and LR is to be
-        // the current PC minus 2 for Thumb or 4 for ARM, to change the PC offsets of 4 or 8
-        // respectively from the address of the current instruction into the required address of
-        // the next instruction, the SVC instruction having size 2bytes for Thumb or 4 bytes for ARM.
-        let pc_offset = |pc| pc - 2;
-
-        let saved_pc = self.read_register(Register::R15, pc_offset);
-        let saved_flags = self.read_register(Register::Cpsr, |_| unreachable!());
-
-        self.set_cpu_state_bit(false);
-
-        self.set_cpu_mode(CpuMode::Supervisor);
-
-        // save old pc in new mode lr, old cpsr in new mode spsr
-        self.current_registers.r14 = saved_pc;
-        self.current_registers.spsr = saved_flags;
-
-        self.set_irq_disable(true);
-
-        let new_pc = Self::get_exception_vector_address(ExceptionType::Swi);
-
-        self.write_register(new_pc + 4, Register::R15);
-        self.pre_decode_thumb = Some(decode_thumb(self.bus.fetch_thumb_opcode(new_pc)));
-        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(new_pc + 2)));
     }
 }
 

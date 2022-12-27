@@ -78,7 +78,7 @@ fn main() -> Result<()> {
     let init = Instant::now();
     let mut last_step = Instant::now();
     let mut i = 0;
-    // for _ in 0..74_500_000 {
+    // for _ in 0..62_000_000 {
     //     cpu.fetch_decode_execute();
     // }
 

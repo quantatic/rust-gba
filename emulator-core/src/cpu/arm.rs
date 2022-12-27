@@ -1439,7 +1439,7 @@ impl Cpu {
                     operand_register_rm,
                     operand_register_rs,
                 ),
-                ArmInstructionType::Swi { comment: _ } => self.execute_arm_swi(),
+                ArmInstructionType::Swi { comment: _ } => self.handle_exception(ExceptionType::Swi),
                 ArmInstructionType::Swp {
                     access_size,
                     base_register,
@@ -1695,18 +1695,19 @@ impl Cpu {
             if matches!(destination_operand, Register::R15) {
                 match self.get_instruction_mode() {
                     InstructionSet::Arm => {
-                        self.write_register(unsigned_result + 8, Register::R15);
-
                         self.pre_decode_arm =
                             Some(decode_arm(self.bus.fetch_arm_opcode(unsigned_result)));
                         self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(unsigned_result + 4));
+
+                        self.write_register(unsigned_result + 8, Register::R15);
                     }
                     InstructionSet::Thumb => {
-                        self.write_register(unsigned_result + 4, Register::R15);
-
                         self.pre_decode_thumb =
                             Some(decode_thumb(self.bus.fetch_thumb_opcode(unsigned_result)));
-                        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(unsigned_result + 2));
+                        self.prefetch_opcode =
+                            Some(u32::from(self.bus.fetch_thumb_opcode(unsigned_result + 2)));
+
+                        self.write_register(unsigned_result + 4, Register::R15);
                     }
                 }
             } else {
@@ -1776,19 +1777,21 @@ impl Cpu {
         match self.get_instruction_mode() {
             InstructionSet::Arm => {
                 // still cycle 2
-                self.write_register(new_pc + 8, Register::R15);
                 self.pre_decode_arm = Some(decode_arm(self.bus.fetch_arm_opcode(new_pc)));
 
                 // cycle 3
                 self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(new_pc + 4));
+
+                self.write_register(new_pc + 8, Register::R15);
             }
             InstructionSet::Thumb => {
                 // still cycle 2
-                self.write_register(new_pc + 4, Register::R15);
                 self.pre_decode_thumb = Some(decode_thumb(self.bus.fetch_thumb_opcode(new_pc)));
 
                 // cycle 3
                 self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(new_pc + 2)));
+
+                self.write_register(new_pc + 4, Register::R15);
             }
         };
     }
@@ -2443,42 +2446,6 @@ impl Cpu {
         }
 
         self.write_register(old_pc + 4, Register::R15);
-    }
-
-    fn execute_arm_swi(&mut self) {
-        log::trace!("HANDLING ARM SWI!");
-
-        // step 1: prefetch, but don't bother saving it anywhere.
-        let old_pc = self.read_register(Register::R15, |pc| pc);
-        self.bus.fetch_arm_opcode(old_pc);
-
-        // SVC (SWI) Exception
-        //
-        // Determine return information. SPSR is to be the current CPSR, after changing the IT[]
-        // bits to give them the correct values for the following instruction, and LR is to be
-        // the current PC minus 2 for Thumb or 4 for ARM, to change the PC offsets of 4 or 8
-        // respectively from the address of the current instruction into the required address of
-        // the next instruction, the SVC instruction having size 2bytes for Thumb or 4 bytes for ARM.
-        let pc_offset = |pc| pc - 4;
-
-        let saved_pc = self.read_register(Register::R15, pc_offset);
-        let saved_flags = self.read_register(Register::Cpsr, |_| unreachable!());
-
-        self.set_cpu_state_bit(false);
-
-        self.set_cpu_mode(CpuMode::Supervisor);
-
-        // save old pc in new mode lr, old cpsr in new mode spsr
-        self.current_registers.r14 = saved_pc;
-        self.current_registers.spsr = saved_flags;
-
-        self.set_irq_disable(true);
-
-        let new_pc = Self::get_exception_vector_address(ExceptionType::Swi);
-
-        self.write_register(new_pc + 8, Register::R15);
-        self.pre_decode_arm = Some(decode_arm(self.bus.fetch_arm_opcode(new_pc)));
-        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(new_pc + 4));
     }
 
     fn execute_arm_swp(

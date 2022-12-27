@@ -6,6 +6,7 @@ use std::{fmt::Debug, ops::RangeInclusive};
 
 use crate::bus::Bus;
 use crate::cartridge::Cartridge;
+use crate::cpu::arm::decode_arm;
 use crate::BitManipulation;
 
 use self::arm::ArmInstruction;
@@ -759,6 +760,7 @@ impl Cpu {
                         self.execute_arm(decoded);
                     }
                 } else {
+                    log::error!("ARM prefetch buffer is empty, refilling");
                     self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(pc));
                     self.pre_decode_arm = prefetched_opcode.map(arm::decode_arm);
 
@@ -780,6 +782,7 @@ impl Cpu {
                         self.execute_thumb(decoded);
                     }
                 } else {
+                    log::error!("Thumb prefetch buffer is empty, refilling");
                     self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(pc)));
                     self.pre_decode_thumb =
                         prefetched_opcode.map(|prefetch| thumb::decode_thumb(prefetch as u16));
@@ -788,13 +791,6 @@ impl Cpu {
                 }
             }
         };
-    }
-
-    fn flush_prefetch(&mut self) {
-        self.pre_decode_arm = None;
-        self.pre_decode_thumb = None;
-
-        self.prefetch_opcode = None;
     }
 
     fn handle_exception(&mut self, exception_type: ExceptionType) {
@@ -858,8 +854,10 @@ impl Cpu {
         }
 
         let new_pc = Self::get_exception_vector_address(exception_type);
-        self.write_register(new_pc, Register::R15);
-        self.flush_prefetch();
+
+        self.pre_decode_arm = Some(decode_arm(self.bus.fetch_arm_opcode(new_pc)));
+        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(new_pc + 4));
+        self.write_register(new_pc + 8, Register::R15);
     }
 
     fn get_exception_vector_address(exception_type: ExceptionType) -> u32 {
