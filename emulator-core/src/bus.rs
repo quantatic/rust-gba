@@ -22,10 +22,11 @@ enum BiosReadBehavior {
 pub struct Bus {
     chip_wram: Box<[u8; 0x8000]>,
     board_wram: Box<[u8; 0x40000]>,
-    cycle_count: usize,
+    cycle_count: u64,
     interrupt_master_enable: u16,
     interrupt_enable: u16,
     interrupt_request: [u16; Self::IRQ_SYNC_BUFFER], // active IRQ is at end
+    waitstate_control: u32,
     dma_infos: [DmaInfo; 4],
     pub timers: [Timer; 4],
     pub open_bus_data: u32,
@@ -39,7 +40,13 @@ pub struct Bus {
 }
 
 impl Bus {
-    pub const IRQ_SYNC_BUFFER: usize = 4; // causes a 3-cycle delay
+    pub fn cycle_count(&self) -> u64 {
+        self.cycle_count
+    }
+}
+
+impl Bus {
+    pub const IRQ_SYNC_BUFFER: usize = 4; // sync buffer of 4 means IRQ is delayed by 3 cycles.
 
     pub fn new(cartridge: Cartridge) -> Self {
         Self {
@@ -49,6 +56,7 @@ impl Bus {
             interrupt_master_enable: 0,
             interrupt_enable: 0,
             interrupt_request: [0; Self::IRQ_SYNC_BUFFER],
+            waitstate_control: 0,
             dma_infos: [
                 DmaInfo::dma_0(),
                 DmaInfo::dma_1(),
@@ -107,7 +115,11 @@ struct DmaInfo {
     word_count_mask: u16,
 
     dma_control: u16,
-    dma_ongoing: bool,
+
+    // Whether or not to handle DMA at the next chance.
+    // This may be false _while_ the DMA is ongoing, this flag is only true if we want to _start_
+    // the DMA.
+    dma_requested: bool,
 
     read_latch: u32, // DMA open bus returns last read value, not standard open bus value
 }
@@ -125,7 +137,7 @@ impl DmaInfo {
             word_count_mask: 0x3FFF,
 
             dma_control: Default::default(),
-            dma_ongoing: false,
+            dma_requested: false,
 
             read_latch: Default::default(),
         }
@@ -143,7 +155,7 @@ impl DmaInfo {
             word_count_mask: 0x3FFF,
 
             dma_control: Default::default(),
-            dma_ongoing: false,
+            dma_requested: false,
 
             read_latch: Default::default(),
         }
@@ -161,7 +173,7 @@ impl DmaInfo {
             word_count_mask: 0x3FFF,
 
             dma_control: Default::default(),
-            dma_ongoing: false,
+            dma_requested: false,
 
             read_latch: Default::default(),
         }
@@ -179,7 +191,7 @@ impl DmaInfo {
             word_count_mask: 0xFFFF,
 
             dma_control: Default::default(),
-            dma_ongoing: false,
+            dma_requested: false,
 
             read_latch: Default::default(),
         }
@@ -246,7 +258,7 @@ impl DmaInfo {
             && self.get_dma_enable()
             && matches!(self.get_dma_start_timing(), DmaStartTiming::Immediately)
         {
-            self.dma_ongoing = true;
+            self.dma_requested = true;
         }
     }
 }
@@ -328,12 +340,12 @@ impl DmaInfo {
         self.dma_control = self.dma_control.set_bit(Self::DMA_ENABLE_BIT_INDEX, set);
     }
 
-    fn get_dma_ongoing(&self) -> bool {
-        self.dma_ongoing
+    fn get_dma_requested(&self) -> bool {
+        self.dma_requested
     }
 
-    fn set_dma_ongoing(&mut self, set: bool) {
-        self.dma_ongoing = set;
+    fn set_dma_requested(&mut self, set: bool) {
+        self.dma_requested = set;
     }
 }
 
@@ -379,14 +391,14 @@ impl Bus {
     }
 
     fn is_rom(address: u32) -> bool {
+        let wait_state_0 =
+            (Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END).contains(&address);
         let wait_state_1 =
             (Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END).contains(&address);
         let wait_state_2 =
             (Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END).contains(&address);
-        let wait_state_3 =
-            (Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END).contains(&address);
 
-        wait_state_1 | wait_state_2 | wait_state_3
+        wait_state_0 | wait_state_1 | wait_state_2
     }
 
     pub(super) fn fetch_arm_opcode(&mut self, address: u32) -> u32 {
@@ -421,6 +433,9 @@ impl Bus {
     const CHIP_WRAM_BASE: u32 = 0x03000000;
     const CHIP_WRAM_END: u32 = 0x03FFFFFF;
     const CHIP_WRAM_SIZE: u32 = 0x00008000;
+
+    const IO_REGISTER_BASE: u32 = 0x04000000;
+    const IO_REGISTER_END: u32 = 0x040003FE;
 
     const LCD_CONTROL_BASE: u32 = 0x04000000;
     const LCD_CONTROL_END: u32 = Self::LCD_CONTROL_BASE + 1;
@@ -635,8 +650,8 @@ impl Bus {
     const INTERRUPT_REQUEST_BASE: u32 = 0x04000202;
     const INTERRUPT_REQUEST_END: u32 = Self::INTERRUPT_REQUEST_BASE + 1;
 
-    const GAME_PAK_WAITSTATE_BASE: u32 = 0x04000204;
-    const GAME_PAK_WAITSTATE_END: u32 = Self::GAME_PAK_WAITSTATE_BASE + 1;
+    const WAITSTATE_CONTROL_BASE: u32 = 0x04000204;
+    const WAITSTATE_CONTROL_END: u32 = Self::WAITSTATE_CONTROL_BASE + 3;
 
     const INTERRUPT_MASTER_ENABLE_BASE: u32 = 0x04000208;
     const INTERRUPT_MASTER_ENABLE_END: u32 = Self::INTERRUPT_MASTER_ENABLE_BASE + 1;
@@ -664,14 +679,14 @@ impl Bus {
     const OAM_END: u32 = 0x07FFFFFF;
     const OAM_SIZE: u32 = 0x00000400;
 
-    const WAIT_STATE_1_ROM_BASE: u32 = 0x08000000;
-    const WAIT_STATE_1_ROM_END: u32 = 0x09FFFFFF;
+    const WAIT_STATE_0_ROM_BASE: u32 = 0x08000000;
+    const WAIT_STATE_0_ROM_END: u32 = 0x09FFFFFF;
 
-    const WAIT_STATE_2_ROM_BASE: u32 = 0x0A000000;
-    const WAIT_STATE_2_ROM_END: u32 = 0x0BFFFFFF;
+    const WAIT_STATE_1_ROM_BASE: u32 = 0x0A000000;
+    const WAIT_STATE_1_ROM_END: u32 = 0x0BFFFFFF;
 
-    const WAIT_STATE_3_ROM_BASE: u32 = 0x0C000000;
-    const WAIT_STATE_3_ROM_END: u32 = 0x0DFFFFFF;
+    const WAIT_STATE_2_ROM_BASE: u32 = 0x0C000000;
+    const WAIT_STATE_2_ROM_END: u32 = 0x0DFFFFFF;
 
     const GAME_PAK_SRAM_BASE: u32 = 0x0E000000;
     const GAME_PAK_SRAM_END: u32 = 0x0FFFFFFF;
@@ -686,27 +701,88 @@ impl Bus {
     }
 
     pub(super) fn read_byte_address(&mut self, address: u32) -> u8 {
-        let result = self.read_byte_address_debug(address);
         match address {
-            Self::BIOS_BASE..=Self::BIOS_END => match self.bios_read_behavior {
-                BiosReadBehavior::PrefetchValue => {}
-                BiosReadBehavior::TrueValue => {
-                    self.open_bus_bios_data = self.read_word_address_debug(address);
-                }
-            },
+            Self::BIOS_BASE..=Self::BIOS_END => {
+                self.step();
+                let result = self.read_byte_address_debug(address);
+
+                match self.bios_read_behavior {
+                    BiosReadBehavior::PrefetchValue => {}
+                    BiosReadBehavior::TrueValue => {
+                        self.open_bus_bios_data = self.read_word_address_debug(address);
+                    }
+                };
+                result
+            }
             Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
+                self.step();
+                let result = self.read_byte_address_debug(address);
+
                 // IWRAM only latches incoming data and leaves all other data as-is.
                 self.open_bus_iwram_data =
                     self.open_bus_iwram_data.set_data(result, address & 0b11);
                 self.open_bus_data = self.open_bus_iwram_data;
+                result
             }
-            _ => {}
-        };
+            Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
+                self.step();
+                self.step();
+                self.step();
+                self.read_byte_address_debug(address)
+            }
+            Self::IO_REGISTER_BASE..=Self::IO_REGISTER_END => {
+                self.step();
+                self.read_byte_address_debug(address)
+            }
+            Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
+                self.step();
+                self.read_byte_address_debug(address)
+            }
+            Self::VRAM_BASE..=Self::VRAM_END => {
+                self.step();
+                self.read_byte_address_debug(address)
+            }
+            Self::OAM_BASE..=Self::OAM_END => {
+                self.step();
+                self.read_byte_address_debug(address)
+            }
+            Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => {
+                for _ in 0..self.get_rom_0_wait_state() {
+                    self.step();
+                }
 
-        result
+                self.read_byte_address_debug(address)
+            }
+            Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
+                for _ in 0..self.get_rom_1_wait_state() {
+                    self.step();
+                }
+
+                self.read_byte_address_debug(address)
+            }
+            Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
+                for _ in 0..self.get_rom_2_wait_state() {
+                    self.step();
+                }
+
+                self.read_byte_address_debug(address)
+            }
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
+                for _ in 0..self.get_sram_wait_state() {
+                    self.step();
+                }
+
+                self.read_byte_address_debug(address)
+            }
+            _ => {
+                // open bus read
+                self.step();
+                self.read_byte_address_debug(address)
+            }
+        }
     }
 
-    pub(super) fn read_byte_address_debug(&self, address: u32) -> u8 {
+    pub fn read_byte_address_debug(&self, address: u32) -> u8 {
         match address {
             Self::BIOS_BASE..=Self::BIOS_END => match self.bios_read_behavior {
                 BiosReadBehavior::PrefetchValue => self.open_bus_bios_data.get_data(address & 0b11),
@@ -842,9 +918,8 @@ impl Bus {
                 log::debug!("READ from {:08X}", address);
                 0
             }
-            Self::GAME_PAK_WAITSTATE_BASE..=Self::GAME_PAK_WAITSTATE_END => {
-                log::debug!("stubbed read game_pak[{}]", address & 0b1);
-                0
+            Self::WAITSTATE_CONTROL_BASE..=Self::WAITSTATE_CONTROL_END => {
+                self.read_waitstate_control(address & 0b11)
             }
             Self::INTERRUPT_MASTER_ENABLE_BASE..=Self::INTERRUPT_MASTER_ENABLE_END => {
                 self.read_interrupt_master_enable(address & 0b1)
@@ -873,15 +948,15 @@ impl Bus {
                 let offset = (address - Self::OAM_BASE) % Self::OAM_SIZE;
                 self.lcd.read_oam_byte(offset)
             }
+            Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => self
+                .cartridge
+                .read_rom_byte(address - Self::WAIT_STATE_0_ROM_BASE),
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => self
                 .cartridge
                 .read_rom_byte(address - Self::WAIT_STATE_1_ROM_BASE),
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => self
                 .cartridge
                 .read_rom_byte(address - Self::WAIT_STATE_2_ROM_BASE),
-            Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => self
-                .cartridge
-                .read_rom_byte(address - Self::WAIT_STATE_3_ROM_BASE),
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
                 let offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
                 self.cartridge.read_sram_byte(offset)
@@ -895,9 +970,11 @@ impl Bus {
     }
 
     pub(super) fn read_halfword_address(&mut self, address: u32) -> u16 {
-        let debug_result = self.read_halfword_address_debug(address);
         match address {
             Self::BIOS_BASE..=Self::BIOS_END => {
+                self.step();
+                let result = self.read_halfword_address_debug(address);
+
                 match self.bios_read_behavior {
                     BiosReadBehavior::PrefetchValue => {}
                     BiosReadBehavior::TrueValue => {
@@ -905,34 +982,72 @@ impl Bus {
                         self.open_bus_bios_data = word_read;
                     }
                 };
-                debug_result
+                result
+            }
+            Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
+                self.step();
+                self.step();
+                self.step();
+                let result = self.read_halfword_address_debug(address);
+
+                self.open_bus_data = (u32::from(result) << u16::BITS) | u32::from(result);
+                result
             }
             Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
+                self.step();
+                let result = self.read_halfword_address_debug(address);
+
                 // IWRAM only latches incoming data and leaves all other data as-is.
                 self.open_bus_iwram_data = self
                     .open_bus_iwram_data
-                    .set_data(debug_result, (address & 0b10) >> 1);
+                    .set_data(result, (address & 0b10) >> 1);
 
                 self.open_bus_data = self.open_bus_iwram_data;
-                debug_result
+                result
             }
-            Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
-                self.open_bus_data =
-                    (u32::from(debug_result) << u16::BITS) | u32::from(debug_result);
-                debug_result
+            Self::IO_REGISTER_BASE..=Self::IO_REGISTER_END => {
+                self.step();
+                self.read_halfword_address_debug(address)
             }
             Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
-                self.open_bus_data =
-                    (u32::from(debug_result) << u16::BITS) | u32::from(debug_result);
-                debug_result
+                self.step();
+                let result = self.read_halfword_address_debug(address);
+
+                self.open_bus_data = (u32::from(result) << u16::BITS) | u32::from(result);
+                result
             }
             Self::VRAM_BASE..=Self::VRAM_END => {
-                self.open_bus_data =
-                    (u32::from(debug_result) << u16::BITS) | u32::from(debug_result);
-                debug_result
+                self.step();
+                let result = self.read_halfword_address_debug(address);
+
+                self.open_bus_data = (u32::from(result) << u16::BITS) | u32::from(result);
+                result
+            }
+            Self::OAM_BASE..=Self::OAM_END => {
+                self.step();
+                self.read_halfword_address_debug(address)
             }
             // for ROM reads, return real read result instead
+            Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => {
+                for _ in 0..self.get_rom_0_wait_state() {
+                    self.step();
+                }
+
+                let unaligned_address = address;
+                let aligned_address = Self::align_hword(unaligned_address);
+
+                let result = self
+                    .cartridge
+                    .read_rom_hword(aligned_address - Self::WAIT_STATE_0_ROM_BASE);
+
+                self.open_bus_data = (u32::from(result) << u16::BITS) | u32::from(result);
+                result
+            }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
+                for _ in 0..self.get_rom_1_wait_state() {
+                    self.step();
+                }
+
                 let unaligned_address = address;
                 let aligned_address = Self::align_hword(unaligned_address);
 
@@ -944,6 +1059,10 @@ impl Bus {
                 result
             }
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
+                for _ in 0..self.get_rom_2_wait_state() {
+                    self.step();
+                }
+
                 let unaligned_address = address;
                 let aligned_address = Self::align_hword(unaligned_address);
 
@@ -954,22 +1073,22 @@ impl Bus {
                 self.open_bus_data = (u32::from(result) << u16::BITS) | u32::from(result);
                 result
             }
-            Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => {
-                let unaligned_address = address;
-                let aligned_address = Self::align_hword(unaligned_address);
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
+                for _ in 0..self.get_sram_wait_state() {
+                    self.step();
+                }
 
-                let result = self
-                    .cartridge
-                    .read_rom_hword(aligned_address - Self::WAIT_STATE_3_ROM_BASE);
-
-                self.open_bus_data = (u32::from(result) << u16::BITS) | u32::from(result);
-                result
+                self.read_halfword_address_debug(address)
             }
-            _ => debug_result,
+            _ => {
+                // open bus read
+                self.step();
+                self.read_halfword_address_debug(address)
+            }
         }
     }
 
-    pub(super) fn read_halfword_address_debug(&self, address: u32) -> u16 {
+    pub fn read_halfword_address_debug(&self, address: u32) -> u16 {
         // SRAM uses unaligned address to read
         let unaligned_address = address;
         let aligned_address = Self::align_hword(unaligned_address);
@@ -1019,15 +1138,15 @@ impl Bus {
                 let offset = (aligned_address - Self::OAM_BASE) % Self::OAM_SIZE;
                 self.lcd.read_oam_hword(offset)
             }
+            Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => self
+                .cartridge
+                .read_rom_hword_debug(aligned_address - Self::WAIT_STATE_0_ROM_BASE),
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => self
                 .cartridge
                 .read_rom_hword_debug(aligned_address - Self::WAIT_STATE_1_ROM_BASE),
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => self
                 .cartridge
                 .read_rom_hword_debug(aligned_address - Self::WAIT_STATE_2_ROM_BASE),
-            Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => self
-                .cartridge
-                .read_rom_hword_debug(aligned_address - Self::WAIT_STATE_3_ROM_BASE),
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
                 let offset =
                     (unaligned_address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
@@ -1044,23 +1163,90 @@ impl Bus {
     }
 
     pub(super) fn read_word_address(&mut self, address: u32) -> u32 {
-        let result = self.read_word_address_debug(address);
+        let result = match address {
+            Self::BIOS_BASE..=Self::BIOS_END => {
+                self.step();
+                let result = self.read_word_address_debug(address);
 
-        match address {
-            Self::BIOS_BASE..=Self::BIOS_END => match self.bios_read_behavior {
-                BiosReadBehavior::PrefetchValue => {}
-                BiosReadBehavior::TrueValue => {
-                    self.open_bus_bios_data = result;
+                match self.bios_read_behavior {
+                    BiosReadBehavior::PrefetchValue => {}
+                    BiosReadBehavior::TrueValue => {
+                        self.open_bus_bios_data = result;
+                    }
+                };
+
+                result
+            }
+            Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
+                self.step();
+                self.step();
+                self.step();
+                self.step();
+                self.step();
+                self.step();
+                self.read_word_address_debug(address)
+            }
+            Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
+                self.step();
+                self.read_word_address_debug(address)
+            }
+            Self::IO_REGISTER_BASE..=Self::IO_REGISTER_END => {
+                self.step();
+                self.read_word_address_debug(address)
+            }
+            Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
+                self.step();
+                self.step();
+                self.read_word_address_debug(address)
+            }
+            Self::OAM_BASE..=Self::OAM_END => {
+                self.step();
+                self.read_word_address_debug(address)
+            }
+            Self::VRAM_BASE..=Self::VRAM_END => {
+                self.step();
+                self.step();
+                self.read_word_address_debug(address)
+            }
+            Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => {
+                for _ in 0..self.get_rom_0_wait_state() {
+                    self.step();
                 }
-            },
-            _ => {}
+
+                self.read_word_address_debug(address)
+            }
+            Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
+                for _ in 0..self.get_rom_1_wait_state() {
+                    self.step();
+                }
+
+                self.read_word_address_debug(address)
+            }
+            Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
+                for _ in 0..self.get_rom_2_wait_state() {
+                    self.step();
+                }
+
+                self.read_word_address_debug(address)
+            }
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
+                for _ in 0..self.get_sram_wait_state() {
+                    self.step();
+                }
+                self.read_word_address_debug(address)
+            }
+            _ => {
+                // open bus
+                self.step();
+                self.read_word_address_debug(address)
+            }
         };
 
         self.open_bus_data = result;
         result
     }
 
-    pub(super) fn read_word_address_debug(&self, address: u32) -> u32 {
+    pub fn read_word_address_debug(&self, address: u32) -> u32 {
         let unaligned_address = address;
         let aligned_address = Self::align_word(unaligned_address);
 
@@ -1117,15 +1303,15 @@ impl Bus {
                 let offset = (aligned_address - Self::OAM_BASE) % Self::OAM_SIZE;
                 self.lcd.read_oam_word(offset)
             }
+            Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => self
+                .cartridge
+                .read_rom_word(aligned_address - Self::WAIT_STATE_0_ROM_BASE),
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => self
                 .cartridge
                 .read_rom_word(aligned_address - Self::WAIT_STATE_1_ROM_BASE),
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => self
                 .cartridge
                 .read_rom_word(aligned_address - Self::WAIT_STATE_2_ROM_BASE),
-            Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => self
-                .cartridge
-                .read_rom_word(aligned_address - Self::WAIT_STATE_3_ROM_BASE),
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
                 let offset =
                     (unaligned_address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
@@ -1146,12 +1332,55 @@ impl Bus {
     }
 
     pub(super) fn write_byte_address(&mut self, value: u8, address: u32) {
-        let address = address;
-
         match address {
             Self::BIOS_BASE..=Self::BIOS_END => {
-                log::debug!("{:02X} -> ignored BIOS write", value)
+                self.step();
             }
+            Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
+                self.step();
+                self.step();
+                self.step();
+            }
+            Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
+                self.step();
+
+                // IWRAM only latches incoming data and leaves all other data as-is.
+                self.open_bus_iwram_data = self.open_bus_iwram_data.set_data(value, address & 0b11);
+
+                self.open_bus_data = self.open_bus_iwram_data;
+            }
+            Self::VRAM_BASE..=Self::VRAM_END => {}
+            Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {}
+            Self::OAM_BASE..=Self::OAM_END => {
+                self.step();
+            }
+            Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => {
+                for _ in 0..self.get_rom_0_wait_state() {
+                    self.step();
+                }
+            }
+            Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
+                for _ in 0..self.get_rom_1_wait_state() {
+                    self.step();
+                }
+            }
+            Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
+                for _ in 0..self.get_rom_2_wait_state() {
+                    self.step();
+                }
+            }
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
+                for _ in 0..self.get_sram_wait_state() {
+                    self.step();
+                }
+            }
+            _ => {}
+        };
+        self.write_byte_address_debug(value, address);
+    }
+
+    pub fn write_byte_address_debug(&mut self, value: u8, address: u32) {
+        match address {
             Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
                 let actual_offset = (address - Self::BOARD_WRAM_BASE) % Self::BOARD_WRAM_SIZE;
                 self.board_wram[actual_offset as usize] = value;
@@ -1159,11 +1388,6 @@ impl Bus {
             Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
                 let actual_offset = (address - Self::CHIP_WRAM_BASE) % Self::CHIP_WRAM_SIZE;
                 self.chip_wram[actual_offset as usize] = value;
-
-                // IWRAM only latches incoming data and leaves all other data as-is.
-                self.open_bus_iwram_data = self.open_bus_iwram_data.set_data(value, address & 0b11);
-
-                self.open_bus_data = self.open_bus_iwram_data;
             }
             Self::LCD_CONTROL_BASE..=Self::LCD_CONTROL_END => {
                 self.lcd.write_lcd_control(value, address & 0b1)
@@ -1384,8 +1608,8 @@ impl Bus {
             Self::UNUSED_IO_BASE..=Self::UNUSED_IO_END => {
                 // println!("WRITE of {:02X} -> {:08X}", value, address)
             }
-            Self::GAME_PAK_WAITSTATE_BASE..=Self::GAME_PAK_WAITSTATE_END => {
-                // println!("game_pak[{}] = 0x{:02x}", address & 0b1, value)
+            Self::WAITSTATE_CONTROL_BASE..=Self::WAITSTATE_CONTROL_END => {
+                self.write_waitstate_control(value, address & 0b11)
             }
             Self::INTERRUPT_MASTER_ENABLE_BASE..=Self::INTERRUPT_MASTER_ENABLE_END => {
                 self.write_interrupt_master_enable(value, address & 0b1)
@@ -1419,6 +1643,10 @@ impl Bus {
                 //     value, address
                 // )
             }
+            Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => {
+                self.cartridge
+                    .write_rom_byte(value, address - Self::WAIT_STATE_0_ROM_BASE);
+            }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
                 self.cartridge
                     .write_rom_byte(value, address - Self::WAIT_STATE_1_ROM_BASE);
@@ -1426,10 +1654,6 @@ impl Bus {
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
                 self.cartridge
                     .write_rom_byte(value, address - Self::WAIT_STATE_2_ROM_BASE);
-            }
-            Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => {
-                self.cartridge
-                    .write_rom_byte(value, address - Self::WAIT_STATE_3_ROM_BASE);
             }
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
                 let offset = (address - Self::GAME_PAK_SRAM_BASE) % Self::GAME_PAK_SRAM_SIZE;
@@ -1440,6 +1664,54 @@ impl Bus {
     }
 
     pub(super) fn write_halfword_address(&mut self, value: u16, address: u32) {
+        let unaligned_address = address;
+        let aligned_address = Self::align_hword(unaligned_address);
+
+        match aligned_address {
+            Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
+                self.step();
+            }
+            Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
+                self.step();
+                self.step();
+                self.step();
+            }
+            Self::OAM_BASE..=Self::OAM_END => {
+                self.step();
+            }
+            Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
+                self.step();
+            }
+            Self::VRAM_BASE..=Self::VRAM_END => {
+                self.step();
+            }
+            Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => {
+                for _ in 0..self.get_rom_0_wait_state() {
+                    self.step();
+                }
+            }
+            Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
+                for _ in 0..self.get_rom_1_wait_state() {
+                    self.step();
+                }
+            }
+            Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
+                for _ in 0..self.get_rom_2_wait_state() {
+                    self.step();
+                }
+            }
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
+                for _ in 0..self.get_sram_wait_state() {
+                    self.step();
+                }
+            }
+            _ => {}
+        };
+
+        self.write_halfword_address_debug(value, address);
+    }
+
+    pub fn write_halfword_address_debug(&mut self, value: u16, address: u32) {
         let unaligned_address = address;
         let aligned_address = Self::align_hword(unaligned_address);
 
@@ -1480,6 +1752,10 @@ impl Bus {
                 };
                 self.lcd.write_vram_hword(value, offset)
             }
+            Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => {
+                self.cartridge
+                    .write_rom_hword(value, aligned_address - Self::WAIT_STATE_0_ROM_BASE);
+            }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
                 self.cartridge
                     .write_rom_hword(value, aligned_address - Self::WAIT_STATE_1_ROM_BASE);
@@ -1487,10 +1763,6 @@ impl Bus {
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
                 self.cartridge
                     .write_rom_hword(value, aligned_address - Self::WAIT_STATE_2_ROM_BASE);
-            }
-            Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => {
-                self.cartridge
-                    .write_rom_hword(value, aligned_address - Self::WAIT_STATE_3_ROM_BASE);
             }
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
                 let offset =
@@ -1500,13 +1772,66 @@ impl Bus {
             _ => {
                 let [low_byte, high_byte] = value.to_le_bytes();
 
-                self.write_byte_address(low_byte, aligned_address);
-                self.write_byte_address(high_byte, aligned_address + 1);
+                self.write_byte_address_debug(low_byte, aligned_address);
+                self.write_byte_address_debug(high_byte, aligned_address + 1);
             }
         }
     }
 
     pub(super) fn write_word_address(&mut self, value: u32, address: u32) {
+        let unaligned_address = address;
+        let aligned_address = Self::align_word(unaligned_address);
+
+        match aligned_address {
+            Self::CHIP_WRAM_BASE..=Self::CHIP_WRAM_END => {
+                self.step();
+            }
+            Self::BOARD_WRAM_BASE..=Self::BOARD_WRAM_END => {
+                self.step();
+                self.step();
+                self.step();
+                self.step();
+                self.step();
+                self.step();
+            }
+            Self::OAM_BASE..=Self::OAM_END => {
+                self.step();
+            }
+            Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
+                self.step();
+                self.step();
+            }
+            Self::VRAM_BASE..=Self::VRAM_END => {
+                self.step();
+                self.step();
+            }
+            Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => {
+                for _ in 0..self.get_rom_0_wait_state() {
+                    self.step();
+                }
+            }
+            Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
+                for _ in 0..self.get_rom_1_wait_state() {
+                    self.step();
+                }
+            }
+            Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
+                for _ in 0..self.get_rom_2_wait_state() {
+                    self.step();
+                }
+            }
+            Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
+                for _ in 0..self.get_sram_wait_state() {
+                    self.step();
+                }
+            }
+            _ => {}
+        };
+
+        self.write_word_address_debug(value, address);
+    }
+
+    pub fn write_word_address_debug(&mut self, value: u32, address: u32) {
         let unaligned_address = address;
         let aligned_address = Self::align_word(unaligned_address);
 
@@ -1563,6 +1888,10 @@ impl Bus {
                 };
                 self.lcd.write_vram_word(value, offset)
             }
+            Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => {
+                self.cartridge
+                    .write_rom_word(value, aligned_address - Self::WAIT_STATE_0_ROM_BASE);
+            }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
                 self.cartridge
                     .write_rom_word(value, aligned_address - Self::WAIT_STATE_1_ROM_BASE);
@@ -1570,10 +1899,6 @@ impl Bus {
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
                 self.cartridge
                     .write_rom_word(value, aligned_address - Self::WAIT_STATE_2_ROM_BASE);
-            }
-            Self::WAIT_STATE_3_ROM_BASE..=Self::WAIT_STATE_3_ROM_END => {
-                self.cartridge
-                    .write_rom_word(value, aligned_address - Self::WAIT_STATE_3_ROM_BASE);
             }
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
                 let offset =
@@ -1584,7 +1909,7 @@ impl Bus {
                 for (offset, byte) in value.to_le_bytes().into_iter().enumerate() {
                     let offset = offset as u32;
 
-                    self.write_byte_address(byte, aligned_address + offset);
+                    self.write_byte_address_debug(byte, aligned_address + offset);
                 }
             }
         }
@@ -1637,6 +1962,24 @@ impl Bus {
         // any bits which are high in the acknowledge write clear the corresponding IRQ waiting bit.
         *self.interrupt_request.first_mut().unwrap() &= !written_value;
     }
+
+    fn read_waitstate_control<T>(&self, index: u32) -> T
+    where
+        u32: DataAccess<T>,
+    {
+        self.waitstate_control.get_data(index)
+    }
+
+    fn write_waitstate_control<T>(&mut self, value: T, index: u32)
+    where
+        u32: DataAccess<T>,
+    {
+        const WAITSTATE_CONTROL_WRITABLE_MASK: u32 = 0b00000000_00000000_11111111_11111111;
+
+        let new_waitstate_control = self.waitstate_control.set_data(value, index);
+        self.waitstate_control = (new_waitstate_control & WAITSTATE_CONTROL_WRITABLE_MASK)
+            | (self.waitstate_control & (!WAITSTATE_CONTROL_WRITABLE_MASK));
+    }
 }
 
 impl Bus {
@@ -1673,7 +2016,7 @@ impl Bus {
             };
 
             if dma_triggered {
-                dma.set_dma_ongoing(true);
+                dma.set_dma_requested(true);
             }
         }
     }
@@ -1681,7 +2024,12 @@ impl Bus {
     fn step_dma(&mut self) {
         for dma_idx in 0..self.dma_infos.len() {
             let dma = &mut self.dma_infos[dma_idx];
-            if dma.get_dma_ongoing() {
+            if dma.get_dma_requested() {
+                // Before any reads, we must acknowlege the DMA request.
+                // Else, we may recursively attempt to handle this DMA during
+                // bus read/writes.
+                dma.set_dma_requested(false);
+
                 let mut dma_source = dma.source_addr;
                 let mut dma_dest = dma.dest_addr;
                 let original_dest = dma_dest;
@@ -1771,7 +2119,6 @@ impl Bus {
                 if !dma.get_dma_repeat() {
                     dma.set_dma_enable(false);
                 }
-                dma.set_dma_ongoing(false);
 
                 if dma.get_irq_at_end() {
                     let interrupt_type = match dma_idx {
@@ -1850,6 +2197,86 @@ impl Bus {
         } else {
             let irq = *self.interrupt_request.last().unwrap();
             (self.interrupt_enable & irq) != 0
+        }
+    }
+
+    fn get_sram_wait_state(&self) -> u8 {
+        const SRAM_WAIT_CONTROL_BITS: RangeInclusive<usize> = 0..=1;
+
+        const SRAM_WAIT_CONTROL_0: u8 = 4;
+        const SRAM_WAIT_CONTROL_1: u8 = 3;
+        const SRAM_WAIT_CONTROL_2: u8 = 2;
+        const SRAM_WAIT_CONTROL_3: u8 = 8;
+
+        match self.waitstate_control.get_bit_range(SRAM_WAIT_CONTROL_BITS) {
+            0 => SRAM_WAIT_CONTROL_0,
+            1 => SRAM_WAIT_CONTROL_1,
+            2 => SRAM_WAIT_CONTROL_2,
+            3 => SRAM_WAIT_CONTROL_3,
+            _ => unreachable!(),
+        }
+    }
+
+    // pretend always sequential for now
+    fn get_rom_0_wait_state(&self) -> u8 {
+        const ROM_0_WAIT_CONTROL_BITS: RangeInclusive<usize> = 2..=3;
+
+        const ROM_0_0: u8 = 4;
+        const ROM_0_1: u8 = 3;
+        const ROM_0_2: u8 = 2;
+        const ROM_0_3: u8 = 8;
+
+        match self
+            .waitstate_control
+            .get_bit_range(ROM_0_WAIT_CONTROL_BITS)
+        {
+            0 => ROM_0_0,
+            1 => ROM_0_1,
+            2 => ROM_0_2,
+            3 => ROM_0_3,
+            _ => unreachable!(),
+        }
+    }
+
+    // pretend always sequential for now
+    fn get_rom_1_wait_state(&self) -> u8 {
+        const ROM_1_WAIT_CONTROL_BITS: RangeInclusive<usize> = 5..=6;
+
+        const ROM_1_0: u8 = 4;
+        const ROM_1_1: u8 = 3;
+        const ROM_1_2: u8 = 2;
+        const ROM_1_3: u8 = 8;
+
+        match self
+            .waitstate_control
+            .get_bit_range(ROM_1_WAIT_CONTROL_BITS)
+        {
+            0 => ROM_1_0,
+            1 => ROM_1_1,
+            2 => ROM_1_2,
+            3 => ROM_1_3,
+            _ => unreachable!(),
+        }
+    }
+
+    // pretend always sequential for now
+    fn get_rom_2_wait_state(&self) -> u8 {
+        const ROM_2_WAIT_CONTROL_BITS: RangeInclusive<usize> = 8..=9;
+
+        const ROM_2_0: u8 = 4;
+        const ROM_2_1: u8 = 3;
+        const ROM_2_2: u8 = 2;
+        const ROM_2_3: u8 = 8;
+
+        match self
+            .waitstate_control
+            .get_bit_range(ROM_2_WAIT_CONTROL_BITS)
+        {
+            0 => ROM_2_0,
+            1 => ROM_2_1,
+            2 => ROM_2_2,
+            3 => ROM_2_3,
+            _ => unreachable!(),
         }
     }
 }

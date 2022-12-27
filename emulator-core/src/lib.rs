@@ -69,7 +69,7 @@ mod tests {
                 let cartridge = Cartridge::new(source.as_slice(), None).unwrap();
                 let mut cpu = Cpu::new(cartridge);
 
-                while cpu.cycle_count() < 100_000_000 {
+                while cpu.bus.cycle_count() < 125_000_000 {
                     cpu.fetch_decode_execute();
                 }
 
@@ -181,7 +181,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
-        while cpu.cycle_count() < 100_000_000 {
+        while cpu.bus.cycle_count() < 100_000_000 {
             cpu.fetch_decode_execute();
         }
 
@@ -221,7 +221,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
-        while cpu.cycle_count() < 100_000_000 {
+        while cpu.bus.cycle_count() < 100_000_000 {
             cpu.fetch_decode_execute();
         }
 
@@ -263,7 +263,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
-        while cpu.cycle_count() < 100_000_000 {
+        while cpu.bus.cycle_count() < 100_000_000 {
             cpu.fetch_decode_execute();
         }
 
@@ -273,10 +273,10 @@ mod tests {
 
         press_key(&mut cpu, Key::A);
 
-        let start_cycles = cpu.cycle_count();
+        let start_cycles = cpu.bus.cycle_count();
 
         // Memory test takes a while, so wait an extra second for test to run.
-        while cpu.cycle_count() - start_cycles < CYCLES_PER_SECOND {
+        while cpu.bus.cycle_count() - start_cycles < CYCLES_PER_SECOND {
             cpu.fetch_decode_execute();
         }
 
@@ -294,7 +294,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
-        while cpu.cycle_count() < 100_000_000 {
+        while cpu.bus.cycle_count() < 100_000_000 {
             cpu.fetch_decode_execute();
         }
 
@@ -324,7 +324,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
-        while cpu.cycle_count() < 100_000_000 {
+        while cpu.bus.cycle_count() < 100_000_000 {
             cpu.fetch_decode_execute();
         }
 
@@ -355,7 +355,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
-        while cpu.cycle_count() < 100_000_000 {
+        while cpu.bus.cycle_count() < 100_000_000 {
             cpu.fetch_decode_execute();
         }
 
@@ -388,7 +388,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
-        while cpu.cycle_count() < 100_000_000 {
+        while cpu.bus.cycle_count() < 100_000_000 {
             cpu.fetch_decode_execute();
         }
 
@@ -408,10 +408,10 @@ mod tests {
 
         press_key(&mut cpu, Key::A);
 
-        let start_cycles = cpu.cycle_count();
+        let start_cycles = cpu.bus.cycle_count();
 
         // DMA test takes a while, so wait an extra second for test to run.
-        while cpu.cycle_count() - start_cycles < CYCLES_PER_SECOND {
+        while cpu.bus.cycle_count() - start_cycles < CYCLES_PER_SECOND {
             cpu.fetch_decode_execute();
         }
 
@@ -438,7 +438,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
-        while cpu.cycle_count() < 100_000_000 {
+        while cpu.bus.cycle_count() < 100_000_000 {
             cpu.fetch_decode_execute();
         }
 
@@ -459,7 +459,7 @@ mod tests {
         let mut cpu = Cpu::new(cartridge);
 
         // skip boot screen
-        while cpu.cycle_count() < 100_000_000 {
+        while cpu.bus.cycle_count() < 100_000_000 {
             cpu.fetch_decode_execute();
         }
 

@@ -1,6 +1,7 @@
 use super::{Cpu, ExceptionType, InstructionCondition, InstructionCyclesInfo, Register, ShiftType};
 
-use crate::{BitManipulation, DataAccess};
+use crate::cpu::thumb::decode_thumb;
+use crate::{BitManipulation, CpuMode, DataAccess, InstructionSet};
 
 use std::fmt::Display;
 use std::ops::RangeInclusive;
@@ -1451,14 +1452,12 @@ impl Cpu {
             }
         } else {
             // If instruction condition fails, we still need to increment to the next instruction.
-            self.advance_pc_for_arm_instruction();
+            // This takes one cycle, and simply performs prefetch.
+            let old_pc = self.read_register(Register::R15, |pc| pc);
+            self.pre_decode_arm = self.prefetch_opcode.map(decode_arm);
+            self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(old_pc));
+            self.write_register(old_pc + 4, Register::R15);
         }
-    }
-
-    fn advance_pc_for_arm_instruction(&mut self) {
-        let old_pc = self.read_register(Register::R15, |pc| pc);
-        let new_pc = old_pc.wrapping_add(4);
-        self.write_register(new_pc, Register::R15);
     }
 }
 
@@ -1471,6 +1470,11 @@ impl Cpu {
         destination_operand: Register,
         set_conditions: bool,
     ) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_arm = self.prefetch_opcode.map(decode_arm);
+        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(old_pc));
+
         // When using R15 as operand (Rm or Rn), the returned value depends on the instruction:
         //   - $+12 if I=0,R=1 (shift by register)
         //   - otherwise, $+8 (shift by immediate).
@@ -1480,7 +1484,10 @@ impl Cpu {
             AluSecondOperandInfo::Register {
                 shift_info: ArmRegisterOrImmediate::Register(_),
                 ..
-            } => |pc| pc + 4,
+            } => {
+                self.bus.step(); // if shift by register, we take an extra I cycle to calculate this.
+                |pc| pc + 4
+            }
             _ => |pc| pc,
         };
 
@@ -1684,13 +1691,30 @@ impl Cpu {
 
         if do_write {
             self.write_register(unsigned_result, destination_operand);
+            // If dest = r15, re-fill prefetch buffer.
             if matches!(destination_operand, Register::R15) {
-                self.flush_prefetch();
+                match self.get_instruction_mode() {
+                    InstructionSet::Arm => {
+                        self.pre_decode_arm =
+                            Some(decode_arm(self.bus.fetch_arm_opcode(unsigned_result)));
+                        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(unsigned_result + 4));
+
+                        self.write_register(unsigned_result + 8, Register::R15);
+                    }
+                    InstructionSet::Thumb => {
+                        self.pre_decode_thumb =
+                            Some(decode_thumb(self.bus.fetch_thumb_opcode(unsigned_result)));
+                        self.prefetch_opcode =
+                            Some(u32::from(self.bus.fetch_thumb_opcode(unsigned_result + 2)));
+
+                        self.write_register(unsigned_result + 4, Register::R15);
+                    }
+                }
             } else {
-                self.advance_pc_for_arm_instruction();
+                self.write_register(old_pc + 4, Register::R15);
             }
         } else {
-            self.advance_pc_for_arm_instruction();
+            self.write_register(old_pc + 4, Register::R15);
         }
     }
 
@@ -1698,10 +1722,18 @@ impl Cpu {
     // documentation specifies that branch is to ($ + offset + 8).
     fn execute_arm_b(&mut self, offset: i32) {
         let old_pc = self.read_register(Register::R15, |pc| pc);
-        let new_pc = old_pc.wrapping_add(offset as u32);
-        self.write_register(new_pc, Register::R15);
 
-        self.flush_prefetch();
+        // cycle 1
+        // pre-fetch still occurs, but we won't bother storing it anywhere or performing decode.
+        self.bus.fetch_arm_opcode(old_pc);
+
+        // cycle 2
+        let new_pc = old_pc.wrapping_add(offset as u32);
+        self.write_register(new_pc + 8, Register::R15);
+        self.pre_decode_arm = Some(decode_arm(self.bus.fetch_arm_opcode(new_pc)));
+
+        // cycle 3
+        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(new_pc + 4));
     }
 
     // PC is already at $ + 8 because of prefetch.
@@ -1709,28 +1741,59 @@ impl Cpu {
     // save ($ + 4) in lr.
     fn execute_arm_bl(&mut self, offset: i32) {
         let old_pc = self.read_register(Register::R15, |pc| pc);
+
+        // cycle 1
+        // pre-fetch still occurs, but we won't bother storing it anywhere or performing decode.
+        self.bus.fetch_arm_opcode(old_pc);
+
+        // cycle 2
         self.write_register(old_pc - 4, Register::R14);
-
         let new_pc = old_pc.wrapping_add(offset as u32);
-        self.write_register(new_pc, Register::R15);
+        self.write_register(new_pc + 8, Register::R15);
+        self.pre_decode_arm = Some(decode_arm(self.bus.fetch_arm_opcode(new_pc)));
 
-        self.flush_prefetch();
+        // cycle 3
+        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(new_pc + 4));
     }
 
     // PC = operand, T = Rn.0
     fn execute_arm_bx(&mut self, operand: Register) {
         const NEW_STATE_BIT_INDEX: usize = 0;
 
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+
+        // cycle 1
+        // pre-fetch still occurs, but we won't bother storing it anywhere or performing decode.
+        self.bus.fetch_arm_opcode(old_pc);
         let operand_value = self.read_register(operand, |_| todo!());
 
+        // cycle 2
         let new_state_bit = operand_value.get_bit(NEW_STATE_BIT_INDEX);
         self.set_cpu_state_bit(new_state_bit);
 
         let new_pc = operand_value & (!1);
 
-        self.write_register(new_pc, Register::R15);
+        // conditional on new instruction mode
+        match self.get_instruction_mode() {
+            InstructionSet::Arm => {
+                // still cycle 2
+                self.pre_decode_arm = Some(decode_arm(self.bus.fetch_arm_opcode(new_pc)));
 
-        self.flush_prefetch();
+                // cycle 3
+                self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(new_pc + 4));
+
+                self.write_register(new_pc + 8, Register::R15);
+            }
+            InstructionSet::Thumb => {
+                // still cycle 2
+                self.pre_decode_thumb = Some(decode_thumb(self.bus.fetch_thumb_opcode(new_pc)));
+
+                // cycle 3
+                self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(new_pc + 2)));
+
+                self.write_register(new_pc + 4, Register::R15);
+            }
+        };
     }
 
     fn execute_arm_msr(
@@ -1742,6 +1805,11 @@ impl Cpu {
         write_flags_field: bool,
         write_status_field: bool,
     ) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_arm = self.prefetch_opcode.map(decode_arm);
+        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(old_pc));
+
         const FLAGS_FIELD_MASK: u32 = 0b11111111_00000000_00000000_00000000;
         const STATUS_FIELD_MASK: u32 = 0b00000000_11111111_00000000_00000000;
         const EXTENSION_FIELD_MASK: u32 = 0b00000000_00000000_11111111_00000000;
@@ -1777,20 +1845,27 @@ impl Cpu {
         let original_psr_value = self.read_register(psr_register, |_| unreachable!());
         let new_psr_value = (source_value & write_mask) | (original_psr_value & (!write_mask));
 
+        // write back is merged into next instruction's cycle
         self.write_register(new_psr_value, psr_register);
 
-        self.advance_pc_for_arm_instruction();
+        self.write_register(old_pc + 4, Register::R15);
     }
 
     fn execute_arm_mrs(&mut self, destination_register: Register, source_psr: PsrTransferPsr) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_arm = self.prefetch_opcode.map(decode_arm);
+        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(old_pc));
+
         let source_psr_value = match source_psr {
             PsrTransferPsr::Cpsr => self.read_register(Register::Cpsr, |_| unreachable!()),
             PsrTransferPsr::Spsr => self.read_register(Register::Spsr, |_| unreachable!()),
         };
 
+        // write back is merged into next instruction's cycle
         self.write_register(source_psr_value, destination_register);
 
-        self.advance_pc_for_arm_instruction();
+        self.write_register(old_pc + 4, Register::R15);
     }
 
     fn execute_arm_str(
@@ -1801,6 +1876,11 @@ impl Cpu {
         offset_info: SingleDataTransferOffsetInfo,
         source_register: Register,
     ) {
+        // cycle 1: perform address calculation (and do prefetch)
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_arm = self.prefetch_opcode.map(decode_arm);
+        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(old_pc));
+
         // "including R15=PC+8".
         //  Note that this is already the case due to prefetch (R15 = $ + 8).
         let base_address = self.read_register(base_register, |pc| pc);
@@ -1835,6 +1915,7 @@ impl Cpu {
         // case source value and write-back register are the same.
         let value = self.read_register(source_register, |pc| pc + 4);
 
+        // cycle 2: perform base modification and store register at memory address.
         let actual_address = match index_type {
             SingleDataTransferIndexType::PostIndex { .. } => {
                 // post index always has write-back
@@ -1861,7 +1942,7 @@ impl Cpu {
             _ => todo!("{:?}", access_size),
         };
 
-        self.advance_pc_for_arm_instruction();
+        self.write_register(old_pc + 4, Register::R15);
     }
 
     fn execute_arm_ldr(
@@ -1873,6 +1954,11 @@ impl Cpu {
         offset_info: SingleDataTransferOffsetInfo,
         sign_extend: bool,
     ) {
+        // cycle 1: perform address calculation (and do prefetch)
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_arm = self.prefetch_opcode.map(decode_arm);
+        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(old_pc));
+
         // "including R15=PC+8"
         //  Note that this is already the case due to prefetch (R15 = $ + 8).
         let base_address = self.read_register(base_register, |pc| pc);
@@ -1935,18 +2021,19 @@ impl Cpu {
             base_address.wrapping_add(offset_amount)
         };
 
-        let data_read_address = match index_type {
+        // cycle 2: fetch data from memory and adjust base register if necessary.
+        let (data_read_address, base_modified) = match index_type {
             SingleDataTransferIndexType::PostIndex { .. } => {
                 // post index always has write-back
                 self.write_register(offset_address, base_register);
-                base_address
+                (base_address, true)
             }
             SingleDataTransferIndexType::PreIndex { write_back } => {
                 if write_back {
                     self.write_register(offset_address, base_register);
                 }
 
-                offset_address
+                (offset_address, write_back)
             }
         };
 
@@ -1981,11 +2068,29 @@ impl Cpu {
             _ => todo!("{:?} sign extend: {}", access_size, sign_extend),
         };
 
+        // third cycle: store result in destination register (merged with next instruction prefetch).
         self.write_register(value, destination_register);
-        if matches!(destination_register, Register::R15) {
-            self.flush_prefetch();
+
+        // if R15 is affected by this instruciton, add cycles to refill prefetch.
+        let r15_modified = matches!(destination_register, Register::R15)
+            || (base_modified && matches!(base_register, Register::R15));
+
+        if r15_modified {
+            let new_pc = self.read_register(Register::R15, |pc| pc);
+
+            // cycle 3: we can no longer merge i-cycle into next instruction's prefetch.
+            self.bus.step();
+
+            // cycle 4: prefetch next instruction (decode)
+            self.pre_decode_arm = Some(decode_arm(self.bus.fetch_arm_opcode(new_pc)));
+
+            // cycle 5: prefetch 2 instructions out (fetch)
+            self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(new_pc + 4));
+
+            // patch PC to correctly point to "most recently prefetched instruction"
+            self.write_register(new_pc + 8, Register::R15);
         } else {
-            self.advance_pc_for_arm_instruction();
+            self.write_register(old_pc + 4, Register::R15);
         }
     }
 
@@ -1998,6 +2103,11 @@ impl Cpu {
         register_bit_list: [bool; 16],
         force_user_mode: bool,
     ) {
+        // cycle 1: perform address calculation (and do prefetch)
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_arm = self.prefetch_opcode.map(decode_arm);
+        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(old_pc));
+
         fn write_register_user_mode(cpu: &mut Cpu, value: u32, register: Register) {
             let old_mode = cpu.get_cpu_mode();
             cpu.set_cpu_mode(super::CpuMode::User);
@@ -2012,6 +2122,7 @@ impl Cpu {
 
         let mut r15_written = false;
 
+        // cycles 1-n: read data
         match offset_modifier {
             OffsetModifierType::AddToBase => {
                 for (register_idx, register_loaded) in register_bit_list.into_iter().enumerate() {
@@ -2112,10 +2223,17 @@ impl Cpu {
             self.write_register(current_address, base_register);
         }
 
+        // cycles 2-(1+n): I cycle: write result into register. This can be merged with prefetch in next instruction.
         if r15_written {
-            self.flush_prefetch();
+            // write back can't be merged into next instruction prefetch any more.
+            self.bus.step();
+
+            let new_pc = self.read_register(Register::R15, |pc| pc);
+            self.pre_decode_arm = Some(decode_arm(self.bus.fetch_arm_opcode(new_pc)));
+            self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(new_pc + 4));
+            self.write_register(new_pc + 8, Register::R15);
         } else {
-            self.advance_pc_for_arm_instruction();
+            self.write_register(old_pc + 4, Register::R15);
         }
     }
 
@@ -2128,6 +2246,11 @@ impl Cpu {
         register_bit_list: [bool; 16],
         force_user_mode: bool,
     ) {
+        // cycle 1: perform address calculation (and do prefetch)
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_arm = self.prefetch_opcode.map(decode_arm);
+        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(old_pc));
+
         enum IncrementTiming {
             BeforeWrite,
             AfterWrite,
@@ -2209,7 +2332,7 @@ impl Cpu {
             self.write_register(new_base, base_register);
         }
 
-        self.advance_pc_for_arm_instruction();
+        self.write_register(old_pc + 4, Register::R15);
     }
 
     fn execute_arm_mul(
@@ -2221,6 +2344,10 @@ impl Cpu {
         operand_register_rm: Register,
         operand_register_rs: Register,
     ) {
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_arm = self.prefetch_opcode.map(decode_arm);
+        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(old_pc));
+
         let accumulate_rdlo_value =
             self.read_register(accumulate_register_rdlo, |_| unreachable!());
         let destination_rdhi_value = self.read_register(destination_register_rdhi, |_| todo!());
@@ -2318,7 +2445,7 @@ impl Cpu {
             _ => todo!("multiply impl for {:?}", operation),
         }
 
-        self.advance_pc_for_arm_instruction();
+        self.write_register(old_pc + 4, Register::R15);
     }
 
     fn execute_arm_swp(
@@ -2328,6 +2455,10 @@ impl Cpu {
         dest_register: Register,
         source_register: Register,
     ) {
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_arm = self.prefetch_opcode.map(decode_arm);
+        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(old_pc));
+
         let base_address = self.read_register(base_register, |_| unreachable!());
         match access_size {
             SwpAccessSize::Byte => {
@@ -2350,7 +2481,7 @@ impl Cpu {
             }
         }
 
-        self.advance_pc_for_arm_instruction();
+        self.write_register(old_pc + 4, Register::R15);
     }
 }
 

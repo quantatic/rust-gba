@@ -1,4 +1,4 @@
-use crate::BitManipulation;
+use crate::{cpu::arm::decode_arm, BitManipulation, CpuMode, InstructionSet};
 
 use super::{Cpu, ExceptionType, InstructionCondition, InstructionCyclesInfo, Register, ShiftType};
 
@@ -1162,12 +1162,6 @@ impl Cpu {
             _ => todo!("{:#016x?}", instruction),
         }
     }
-
-    fn advance_pc_for_thumb_instruction(&mut self) {
-        let old_pc = self.read_register(Register::R15, |pc| pc);
-        let new_pc = old_pc.wrapping_add(2);
-        self.write_register(new_pc, Register::R15);
-    }
 }
 
 impl Cpu {
@@ -1178,6 +1172,11 @@ impl Cpu {
         source: Register,
         second_operand: ThumbRegisterOrImmediate,
     ) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_thumb = self.prefetch_opcode.map(|op| decode_thumb(op as u16));
+        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
+
         let first_operand_value = self.read_register(source, |_| unreachable!());
         let second_operand_value =
             self.evaluate_thumb_register_or_immedate(second_operand, |_| unreachable!());
@@ -1465,9 +1464,6 @@ impl Cpu {
         self.set_sign_flag(signed_result < 0);
         self.set_zero_flag(unsigned_result == 0);
 
-        // Assert that we never write out to R15 -- if we did, we would have to flush prefetch in this case
-        assert!(!matches!(destination_register, Register::R15));
-
         if matches!(
             operation,
             ThumbRegisterOperation::Lsl
@@ -1490,7 +1486,10 @@ impl Cpu {
             self.write_register(unsigned_result, destination_register);
         }
 
-        self.advance_pc_for_thumb_instruction();
+        // Assert that we never write out to R15 -- if we did, we would have to flush prefetch in this case
+        assert!(!matches!(destination_register, Register::R15));
+
+        self.write_register(old_pc + 2, Register::R15);
     }
 
     fn execute_thumb_high_register_operation(
@@ -1499,6 +1498,11 @@ impl Cpu {
         operation: ThumbHighRegisterOperation,
         source: Register,
     ) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_thumb = self.prefetch_opcode.map(|op| decode_thumb(op as u16));
+        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
+
         let destination_register_value = self.read_register(destination_register, |pc| pc);
         let source_value = self.read_register(source, |pc| pc);
         match operation {
@@ -1507,9 +1511,11 @@ impl Cpu {
                 self.write_register(result, destination_register);
 
                 if matches!(destination_register, Register::R15) {
-                    self.flush_prefetch();
+                    self.pre_decode_thumb = Some(decode_thumb(self.bus.fetch_thumb_opcode(result)));
+                    self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(result + 2)));
+                    self.write_register(result + 4, Register::R15);
                 } else {
-                    self.advance_pc_for_thumb_instruction();
+                    self.write_register(old_pc + 2, Register::R15);
                 }
             }
             ThumbHighRegisterOperation::Cmp => {
@@ -1525,15 +1531,19 @@ impl Cpu {
                 self.set_overflow_flag(overflow);
 
                 // Mov can't write out to R15 (or any register for that matter), so unconditionally advance PC (never flush).
-                self.advance_pc_for_thumb_instruction();
+                self.write_register(old_pc + 2, Register::R15);
             }
             ThumbHighRegisterOperation::Mov => {
                 self.write_register(source_value, destination_register);
 
                 if matches!(destination_register, Register::R15) {
-                    self.flush_prefetch();
+                    self.pre_decode_thumb =
+                        Some(decode_thumb(self.bus.fetch_thumb_opcode(source_value)));
+                    self.prefetch_opcode =
+                        Some(u32::from(self.bus.fetch_thumb_opcode(source_value + 2)));
+                    self.write_register(source_value + 4, Register::R15);
                 } else {
-                    self.advance_pc_for_thumb_instruction();
+                    self.write_register(old_pc + 2, Register::R15);
                 }
             }
         }
@@ -1547,6 +1557,11 @@ impl Cpu {
         size: ThumbLoadStoreDataSize,
         sign_extend: bool,
     ) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_thumb = self.prefetch_opcode.map(|op| decode_thumb(op as u16));
+        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
+
         let base_address = self.read_register(base_register, |pc| pc & (!2));
         let base_offset = match offset {
             ThumbRegisterOrImmediate::Immediate(immediate) => immediate,
@@ -1591,7 +1606,7 @@ impl Cpu {
 
         // Assert that we never write out to R15, so we can unconditionally advance PC.
         assert!(!matches!(destination_register, Register::R15));
-        self.advance_pc_for_thumb_instruction();
+        self.write_register(old_pc + 2, Register::R15);
     }
 
     fn execute_thumb_str(
@@ -1601,6 +1616,11 @@ impl Cpu {
         source_register: Register,
         size: ThumbLoadStoreDataSize,
     ) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_thumb = self.prefetch_opcode.map(|op| decode_thumb(op as u16));
+        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
+
         let base_address = self.read_register(base_register, |_| unreachable!());
         let base_offset = match offset {
             ThumbRegisterOrImmediate::Immediate(immediate) => immediate,
@@ -1624,47 +1644,69 @@ impl Cpu {
                 .write_word_address(source_register_value, real_address),
         }
 
-        self.advance_pc_for_thumb_instruction();
+        self.write_register(old_pc + 2, Register::R15);
     }
 
     fn execute_thumb_b(&mut self, condition: InstructionCondition, offset: i16) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_thumb = self.prefetch_opcode.map(|op| decode_thumb(op as u16));
+        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
+
         if self.evaluate_instruction_condition(condition) {
-            let old_pc = self.read_register(Register::R15, |pc| pc);
             let new_pc = old_pc.wrapping_add(offset as u32);
             self.write_register(new_pc, Register::R15);
 
-            self.flush_prefetch();
+            self.pre_decode_thumb = Some(decode_thumb(self.bus.fetch_thumb_opcode(new_pc)));
+            self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(new_pc + 2)));
+            self.write_register(new_pc + 4, Register::R15);
         } else {
-            self.advance_pc_for_thumb_instruction();
+            self.write_register(old_pc + 2, Register::R15);
         }
     }
 
     // LR = PC + 4 + offset
     // PC = $ + 4 already due to prefetch
     fn execute_thumb_bl_part_1(&mut self, offset: i32) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_thumb = self.prefetch_opcode.map(|op| decode_thumb(op as u16));
+        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
+
         let old_pc = self.read_register(Register::R15, |pc| pc);
         let new_lr = old_pc.wrapping_add(offset as u32);
 
         self.write_register(new_lr, Register::R14);
-        self.advance_pc_for_thumb_instruction();
+        self.write_register(old_pc + 2, Register::R15);
     }
 
     // PC = LR + (nn SHL 1), and LR = PC+2 OR 1
     // PC = $ + 4 already due to prefetch
     fn execute_thumb_bl_part_2(&mut self, offset: u16) {
+        // cycle 1: prefetch next instruction
         let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_thumb = self.prefetch_opcode.map(|op| decode_thumb(op as u16));
+        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
+
         let old_lr = self.read_register(Register::R14, |_| unreachable!());
 
         let new_pc = old_lr.wrapping_add(u32::from(offset));
         let new_lr = (old_pc - 2) | 1;
 
-        self.write_register(new_pc, Register::R15);
         self.write_register(new_lr, Register::R14);
+        self.write_register(new_pc, Register::R15);
 
-        self.flush_prefetch();
+        self.pre_decode_thumb = Some(decode_thumb(self.bus.fetch_thumb_opcode(new_pc)));
+        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(new_pc + 2)));
+        self.write_register(new_pc + 4, Register::R15);
     }
 
     fn execute_thumb_bx(&mut self, operand: Register) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_thumb = self.prefetch_opcode.map(|op| decode_thumb(op as u16));
+        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
+
         const NEW_STATE_BIT_INDEX: usize = 0;
 
         // "BX R15: CPU switches to ARM state, and PC is auto-aligned as (($+4) AND NOT 2)."
@@ -1678,11 +1720,34 @@ impl Cpu {
 
         let new_pc = operand_value & (!1);
 
-        self.write_register(new_pc, Register::R15);
-        self.flush_prefetch();
+        match self.get_instruction_mode() {
+            InstructionSet::Arm => {
+                // still cycle 2
+                self.pre_decode_arm = Some(decode_arm(self.bus.fetch_arm_opcode(new_pc)));
+
+                // cycle 3
+                self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(new_pc + 4));
+
+                self.write_register(new_pc + 8, Register::R15);
+            }
+            InstructionSet::Thumb => {
+                // still cycle 2
+                self.pre_decode_thumb = Some(decode_thumb(self.bus.fetch_thumb_opcode(new_pc)));
+
+                // cycle 3
+                self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(new_pc + 2)));
+
+                self.write_register(new_pc + 4, Register::R15);
+            }
+        };
     }
 
     fn execute_thumb_push(&mut self, register_bit_list: [bool; 8], push_lr: bool) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_thumb = self.prefetch_opcode.map(|op| decode_thumb(op as u16));
+        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
+
         // Lowest register index goes at lowest address. As this is equivalent to STMDB, lowest register index needs to be considered last.
         //  In order to achieve this, iterate in reverse order.
         if push_lr {
@@ -1704,10 +1769,15 @@ impl Cpu {
             }
         }
 
-        self.advance_pc_for_thumb_instruction();
+        self.write_register(old_pc + 2, Register::R15);
     }
 
     fn execute_thumb_pop(&mut self, register_bit_list: [bool; 8], pop_pc: bool) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_thumb = self.prefetch_opcode.map(|op| decode_thumb(op as u16));
+        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
+
         for (register_idx, register_popped) in register_bit_list.into_iter().enumerate() {
             if register_popped {
                 let popped_register = Register::from_index(register_idx as u32);
@@ -1730,9 +1800,11 @@ impl Cpu {
             self.write_register(old_r13 + 4, Register::R13);
             self.write_register(pc_value, Register::R15);
 
-            self.flush_prefetch();
+            self.pre_decode_thumb = Some(decode_thumb(self.bus.fetch_thumb_opcode(pc_value)));
+            self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(pc_value + 2)));
+            self.write_register(pc_value + 4, Register::R15);
         } else {
-            self.advance_pc_for_thumb_instruction();
+            self.write_register(old_pc + 2, Register::R15);
         }
     }
 
@@ -1741,6 +1813,11 @@ impl Cpu {
         base_register: Register,
         register_bit_list: [bool; 8],
     ) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_thumb = self.prefetch_opcode.map(|op| decode_thumb(op as u16));
+        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
+
         let raw_registers = register_bit_list
             .into_iter()
             .enumerate()
@@ -1781,7 +1858,7 @@ impl Cpu {
 
         self.write_register(new_base, base_register);
 
-        self.advance_pc_for_thumb_instruction();
+        self.write_register(old_pc + 2, Register::R15);
     }
 
     fn execute_thumb_ldmia_write_back(
@@ -1789,6 +1866,11 @@ impl Cpu {
         base_register: Register,
         register_bit_list: [bool; 8],
     ) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_thumb = self.prefetch_opcode.map(|op| decode_thumb(op as u16));
+        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
+
         let raw_registers = register_bit_list
             .into_iter()
             .enumerate()
@@ -1827,9 +1909,12 @@ impl Cpu {
         self.write_register(new_base, base_register);
 
         if r15_written {
-            self.flush_prefetch();
+            let new_pc = self.read_register(Register::R15, |pc| pc);
+            self.pre_decode_thumb = Some(decode_thumb(self.bus.fetch_thumb_opcode(new_pc)));
+            self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(new_pc + 2)));
+            self.write_register(new_pc + 4, Register::R15);
         } else {
-            self.advance_pc_for_thumb_instruction();
+            self.write_register(old_pc + 2, Register::R15);
         }
     }
 
@@ -1840,6 +1925,11 @@ impl Cpu {
         sign_bit: bool,
         unsigned_offset: u16,
     ) {
+        // cycle 1: prefetch next instruction
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        self.pre_decode_thumb = self.prefetch_opcode.map(|op| decode_thumb(op as u16));
+        self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(old_pc)));
+
         // (when reading PC): "Rd = (($+4) AND NOT 2) + nn"
         //
         // Keep in mind that PC = $ + 4 due to prefetch.
@@ -1855,7 +1945,7 @@ impl Cpu {
 
         // Ensure that the base register can never be R15, so we can unconditionally just increment PC.
         assert!(!matches!(dest_register, Register::R15));
-        self.advance_pc_for_thumb_instruction();
+        self.write_register(old_pc + 2, Register::R15);
     }
 }
 
