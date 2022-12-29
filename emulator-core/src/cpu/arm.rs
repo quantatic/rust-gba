@@ -1485,6 +1485,7 @@ impl Cpu {
                 shift_info: ArmRegisterOrImmediate::Register(_),
                 ..
             } => {
+                // TODO: This may possible be a merged IS cycle.
                 self.bus.step(); // if shift by register, we take an extra I cycle to calculate this.
                 |pc| pc + 4
             }
@@ -2068,8 +2069,10 @@ impl Cpu {
             _ => todo!("{:?} sign extend: {}", access_size, sign_extend),
         };
 
-        // third cycle: store result in destination register (merged with next instruction prefetch).
+        // third cycle: store result in destination register.
+        // TODO: This may possible a merged IS cycle.
         self.write_register(value, destination_register);
+        self.bus.step();
 
         // if R15 is affected by this instruciton, add cycles to refill prefetch.
         let r15_modified = matches!(destination_register, Register::R15)
@@ -2077,9 +2080,6 @@ impl Cpu {
 
         if r15_modified {
             let new_pc = self.read_register(Register::R15, |pc| pc);
-
-            // cycle 3: we can no longer merge i-cycle into next instruction's prefetch.
-            self.bus.step();
 
             // cycle 4: prefetch next instruction (decode)
             self.pre_decode_arm = Some(decode_arm(self.bus.fetch_arm_opcode(new_pc)));
@@ -2223,11 +2223,13 @@ impl Cpu {
             self.write_register(current_address, base_register);
         }
 
-        // cycles 2-(1+n): I cycle: write result into register. This can be merged with prefetch in next instruction.
-        if r15_written {
-            // write back can't be merged into next instruction prefetch any more.
-            self.bus.step();
+        // cycles 2-(1+n): I cycle: write result into register.
 
+        // Write final register back.
+        // TODO: This may possibly be a merged IS cycle.
+        self.bus.step();
+
+        if r15_written {
             let new_pc = self.read_register(Register::R15, |pc| pc);
             self.pre_decode_arm = Some(decode_arm(self.bus.fetch_arm_opcode(new_pc)));
             self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(new_pc + 4));
@@ -2445,6 +2447,9 @@ impl Cpu {
             _ => todo!("multiply impl for {:?}", operation),
         }
 
+        for _ in 0..4 {
+            self.bus.step();
+        }
         self.write_register(old_pc + 4, Register::R15);
     }
 

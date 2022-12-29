@@ -794,7 +794,18 @@ impl Cpu {
     }
 
     fn handle_exception(&mut self, exception_type: ExceptionType) {
-        log::trace!("HANDLING EXCEPTION: {:?}", exception_type);
+        log::warn!("HANDLING EXCEPTION: {:?}", exception_type);
+
+        // Even while handling exception, prefetch still occurs.
+        let old_pc = self.read_register(Register::R15, |pc| pc);
+        match self.get_instruction_mode() {
+            InstructionSet::Arm => {
+                self.bus.fetch_arm_opcode(old_pc);
+            }
+            InstructionSet::Thumb => {
+                self.bus.fetch_thumb_opcode(old_pc);
+            }
+        }
 
         let new_mode = match exception_type {
             ExceptionType::Reset => CpuMode::Supervisor,
@@ -836,6 +847,7 @@ impl Cpu {
         let old_pc = self.read_register(Register::R15, pc_offset);
         let old_flags = self.read_register(Register::Cpsr, |_| unreachable!());
 
+        // All handled exceptions switch to Arm mode.
         self.set_cpu_state_bit(false);
 
         self.set_cpu_mode(new_mode);

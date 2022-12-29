@@ -1602,7 +1602,10 @@ impl Cpu {
             _ => unreachable!(),
         };
 
+        // cycle 2: write back into result register.
+        // TODO: This may possibly be merged IS cycle.
         self.write_register(result_value, destination_register);
+        self.bus.step();
 
         // Assert that we never write out to R15, so we can unconditionally advance PC.
         assert!(!matches!(destination_register, Register::R15));
@@ -1906,7 +1909,10 @@ impl Cpu {
             current_address += 4;
         }
 
+        // Write final register back.
+        // TODO: This may possibly be a merged IS cycle.
         self.write_register(new_base, base_register);
+        self.bus.step();
 
         if r15_written {
             let new_pc = self.read_register(Register::R15, |pc| pc);

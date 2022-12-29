@@ -19,7 +19,6 @@ pub struct Timer {
     control: u16,
 
     startup_delay: bool,
-    latch_delay: bool,
 }
 
 impl Default for Timer {
@@ -29,9 +28,8 @@ impl Default for Timer {
             counter: 0,
             reload: 0,
             control: 0,
-            startup_delay: false,
 
-            latch_delay: false,
+            startup_delay: false,
         }
     }
 }
@@ -136,7 +134,6 @@ impl Timer {
         if !old_start_bit && new_start_bit {
             self.counter = self.reload;
             self.startup_delay = true;
-            self.latch_delay = true;
         }
     }
 }

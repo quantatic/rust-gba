@@ -284,6 +284,35 @@ mod tests {
     }
 
     #[test]
+    fn suite_timer_irq() {
+        const INITIAL_CHECKSUM: u64 = 0x3B32CCEB3BAE455B;
+        const TIMER_IRQ_TEST_SELECTED_CHECKSUM: u64 = 0x0ACF818559806EA9;
+        const TIMER_IRQ_SUCCESS_SCREEN_CHECKSUM: u64 = 0xE50DD1D11F9F8C0F;
+
+        let source = include_bytes!("../tests/suite.gba");
+        let cartridge = Cartridge::new(source.as_slice(), None).unwrap();
+        let mut cpu = Cpu::new(cartridge);
+
+        // skip boot screen
+        while cpu.bus.cycle_count() < 100_000_000 {
+            cpu.fetch_decode_execute();
+        }
+
+        assert_checksum(&cpu, INITIAL_CHECKSUM);
+
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+        press_key(&mut cpu, Key::Down);
+
+        assert_checksum(&cpu, TIMER_IRQ_TEST_SELECTED_CHECKSUM);
+
+        press_key(&mut cpu, Key::A);
+
+        assert_checksum(&cpu, TIMER_IRQ_SUCCESS_SCREEN_CHECKSUM);
+    }
+
+    #[test]
     fn suite_shifter() {
         const INITIAL_CHECKSUM: u64 = 0x3B32CCEB3BAE455B;
         const SHIFTER_TEST_SELECTED_CHECKSUM: u64 = 0x44BFA86E38A2027E;
