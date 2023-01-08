@@ -1,7 +1,8 @@
 use super::{Cpu, ExceptionType, InstructionCondition, InstructionCyclesInfo, Register, ShiftType};
 
+use crate::bus::BusAccessType;
 use crate::cpu::thumb::decode_thumb;
-use crate::{BitManipulation, CpuMode, DataAccess, InstructionSet};
+use crate::{BitManipulation, Bus, CpuMode, DataAccess, InstructionSet};
 
 use std::fmt::Display;
 use std::ops::RangeInclusive;
@@ -1933,13 +1934,20 @@ impl Cpu {
         };
 
         match access_size {
-            SingleDataMemoryAccessSize::Byte => {
-                self.bus.write_byte_address(value as u8, actual_address)
+            SingleDataMemoryAccessSize::Byte => self.bus.write_byte_address(
+                value as u8,
+                actual_address,
+                BusAccessType::NonSequential,
+            ),
+            SingleDataMemoryAccessSize::HalfWord => self.bus.write_halfword_address(
+                value as u16,
+                actual_address,
+                BusAccessType::NonSequential,
+            ),
+            SingleDataMemoryAccessSize::Word => {
+                self.bus
+                    .write_word_address(value, actual_address, BusAccessType::NonSequential)
             }
-            SingleDataMemoryAccessSize::HalfWord => self
-                .bus
-                .write_halfword_address(value as u16, actual_address),
-            SingleDataMemoryAccessSize::Word => self.bus.write_word_address(value, actual_address),
             _ => todo!("{:?}", access_size),
         };
 
@@ -2039,30 +2047,40 @@ impl Cpu {
         };
 
         let value = match (access_size, sign_extend) {
-            (SingleDataMemoryAccessSize::Byte, false) => {
-                self.bus.read_byte_address(data_read_address) as u32
-            }
-            (SingleDataMemoryAccessSize::Byte, true) => {
-                self.bus.read_byte_address(data_read_address) as i8 as i32 as u32
-            }
+            (SingleDataMemoryAccessSize::Byte, false) => self
+                .bus
+                .read_byte_address(data_read_address, BusAccessType::NonSequential)
+                as u32,
+            (SingleDataMemoryAccessSize::Byte, true) => self
+                .bus
+                .read_byte_address(data_read_address, BusAccessType::NonSequential)
+                as i8 as i32 as u32,
             (SingleDataMemoryAccessSize::HalfWord, false) => {
                 let rotation = (data_read_address & 0b1) * 8;
-                u32::from(self.bus.read_halfword_address(data_read_address)).rotate_right(rotation)
+                u32::from(
+                    self.bus
+                        .read_halfword_address(data_read_address, BusAccessType::NonSequential),
+                )
+                .rotate_right(rotation)
             }
             (SingleDataMemoryAccessSize::HalfWord, true) => {
                 // LDRSH Rd,[odd]  -->  LDRSB Rd,[odd]         ;sign-expand BYTE value
                 let hword_aligned = data_read_address & 1 == 0;
 
                 if hword_aligned {
-                    self.bus.read_halfword_address(data_read_address) as i16 as i32 as u32
+                    self.bus
+                        .read_halfword_address(data_read_address, BusAccessType::NonSequential)
+                        as i16 as i32 as u32
                 } else {
-                    self.bus.read_byte_address(data_read_address) as i8 as i32 as u32
+                    self.bus
+                        .read_byte_address(data_read_address, BusAccessType::NonSequential)
+                        as i8 as i32 as u32
                 }
             }
             (SingleDataMemoryAccessSize::Word, false) => {
                 let rotation = (data_read_address & 0b11) * 8;
                 self.bus
-                    .read_word_address(data_read_address)
+                    .read_word_address(data_read_address, BusAccessType::NonSequential)
                     .rotate_right(rotation)
             }
             (SingleDataMemoryAccessSize::Word, true) => unreachable!(),
@@ -2132,7 +2150,9 @@ impl Cpu {
                         }
 
                         // The mis-aligned low bit(s) are ignored, the memory access goes to a forcibly aligned (rounded-down) memory address.
-                        let value = self.bus.read_word_address(current_address);
+                        let value = self
+                            .bus
+                            .read_word_address(current_address, BusAccessType::NonSequential);
                         let register = Register::from_index(register_idx as u32);
 
                         r15_written |= matches!(register, Register::R15);
@@ -2161,7 +2181,9 @@ impl Cpu {
                         }
 
                         // The mis-aligned low bit(s) are ignored, the memory access goes to a forcibly aligned (rounded-down) memory address.
-                        let value = self.bus.read_word_address(current_address);
+                        let value = self
+                            .bus
+                            .read_word_address(current_address, BusAccessType::NonSequential);
                         let register = Register::from_index(register_idx as u32);
 
                         r15_written |= matches!(register, Register::R15);
@@ -2189,7 +2211,9 @@ impl Cpu {
             }
 
             // The mis-aligned low bit(s) are ignored, the memory access goes to a forcibly aligned (rounded-down) memory address.
-            let value = self.bus.read_word_address(current_address);
+            let value = self
+                .bus
+                .read_word_address(current_address, BusAccessType::NonSequential);
             let register = Register::R15;
 
             r15_written |= true;
@@ -2323,7 +2347,11 @@ impl Cpu {
                 self.read_register(register, read_register_pc_calculation)
             };
 
-            self.bus.write_word_address(register_value, current_address);
+            self.bus.write_word_address(
+                register_value,
+                current_address,
+                BusAccessType::NonSequential,
+            );
 
             if matches!(increment_timing, IncrementTiming::AfterWrite) {
                 current_address += 4;
@@ -2467,22 +2495,32 @@ impl Cpu {
         let base_address = self.read_register(base_register, |_| unreachable!());
         match access_size {
             SwpAccessSize::Byte => {
-                let old_base_value = self.bus.read_byte_address(base_address);
+                let old_base_value = self
+                    .bus
+                    .read_byte_address(base_address, BusAccessType::NonSequential);
                 let new_base_value = self.read_register(source_register, |_| unreachable!()) as u8;
 
                 self.write_register(u32::from(old_base_value), dest_register);
-                self.bus.write_byte_address(new_base_value, base_address);
+                self.bus.write_byte_address(
+                    new_base_value,
+                    base_address,
+                    BusAccessType::NonSequential,
+                );
             }
             SwpAccessSize::Word => {
                 let rotate = (base_address & 0b11) * 8;
                 let old_base_value = self
                     .bus
-                    .read_word_address(base_address)
+                    .read_word_address(base_address, BusAccessType::NonSequential)
                     .rotate_right(rotate);
                 let new_base_value = self.read_register(source_register, |_| unreachable!());
 
                 self.write_register(old_base_value, dest_register);
-                self.bus.write_word_address(new_base_value, base_address);
+                self.bus.write_word_address(
+                    new_base_value,
+                    base_address,
+                    BusAccessType::NonSequential,
+                );
             }
         }
 

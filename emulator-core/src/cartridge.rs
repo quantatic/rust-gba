@@ -95,12 +95,16 @@ impl Cartridge {
                     assert!(num_matches <= 1);
 
                     if eeprom_match {
+                        log::info!("Using eeprom backup");
                         Backup::Eeprom(Eeprom::default())
                     } else if sram_match {
+                        log::info!("Using sram backup");
                         Backup::Sram(Sram::default())
                     } else if flash64kb_match || flash128kb_match {
+                        log::info!("Using flash backup");
                         Backup::Flash(Flash::default())
                     } else {
+                        log::info!("Using no backup");
                         Backup::None
                     }
                 }

@@ -1,4 +1,4 @@
-use crate::{cpu::arm::decode_arm, BitManipulation, CpuMode, InstructionSet};
+use crate::{bus::BusAccessType, cpu::arm::decode_arm, BitManipulation, CpuMode, InstructionSet};
 
 use super::{Cpu, ExceptionType, InstructionCondition, InstructionCyclesInfo, Register, ShiftType};
 
@@ -1572,37 +1572,48 @@ impl Cpu {
 
         let real_address = base_address.wrapping_add(base_offset);
 
+        // cycle 2: perform actual read from memory address.
         let result_value = match (size, sign_extend) {
-            (ThumbLoadStoreDataSize::Byte, false) => {
-                u32::from(self.bus.read_byte_address(real_address))
-            }
-            (ThumbLoadStoreDataSize::Byte, true) => {
-                self.bus.read_byte_address(real_address) as i8 as i32 as u32
-            }
+            (ThumbLoadStoreDataSize::Byte, false) => u32::from(
+                self.bus
+                    .read_byte_address(real_address, BusAccessType::NonSequential),
+            ),
+            (ThumbLoadStoreDataSize::Byte, true) => self
+                .bus
+                .read_byte_address(real_address, BusAccessType::NonSequential)
+                as i8 as i32 as u32,
             (ThumbLoadStoreDataSize::HalfWord, false) => {
                 let rotation = (real_address & 0b1) * 8;
-                u32::from(self.bus.read_halfword_address(real_address)).rotate_right(rotation)
+                u32::from(
+                    self.bus
+                        .read_halfword_address(real_address, BusAccessType::NonSequential),
+                )
+                .rotate_right(rotation)
             }
             (ThumbLoadStoreDataSize::HalfWord, true) => {
                 // LDRSH Rd,[odd]  -->  LDRSB Rd,[odd]         ;sign-expand BYTE value
                 let hword_aligned = real_address & 1 == 0;
 
                 if hword_aligned {
-                    self.bus.read_halfword_address(real_address) as i16 as i32 as u32
+                    self.bus
+                        .read_halfword_address(real_address, BusAccessType::NonSequential)
+                        as i16 as i32 as u32
                 } else {
-                    self.bus.read_byte_address(real_address) as i8 as i32 as u32
+                    self.bus
+                        .read_byte_address(real_address, BusAccessType::NonSequential)
+                        as i8 as i32 as u32
                 }
             }
             (ThumbLoadStoreDataSize::Word, false) => {
                 let rotation = (real_address & 0b11) * 8;
                 self.bus
-                    .read_word_address(real_address)
+                    .read_word_address(real_address, BusAccessType::NonSequential)
                     .rotate_right(rotation)
             }
             _ => unreachable!(),
         };
 
-        // cycle 2: write back into result register.
+        // cycle 3: write back into result register.
         // TODO: This may possibly be merged IS cycle.
         self.write_register(result_value, destination_register);
         self.bus.step();
@@ -1636,15 +1647,21 @@ impl Cpu {
         let source_register_value = self.read_register(source_register, |_| unreachable!());
 
         match size {
-            ThumbLoadStoreDataSize::Byte => self
-                .bus
-                .write_byte_address(source_register_value as u8, real_address),
-            ThumbLoadStoreDataSize::HalfWord => self
-                .bus
-                .write_halfword_address(source_register_value as u16, real_address),
-            ThumbLoadStoreDataSize::Word => self
-                .bus
-                .write_word_address(source_register_value, real_address),
+            ThumbLoadStoreDataSize::Byte => self.bus.write_byte_address(
+                source_register_value as u8,
+                real_address,
+                BusAccessType::NonSequential,
+            ),
+            ThumbLoadStoreDataSize::HalfWord => self.bus.write_halfword_address(
+                source_register_value as u16,
+                real_address,
+                BusAccessType::NonSequential,
+            ),
+            ThumbLoadStoreDataSize::Word => self.bus.write_word_address(
+                source_register_value,
+                real_address,
+                BusAccessType::NonSequential,
+            ),
         }
 
         self.write_register(old_pc + 2, Register::R15);
@@ -1758,7 +1775,8 @@ impl Cpu {
 
             let new_r13 = self.read_register(Register::R13, |_| unreachable!()) - 4;
             self.write_register(new_r13, Register::R13);
-            self.bus.write_word_address(lr_value, new_r13);
+            self.bus
+                .write_word_address(lr_value, new_r13, BusAccessType::NonSequential);
         }
 
         for (register_idx, register_pushed) in register_bit_list.into_iter().enumerate().rev() {
@@ -1768,7 +1786,11 @@ impl Cpu {
 
                 let new_r13 = self.read_register(Register::R13, |_| unreachable!()) - 4;
                 self.write_register(new_r13, Register::R13);
-                self.bus.write_word_address(pushed_register_value, new_r13);
+                self.bus.write_word_address(
+                    pushed_register_value,
+                    new_r13,
+                    BusAccessType::NonSequential,
+                );
             }
         }
 
@@ -1785,7 +1807,9 @@ impl Cpu {
             if register_popped {
                 let popped_register = Register::from_index(register_idx as u32);
                 let old_r13 = self.read_register(Register::R13, |_| unreachable!());
-                let popped_register_value = self.bus.read_word_address(old_r13);
+                let popped_register_value = self
+                    .bus
+                    .read_word_address(old_r13, BusAccessType::NonSequential);
 
                 self.write_register(old_r13 + 4, Register::R13);
 
@@ -1795,10 +1819,17 @@ impl Cpu {
             }
         }
 
+        // Write final register back.
+        // TODO: This may possibly be a merged IS cycle.
+        self.bus.step();
+
         if pop_pc {
             // POP {PC} ignores the least significant bit of the return address (processor remains in thumb state even if bit0 was cleared).
             let old_r13 = self.read_register(Register::R13, |_| unreachable!());
-            let pc_value = self.bus.read_word_address(old_r13) & (!1);
+            let pc_value = self
+                .bus
+                .read_word_address(old_r13, BusAccessType::NonSequential)
+                & (!1);
 
             self.write_register(old_r13 + 4, Register::R13);
             self.write_register(pc_value, Register::R15);
@@ -1854,7 +1885,11 @@ impl Cpu {
                 self.read_register(register, |pc| pc + 2)
             };
 
-            self.bus.write_word_address(register_value, current_address);
+            self.bus.write_word_address(
+                register_value,
+                current_address,
+                BusAccessType::NonSequential,
+            );
 
             current_address += 4;
         }
@@ -1896,7 +1931,9 @@ impl Cpu {
         let mut current_address = base_address;
 
         for register in stored_registers {
-            let loaded_value = self.bus.read_word_address(current_address);
+            let loaded_value = self
+                .bus
+                .read_word_address(current_address, BusAccessType::NonSequential);
 
             self.write_register(loaded_value, register);
 

@@ -794,7 +794,7 @@ impl Cpu {
     }
 
     fn handle_exception(&mut self, exception_type: ExceptionType) {
-        log::warn!("HANDLING EXCEPTION: {:?}", exception_type);
+        log::trace!("HANDLING EXCEPTION: {:?}", exception_type);
 
         // Even while handling exception, prefetch still occurs.
         let old_pc = self.read_register(Register::R15, |pc| pc);

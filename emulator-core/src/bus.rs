@@ -12,6 +12,12 @@ use crate::DataAccess;
 
 const BIOS: &[u8] = include_bytes!("../gba_bios.bin");
 
+#[derive(Clone, Copy, Debug)]
+pub enum BusAccessType {
+    Sequential,
+    NonSequential,
+}
+
 #[derive(Clone)]
 enum BiosReadBehavior {
     TrueValue,
@@ -33,6 +39,7 @@ pub struct Bus {
     pub open_bus_iwram_data: u32, // no other memory controller latch has visible side-effects.
     open_bus_bios_data: u32,      // most recently fetched BIOS opcode
     bios_read_behavior: BiosReadBehavior,
+    pretfetch_sequential: bool, // whether the next pre-fetch will use sequential access
     pub lcd: Lcd,
     pub apu: Apu,
     pub keypad: Keypad,
@@ -73,6 +80,7 @@ impl Bus {
             open_bus_bios_data: 0,
             open_bus_iwram_data: 0,
             bios_read_behavior: BiosReadBehavior::TrueValue,
+            pretfetch_sequential: false,
             lcd: Lcd::default(),
             apu: Apu::default(),
             keypad: Keypad::default(),
@@ -410,7 +418,15 @@ impl Bus {
             self.bios_read_behavior = BiosReadBehavior::PrefetchValue;
         }
 
-        self.read_word_address(address)
+        let access_type = if self.pretfetch_sequential {
+            BusAccessType::Sequential
+        } else {
+            BusAccessType::NonSequential
+        };
+        let result = self.read_word_address(address, access_type);
+
+        self.pretfetch_sequential = true;
+        result
     }
 
     pub(super) fn fetch_thumb_opcode(&mut self, address: u32) -> u16 {
@@ -420,7 +436,15 @@ impl Bus {
             self.bios_read_behavior = BiosReadBehavior::PrefetchValue;
         }
 
-        self.read_halfword_address(address)
+        let access_type = if self.pretfetch_sequential {
+            BusAccessType::Sequential
+        } else {
+            BusAccessType::NonSequential
+        };
+        let result = self.read_halfword_address(address, access_type);
+
+        self.pretfetch_sequential = true;
+        result
     }
 }
 
@@ -701,9 +725,9 @@ impl Bus {
 
     // Note: we assume that all reads use values from the beginning of the cycle (before any other
     // clocked things are ticked), but writes happen at the end of the cycle (after all clocked
-    // things are ticket).
-    pub(super) fn read_byte_address(&mut self, address: u32) -> u8 {
-        match address {
+    // things are ticked).
+    pub(super) fn read_byte_address(&mut self, address: u32, access_type: BusAccessType) -> u8 {
+        let result = match address {
             Self::BIOS_BASE..=Self::BIOS_END => {
                 let result = self.read_byte_address_debug(address);
 
@@ -755,14 +779,14 @@ impl Bus {
             }
             Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => {
                 let result = self.read_byte_address_debug(address);
-                for _ in 0..self.get_rom_0_wait_state() {
+                for _ in 0..(self.get_rom_0_wait_state(access_type) + 1) {
                     self.step();
                 }
                 result
             }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
                 let result = self.read_byte_address_debug(address);
-                for _ in 0..self.get_rom_1_wait_state() {
+                for _ in 0..(self.get_rom_1_wait_state(access_type) + 1) {
                     self.step();
                 }
                 result
@@ -770,7 +794,7 @@ impl Bus {
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
                 let result = self.read_byte_address_debug(address);
 
-                for _ in 0..self.get_rom_2_wait_state() {
+                for _ in 0..(self.get_rom_2_wait_state(access_type) + 1) {
                     self.step();
                 }
 
@@ -779,7 +803,7 @@ impl Bus {
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
                 let result = self.read_byte_address_debug(address);
 
-                for _ in 0..self.get_sram_wait_state() {
+                for _ in 0..(self.get_sram_wait_state() + 1) {
                     self.step();
                 }
 
@@ -791,7 +815,10 @@ impl Bus {
                 self.step();
                 result
             }
-        }
+        };
+
+        self.pretfetch_sequential = false;
+        result
     }
 
     pub fn read_byte_address_debug(&self, address: u32) -> u8 {
@@ -977,8 +1004,12 @@ impl Bus {
         }
     }
 
-    pub(super) fn read_halfword_address(&mut self, address: u32) -> u16 {
-        match address {
+    pub(super) fn read_halfword_address(
+        &mut self,
+        address: u32,
+        access_type: BusAccessType,
+    ) -> u16 {
+        let result = match address {
             Self::BIOS_BASE..=Self::BIOS_END => {
                 let result = self.read_halfword_address_debug(address);
 
@@ -1047,7 +1078,7 @@ impl Bus {
                     .read_rom_hword(aligned_address - Self::WAIT_STATE_0_ROM_BASE);
 
                 self.open_bus_data = (u32::from(result) << u16::BITS) | u32::from(result);
-                for _ in 0..self.get_rom_0_wait_state() {
+                for _ in 0..(self.get_rom_0_wait_state(access_type) + 1) {
                     self.step();
                 }
 
@@ -1062,7 +1093,7 @@ impl Bus {
                     .read_rom_hword(aligned_address - Self::WAIT_STATE_1_ROM_BASE);
 
                 self.open_bus_data = (u32::from(result) << u16::BITS) | u32::from(result);
-                for _ in 0..self.get_rom_1_wait_state() {
+                for _ in 0..(self.get_rom_1_wait_state(access_type) + 1) {
                     self.step();
                 }
                 result
@@ -1076,14 +1107,14 @@ impl Bus {
                     .read_rom_hword(aligned_address - Self::WAIT_STATE_2_ROM_BASE);
 
                 self.open_bus_data = (u32::from(result) << u16::BITS) | u32::from(result);
-                for _ in 0..self.get_rom_2_wait_state() {
+                for _ in 0..(self.get_rom_2_wait_state(access_type) + 1) {
                     self.step();
                 }
                 result
             }
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
                 let result = self.read_halfword_address_debug(address);
-                for _ in 0..self.get_sram_wait_state() {
+                for _ in 0..(self.get_sram_wait_state() + 1) {
                     self.step();
                 }
                 result
@@ -1095,7 +1126,10 @@ impl Bus {
                 self.step();
                 result
             }
-        }
+        };
+
+        self.pretfetch_sequential = false;
+        result
     }
 
     pub fn read_halfword_address_debug(&self, address: u32) -> u16 {
@@ -1172,7 +1206,7 @@ impl Bus {
         }
     }
 
-    pub(super) fn read_word_address(&mut self, address: u32) -> u32 {
+    pub(super) fn read_word_address(&mut self, address: u32, access_type: BusAccessType) -> u32 {
         let result = match address {
             Self::BIOS_BASE..=Self::BIOS_END => {
                 let result = self.read_word_address_debug(address);
@@ -1227,7 +1261,10 @@ impl Bus {
             Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => {
                 let result = self.read_word_address_debug(address);
 
-                for _ in 0..self.get_rom_0_wait_state() {
+                let first_hword_wait = self.get_rom_0_wait_state(access_type) + 1;
+                let second_hword_wait = self.get_rom_0_wait_state(BusAccessType::Sequential) + 1;
+
+                for _ in 0..(first_hword_wait + second_hword_wait) {
                     self.step();
                 }
 
@@ -1236,7 +1273,10 @@ impl Bus {
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
                 let result = self.read_word_address_debug(address);
 
-                for _ in 0..self.get_rom_1_wait_state() {
+                let first_hword_wait = self.get_rom_1_wait_state(access_type) + 1;
+                let second_hword_wait = self.get_rom_1_wait_state(BusAccessType::Sequential) + 1;
+
+                for _ in 0..(first_hword_wait + second_hword_wait) {
                     self.step();
                 }
 
@@ -1245,7 +1285,10 @@ impl Bus {
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
                 let result = self.read_word_address_debug(address);
 
-                for _ in 0..self.get_rom_2_wait_state() {
+                let first_hword_wait = self.get_rom_2_wait_state(access_type) + 1;
+                let second_hword_wait = self.get_rom_2_wait_state(BusAccessType::Sequential) + 1;
+
+                for _ in 0..(first_hword_wait + second_hword_wait) {
                     self.step();
                 }
 
@@ -1254,7 +1297,7 @@ impl Bus {
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
                 let result = self.read_word_address_debug(address);
 
-                for _ in 0..self.get_sram_wait_state() {
+                for _ in 0..(self.get_sram_wait_state() + 1) {
                     self.step();
                 }
 
@@ -1269,6 +1312,7 @@ impl Bus {
         };
 
         self.open_bus_data = result;
+        self.pretfetch_sequential = false;
         result
     }
 
@@ -1357,7 +1401,12 @@ impl Bus {
         }
     }
 
-    pub(super) fn write_byte_address(&mut self, value: u8, address: u32) {
+    pub(super) fn write_byte_address(
+        &mut self,
+        value: u8,
+        address: u32,
+        access_type: BusAccessType,
+    ) {
         match address {
             Self::BIOS_BASE..=Self::BIOS_END => {
                 self.step();
@@ -1390,27 +1439,29 @@ impl Bus {
                 self.step();
             }
             Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => {
-                for _ in 0..self.get_rom_0_wait_state() {
+                for _ in 0..(self.get_rom_0_wait_state(access_type) + 1) {
                     self.step();
                 }
             }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
-                for _ in 0..self.get_rom_1_wait_state() {
+                for _ in 0..(self.get_rom_1_wait_state(access_type) + 1) {
                     self.step();
                 }
             }
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
-                for _ in 0..self.get_rom_2_wait_state() {
+                for _ in 0..(self.get_rom_2_wait_state(access_type) + 1) {
                     self.step();
                 }
             }
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
-                for _ in 0..self.get_sram_wait_state() {
+                for _ in 0..(self.get_sram_wait_state() + 1) {
                     self.step();
                 }
             }
             _ => {}
         };
+
+        self.pretfetch_sequential = false;
         self.write_byte_address_debug(value, address);
     }
 
@@ -1686,7 +1737,12 @@ impl Bus {
         }
     }
 
-    pub(super) fn write_halfword_address(&mut self, value: u16, address: u32) {
+    pub(super) fn write_halfword_address(
+        &mut self,
+        value: u16,
+        address: u32,
+        access_type: BusAccessType,
+    ) {
         let unaligned_address = address;
         let aligned_address = Self::align_hword(unaligned_address);
 
@@ -1712,28 +1768,29 @@ impl Bus {
                 self.step();
             }
             Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => {
-                for _ in 0..self.get_rom_0_wait_state() {
+                for _ in 0..(self.get_rom_0_wait_state(access_type) + 1) {
                     self.step();
                 }
             }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
-                for _ in 0..self.get_rom_1_wait_state() {
+                for _ in 0..(self.get_rom_1_wait_state(access_type) + 1) {
                     self.step();
                 }
             }
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
-                for _ in 0..self.get_rom_2_wait_state() {
+                for _ in 0..(self.get_rom_2_wait_state(access_type) + 1) {
                     self.step();
                 }
             }
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
-                for _ in 0..self.get_sram_wait_state() {
+                for _ in 0..(self.get_sram_wait_state() + 1) {
                     self.step();
                 }
             }
             _ => {}
         };
 
+        self.pretfetch_sequential = false;
         self.write_halfword_address_debug(value, address);
     }
 
@@ -1804,7 +1861,12 @@ impl Bus {
         }
     }
 
-    pub(super) fn write_word_address(&mut self, value: u32, address: u32) {
+    pub(super) fn write_word_address(
+        &mut self,
+        value: u32,
+        address: u32,
+        access_type: BusAccessType,
+    ) {
         let unaligned_address = address;
         let aligned_address = Self::align_word(unaligned_address);
 
@@ -1835,28 +1897,38 @@ impl Bus {
                 self.step();
             }
             Self::WAIT_STATE_0_ROM_BASE..=Self::WAIT_STATE_0_ROM_END => {
-                for _ in 0..self.get_rom_0_wait_state() {
+                let first_hword_wait = self.get_rom_0_wait_state(access_type) + 1;
+                let second_hword_wait = self.get_rom_0_wait_state(BusAccessType::Sequential) + 1;
+
+                for _ in 0..(first_hword_wait + second_hword_wait) {
                     self.step();
                 }
             }
             Self::WAIT_STATE_1_ROM_BASE..=Self::WAIT_STATE_1_ROM_END => {
-                for _ in 0..self.get_rom_1_wait_state() {
+                let first_hword_wait = self.get_rom_1_wait_state(access_type) + 1;
+                let second_hword_wait = self.get_rom_1_wait_state(BusAccessType::Sequential) + 1;
+
+                for _ in 0..(first_hword_wait + second_hword_wait) {
                     self.step();
                 }
             }
             Self::WAIT_STATE_2_ROM_BASE..=Self::WAIT_STATE_2_ROM_END => {
-                for _ in 0..self.get_rom_2_wait_state() {
+                let first_hword_wait = self.get_rom_2_wait_state(access_type) + 1;
+                let second_hword_wait = self.get_rom_2_wait_state(BusAccessType::Sequential) + 1;
+
+                for _ in 0..(first_hword_wait + second_hword_wait) {
                     self.step();
                 }
             }
             Self::GAME_PAK_SRAM_BASE..=Self::GAME_PAK_SRAM_END => {
-                for _ in 0..self.get_sram_wait_state() {
+                for _ in 0..(self.get_sram_wait_state() + 1) {
                     self.step();
                 }
             }
             _ => {}
         };
 
+        self.pretfetch_sequential = false;
         self.write_word_address_debug(value, address);
     }
 
@@ -2082,25 +2154,39 @@ impl Bus {
                             let value = if dma_source < MINIMUM_DMA_ADDRESS {
                                 dma.read_latch as u16
                             } else {
-                                let result = self.read_halfword_address(align_addr(dma_source));
+                                let result = self.read_halfword_address(
+                                    align_addr(dma_source),
+                                    BusAccessType::NonSequential,
+                                );
                                 self.dma_infos[dma_idx].read_latch =
                                     (u32::from(result) << u16::BITS) | u32::from(result);
                                 result as u16
                             };
 
-                            self.write_halfword_address(value, align_addr(dma_dest));
+                            self.write_halfword_address(
+                                value,
+                                align_addr(dma_dest),
+                                BusAccessType::NonSequential,
+                            );
                         }
                         DmaTransferType::Bit32 => {
                             let align_addr = |address| address & (!0b11);
                             let value = if dma_source < MINIMUM_DMA_ADDRESS {
                                 dma.read_latch
                             } else {
-                                let result = self.read_word_address(align_addr(dma_source));
+                                let result = self.read_word_address(
+                                    align_addr(dma_source),
+                                    BusAccessType::NonSequential,
+                                );
                                 self.dma_infos[dma_idx].read_latch = result;
                                 result
                             };
 
-                            self.write_word_address(value, align_addr(dma_dest));
+                            self.write_word_address(
+                                value,
+                                align_addr(dma_dest),
+                                BusAccessType::NonSequential,
+                            );
                         }
                     };
 
@@ -2246,66 +2332,105 @@ impl Bus {
         }
     }
 
-    // pretend always sequential for now
-    fn get_rom_0_wait_state(&self) -> u8 {
-        const ROM_0_WAIT_CONTROL_BITS: RangeInclusive<usize> = 2..=3;
+    fn get_rom_0_wait_state(&self, access_type: BusAccessType) -> u8 {
+        const ROM_0_NON_SEQUENTIAL_WAIT_CONTROL_BITS: RangeInclusive<usize> = 2..=3;
+        const ROM_0_SEQUENTIAL_WAIT_CONTROL_BITS: RangeInclusive<usize> = 4..=4;
 
-        const ROM_0_0: u8 = 4;
-        const ROM_0_1: u8 = 3;
-        const ROM_0_2: u8 = 2;
-        const ROM_0_3: u8 = 8;
+        const ROM_0_0_NON_SEQUENTIAL: u8 = 4;
+        const ROM_0_1_NON_SEQUENTIAL: u8 = 3;
+        const ROM_0_2_NON_SEQUENTIAL: u8 = 2;
+        const ROM_0_3_NON_SEQUENTIAL: u8 = 8;
 
-        match self
-            .waitstate_control
-            .get_bit_range(ROM_0_WAIT_CONTROL_BITS)
-        {
-            0 => ROM_0_0,
-            1 => ROM_0_1,
-            2 => ROM_0_2,
-            3 => ROM_0_3,
-            _ => unreachable!(),
+        const ROM_0_0_SEQUENTIAL: u8 = 2;
+        const ROM_0_1_SEQUENTIAL: u8 = 1;
+
+        match access_type {
+            BusAccessType::NonSequential => match self
+                .waitstate_control
+                .get_bit_range(ROM_0_NON_SEQUENTIAL_WAIT_CONTROL_BITS)
+            {
+                0 => ROM_0_0_NON_SEQUENTIAL,
+                1 => ROM_0_1_NON_SEQUENTIAL,
+                2 => ROM_0_2_NON_SEQUENTIAL,
+                3 => ROM_0_3_NON_SEQUENTIAL,
+                _ => unreachable!(),
+            },
+            BusAccessType::Sequential => match self
+                .waitstate_control
+                .get_bit_range(ROM_0_SEQUENTIAL_WAIT_CONTROL_BITS)
+            {
+                0 => ROM_0_0_SEQUENTIAL,
+                1 => ROM_0_1_SEQUENTIAL,
+                _ => unreachable!(),
+            },
         }
     }
 
-    // pretend always sequential for now
-    fn get_rom_1_wait_state(&self) -> u8 {
-        const ROM_1_WAIT_CONTROL_BITS: RangeInclusive<usize> = 5..=6;
+    fn get_rom_1_wait_state(&self, access_type: BusAccessType) -> u8 {
+        const ROM_1_NON_SEQUENTIAL_WAIT_CONTROL_BITS: RangeInclusive<usize> = 5..=6;
+        const ROM_1_SEQUENTIAL_WAIT_CONTROL_BITS: RangeInclusive<usize> = 7..=7;
 
-        const ROM_1_0: u8 = 4;
-        const ROM_1_1: u8 = 3;
-        const ROM_1_2: u8 = 2;
-        const ROM_1_3: u8 = 8;
+        const ROM_1_0_NON_SEQUENTIAL: u8 = 4;
+        const ROM_1_1_NON_SEQUENTIAL: u8 = 3;
+        const ROM_1_2_NON_SEQUENTIAL: u8 = 2;
+        const ROM_1_3_NON_SEQUENTIAL: u8 = 8;
 
-        match self
-            .waitstate_control
-            .get_bit_range(ROM_1_WAIT_CONTROL_BITS)
-        {
-            0 => ROM_1_0,
-            1 => ROM_1_1,
-            2 => ROM_1_2,
-            3 => ROM_1_3,
-            _ => unreachable!(),
+        const ROM_1_0_SEQUENTIAL: u8 = 4;
+        const ROM_1_1_SEQUENTIAL: u8 = 1;
+
+        match access_type {
+            BusAccessType::NonSequential => match self
+                .waitstate_control
+                .get_bit_range(ROM_1_NON_SEQUENTIAL_WAIT_CONTROL_BITS)
+            {
+                0 => ROM_1_0_NON_SEQUENTIAL,
+                1 => ROM_1_1_NON_SEQUENTIAL,
+                2 => ROM_1_2_NON_SEQUENTIAL,
+                3 => ROM_1_3_NON_SEQUENTIAL,
+                _ => unreachable!(),
+            },
+            BusAccessType::Sequential => match self
+                .waitstate_control
+                .get_bit_range(ROM_1_SEQUENTIAL_WAIT_CONTROL_BITS)
+            {
+                0 => ROM_1_0_SEQUENTIAL,
+                1 => ROM_1_1_SEQUENTIAL,
+                _ => unreachable!(),
+            },
         }
     }
 
-    // pretend always sequential for now
-    fn get_rom_2_wait_state(&self) -> u8 {
-        const ROM_2_WAIT_CONTROL_BITS: RangeInclusive<usize> = 8..=9;
+    fn get_rom_2_wait_state(&self, access_type: BusAccessType) -> u8 {
+        const ROM_2_NON_SEQUENTIAL_WAIT_CONTROL_BITS: RangeInclusive<usize> = 8..=9;
+        const ROM_2_SEQUENTIAL_WAIT_CONTROL_BITS: RangeInclusive<usize> = 10..=10;
 
-        const ROM_2_0: u8 = 4;
-        const ROM_2_1: u8 = 3;
-        const ROM_2_2: u8 = 2;
-        const ROM_2_3: u8 = 8;
+        const ROM_2_0_NON_SEQUENTIAL: u8 = 4;
+        const ROM_2_1_NON_SEQUENTIAL: u8 = 3;
+        const ROM_2_2_NON_SEQUENTIAL: u8 = 2;
+        const ROM_2_3_NON_SEQUENTIAL: u8 = 8;
 
-        match self
-            .waitstate_control
-            .get_bit_range(ROM_2_WAIT_CONTROL_BITS)
-        {
-            0 => ROM_2_0,
-            1 => ROM_2_1,
-            2 => ROM_2_2,
-            3 => ROM_2_3,
-            _ => unreachable!(),
+        const ROM_2_0_SEQUENTIAL: u8 = 2;
+        const ROM_2_1_SEQUENTIAL: u8 = 1;
+
+        match access_type {
+            BusAccessType::NonSequential => match self
+                .waitstate_control
+                .get_bit_range(ROM_2_NON_SEQUENTIAL_WAIT_CONTROL_BITS)
+            {
+                0 => ROM_2_0_NON_SEQUENTIAL,
+                1 => ROM_2_1_NON_SEQUENTIAL,
+                2 => ROM_2_2_NON_SEQUENTIAL,
+                3 => ROM_2_3_NON_SEQUENTIAL,
+                _ => unreachable!(),
+            },
+            BusAccessType::Sequential => match self
+                .waitstate_control
+                .get_bit_range(ROM_2_SEQUENTIAL_WAIT_CONTROL_BITS)
+            {
+                0 => ROM_2_0_SEQUENTIAL,
+                1 => ROM_2_1_SEQUENTIAL,
+                _ => unreachable!(),
+            },
         }
     }
 }
