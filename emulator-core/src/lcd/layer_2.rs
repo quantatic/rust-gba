@@ -173,7 +173,7 @@ impl Layer2 {
                                 || map_data_y < 0.0
                                 || map_data_y >= f64::from(map_tiles)
                             {
-                                return Some(Rgb555::default());
+                                return None;
                             } else {
                                 (map_data_x as usize, map_data_y as usize)
                             }
