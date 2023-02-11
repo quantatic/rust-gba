@@ -29,7 +29,8 @@ fn main() {
         "Rust GBA Emulator",
         native_options,
         Box::new(|cc| Box::new(MyEguiApp::new(cc))),
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 #[derive(Debug)]
