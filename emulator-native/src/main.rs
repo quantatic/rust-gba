@@ -114,7 +114,9 @@ fn main() -> Result<()> {
                 event: WindowEvent::Resized(new_size),
                 window_id,
             } if window_id == window.id() => {
-                pixels.resize_surface(new_size.width, new_size.height);
+                pixels
+                    .resize_surface(new_size.width, new_size.height)
+                    .unwrap();
                 log::info!("resized to ({}, {})", new_size.width, new_size.height);
             }
             Event::WindowEvent {

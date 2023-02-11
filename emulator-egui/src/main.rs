@@ -29,7 +29,7 @@ fn main() {
         "Rust GBA Emulator",
         native_options,
         Box::new(|cc| Box::new(MyEguiApp::new(cc))),
-    );
+    ).unwrap();
 }
 
 #[derive(Debug)]
@@ -488,11 +488,13 @@ impl MyEguiApp {
                     .interactive(false)
                     .font(TextStyle::Monospace)
                     .layouter(&mut |ui, val, wrap_width| {
-                        ui.fonts().layout_no_wrap(
-                            val.to_string(),
-                            TextStyle::Monospace.resolve(ui.style()),
-                            ui.visuals().widgets.inactive.text_color(),
-                        )
+                        ui.fonts(|fonts| {
+                            fonts.layout_no_wrap(
+                                val.to_string(),
+                                TextStyle::Monospace.resolve(ui.style()),
+                                ui.visuals().widgets.inactive.text_color(),
+                            )
+                        })
                     }),
             );
         });
@@ -515,11 +517,13 @@ impl MyEguiApp {
                     .interactive(false)
                     .font(TextStyle::Monospace)
                     .layouter(&mut |ui, val, wrap_width| {
-                        ui.fonts().layout_no_wrap(
-                            val.to_string(),
-                            TextStyle::Monospace.resolve(ui.style()),
-                            ui.visuals().widgets.inactive.text_color(),
-                        )
+                        ui.fonts(|fonts| {
+                            fonts.layout_no_wrap(
+                                val.to_string(),
+                                TextStyle::Monospace.resolve(ui.style()),
+                                ui.visuals().widgets.inactive.text_color(),
+                            )
+                        })
                     }),
             );
         });
@@ -698,11 +702,11 @@ impl eframe::App for MyEguiApp {
                 Key::R => egui::Key::P,
             };
 
-            if ctx.input().key_pressed(egui_key) {
+            if ctx.input(|input_state| input_state.key_pressed(egui_key)) {
                 self.emulator_command_sender
                     .send(EmulatorCommand::KeyPressed(to_check))
                     .unwrap();
-            } else if ctx.input().key_released(egui_key) {
+            } else if ctx.input(|input_state| input_state.key_released(egui_key)) {
                 self.emulator_command_sender
                     .send(EmulatorCommand::KeyReleased(to_check))
                     .unwrap();
