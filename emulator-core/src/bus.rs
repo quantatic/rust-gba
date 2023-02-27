@@ -24,6 +24,11 @@ enum BiosReadBehavior {
     PrefetchValue,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TimerStepResult {
+    overflows: [bool; 4],
+}
+
 #[derive(Clone)]
 pub struct Bus {
     chip_wram: Box<[u8; 0x8000]>,
@@ -369,7 +374,9 @@ impl Bus {
             self.request_interrupt(InterruptType::Keypad);
         }
 
-        self.step_timers();
+        let timer_result = self.step_timers();
+
+        self.apu.step(timer_result);
 
         if self.cycle_count % 4 == 0 {
             let state_changes = self.lcd.step();
@@ -580,8 +587,17 @@ impl Bus {
     const SOUND_BASE: u32 = 0x04000060;
     const SOUND_END: u32 = 0x040000A8;
 
+    const SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE: u32 = 0x04000080;
+    const SOUND_CHANNEL_LR_VOLUME_ENABLE_END: u32 = Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE + 1;
+
+    const SOUND_DMA_SOUND_CONTROL_BASE: u32 = 0x04000082;
+    const SOUND_DMA_SOUND_CONTROL_END: u32 = Self::SOUND_DMA_SOUND_CONTROL_BASE + 1;
+
+    const SOUND_ON_OFF_BASE: u32 = 0x04000084;
+    const SOUND_ON_OFF_END: u32 = Self::SOUND_ON_OFF_BASE + 3;
+
     const SOUND_PWM_CONTROL_BASE: u32 = 0x04000088;
-    const SOUND_PWM_CONTROL_END: u32 = Self::SOUND_PWM_CONTROL_BASE + 1;
+    const SOUND_PWM_CONTROL_END: u32 = Self::SOUND_PWM_CONTROL_BASE + 3;
 
     const DMA_0_SOURCE_BASE: u32 = 0x040000B0;
     const DMA_0_SOURCE_END: u32 = Self::DMA_0_SOURCE_BASE + 3;
@@ -881,8 +897,18 @@ impl Bus {
                 self.lcd.read_alpha_blending_coefficients(address & 0b1)
             }
 
+            Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE
+                ..=Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_END => {
+                self.apu.read_channel_lr_volume_enable(address & 0b1)
+            }
+            Self::SOUND_DMA_SOUND_CONTROL_BASE..=Self::SOUND_DMA_SOUND_CONTROL_END => {
+                self.apu.read_dma_sound_control(address & 0b1)
+            }
+            Self::SOUND_ON_OFF_BASE..=Self::SOUND_ON_OFF_END => {
+                self.apu.read_sound_on_off(address & 0b11)
+            }
             Self::SOUND_PWM_CONTROL_BASE..=Self::SOUND_PWM_CONTROL_END => {
-                self.apu.read_sound_bias(address & 0b1)
+                self.apu.read_sound_pwm_control(address & 0b11)
             }
 
             Self::SOUND_BASE..=Self::SOUND_END => 0,
@@ -1592,8 +1618,18 @@ impl Bus {
                 .lcd
                 .write_brightness_coefficient(value, address.get_bit_range(0..=0)),
 
+            Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE
+                ..=Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_END => self
+                .apu
+                .write_channel_lr_volume_enable(value, address & 0b1),
+            Self::SOUND_DMA_SOUND_CONTROL_BASE..=Self::SOUND_DMA_SOUND_CONTROL_END => {
+                self.apu.write_dma_sound_control(value, address & 0b1)
+            }
+            Self::SOUND_ON_OFF_BASE..=Self::SOUND_ON_OFF_END => {
+                self.apu.write_sound_on_off(value, address & 0b11)
+            }
             Self::SOUND_PWM_CONTROL_BASE..=Self::SOUND_PWM_CONTROL_END => {
-                self.apu.write_sound_bias(value, address & 0b1)
+                self.apu.write_sound_pwm_control(value, address & 0b11)
             }
             Self::SOUND_BASE..=Self::SOUND_END => {
                 // println!("stubbed sound write {:02X} -> [{:08X}]", value, address)
@@ -2257,15 +2293,23 @@ impl Bus {
         InterruptType::Timer3,
     ];
 
-    fn step_timers(&mut self) {
+    fn step_timers(&mut self) -> TimerStepResult {
+        let mut result = TimerStepResult {
+            overflows: [false; 4],
+        };
+
         let mut timer_overflow = false;
         let mut interrupt_requests = [false; 4];
 
         for (i, timer) in self.timers.iter_mut().enumerate() {
             timer_overflow = timer.step(timer_overflow);
 
-            if timer_overflow && timer.get_timer_irq_enable() {
-                interrupt_requests[i] = true;
+            if timer_overflow {
+                result.overflows[i] = true;
+
+                if timer.get_timer_irq_enable() {
+                    interrupt_requests[i] = true;
+                }
             }
         }
 
@@ -2282,6 +2326,8 @@ impl Bus {
                 self.request_interrupt(interrupt_type);
             }
         }
+
+        result
     }
 
     fn request_interrupt(&mut self, interrupt: InterruptType) {

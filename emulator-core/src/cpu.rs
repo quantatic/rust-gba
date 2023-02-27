@@ -793,6 +793,10 @@ impl Cpu {
         };
     }
 
+    pub fn sample_apu(&self) -> f32 {
+        self.bus.apu.sample()
+    }
+
     fn handle_exception(&mut self, exception_type: ExceptionType) {
         log::trace!("HANDLING EXCEPTION: {:?}", exception_type);
 

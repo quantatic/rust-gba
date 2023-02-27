@@ -1,8 +1,15 @@
+mod sample_source;
+
+use sample_source::sample_source;
+
+use std::time::Duration;
 use std::{fs::File, time::Instant};
 
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use pixels::{wgpu::TextureFormat, PixelsBuilder, SurfaceTexture};
+use rodio::source::SineWave;
+use rodio::{OutputStream, Sink, Source};
 use winit::event_loop::EventLoop;
 use winit::{
     event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
@@ -11,6 +18,8 @@ use winit::{
 };
 
 use emulator_core::{calculate_lcd_checksum, Cartridge, Cpu, Key, Lcd, CYCLES_PER_SECOND};
+
+const APU_SAMPLE_RATE: u32 = 44_100;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -34,6 +43,12 @@ fn press_key(cpu: &mut Cpu, key: Key) {
 
 fn main() -> Result<()> {
     env_logger::init();
+
+    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+    let sink = Sink::try_new(&stream_handle).unwrap();
+
+    let (mut source_sender, source) = sample_source(APU_SAMPLE_RATE);
+    sink.append(source);
 
     let args = Args::parse();
 
@@ -76,9 +91,7 @@ fn main() -> Result<()> {
     let init = Instant::now();
     let mut last_step = Instant::now();
     let mut i = 0;
-    // for _ in 0..62_000_000 {
-    //     cpu.fetch_decode_execute();
-    // }
+    let mut apu_samples: u64 = 0;
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -86,6 +99,11 @@ fn main() -> Result<()> {
                 let cycle_start = cpu.bus.cycle_count();
                 while (cpu.bus.cycle_count() - cycle_start) < (CYCLES_PER_SECOND / 60) {
                     cpu.fetch_decode_execute();
+
+                    while cpu.bus.cycle_count() > (apu_samples * u64::from(APU_SAMPLE_RATE)) {
+                        source_sender.push(cpu.sample_apu());
+                        apu_samples += 1;
+                    }
                 }
 
                 let draw_buffer = pixels.get_frame_mut();
