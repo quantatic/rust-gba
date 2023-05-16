@@ -106,7 +106,7 @@ fn main() -> Result<()> {
                     }
                 }
 
-                let draw_buffer = pixels.get_frame_mut();
+                let draw_buffer = pixels.frame_mut();
                 let lcd_buffer = cpu.bus.lcd.get_buffer();
                 for (index, pixel) in lcd_buffer.iter().flatten().enumerate() {
                     draw_buffer[(index * 4)..][0] = (pixel.red() << 3) | (pixel.red() >> 2);
