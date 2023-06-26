@@ -1,5 +1,6 @@
 /target
 /*.gba
+*.sav.*
 *.sav
 /flamegraph.svg
 /perf.data
