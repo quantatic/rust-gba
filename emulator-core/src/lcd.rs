@@ -667,6 +667,10 @@ impl Lcd {
                 None
             };
 
+            let sprite_semi_transparent = sprite_pixel_query_info
+                .sprite_pixel_info
+                .map_or(false, |info| info.semi_transparent);
+
             let sprite_pixel_info = if displayed_selection.obj_displayed {
                 sprite_pixel_query_info
                     .sprite_pixel_info
@@ -675,142 +679,161 @@ impl Lcd {
                 None
             };
 
-            let mut pixels = [
-                sprite_pixel_info,
-                layer_0_pixel_info,
-                layer_1_pixel_info,
-                layer_2_pixel_info,
-                layer_3_pixel_info,
-            ];
-            pixels.sort_by(|pixel_one, pixel_two| match (pixel_one, pixel_two) {
-                (
-                    Some(PixelInfo {
-                        priority: priority_one,
-                        ..
-                    }),
-                    Some(PixelInfo {
-                        priority: priority_two,
-                        ..
-                    }),
-                ) => Ord::cmp(&priority_one, &priority_two),
-                (Some(_), None) => Ordering::Less,
-                (None, Some(_)) => Ordering::Greater,
-                (None, None) => Ordering::Equal,
-            });
-            let pixels = pixels;
+            let pixels = {
+                // Ensure that we do a stable sort.
+                let mut pixels_unsorted = [
+                    sprite_pixel_info,
+                    layer_0_pixel_info,
+                    layer_1_pixel_info,
+                    layer_2_pixel_info,
+                    layer_3_pixel_info,
+                ];
+                pixels_unsorted.sort_by(|pixel_one, pixel_two| match (pixel_one, pixel_two) {
+                    (
+                        Some(PixelInfo {
+                            priority: priority_one,
+                            ..
+                        }),
+                        Some(PixelInfo {
+                            priority: priority_two,
+                            ..
+                        }),
+                    ) => Ord::cmp(&priority_one, &priority_two),
+                    (Some(_), None) => Ordering::Less,
+                    (None, Some(_)) => Ordering::Greater,
+                    (None, None) => Ordering::Equal,
+                });
 
-            let drawn_pixel = match (
-                displayed_selection.effects_displayed,
-                self.get_color_special_effect(),
-            ) {
-                (true, ColorSpecialEffect::AlphaBlending) => {
-                    let first_pixel = pixels[0];
-                    let second_pixel = pixels[1];
+                pixels_unsorted
+            };
 
-                    // sanity check to ensure array was properly sorted.
-                    assert!(first_pixel.is_some() || second_pixel.is_none());
+            let first_pixel = pixels[0];
+            let second_pixel = pixels[1];
 
-                    let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
+            let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
 
-                    let first_pixel_info = if let Some(PixelInfo {
-                        color, pixel_type, ..
-                    }) = first_pixel
-                    {
-                        (color, pixel_type)
-                    } else {
-                        backdrop_info
-                    };
+            let first_pixel_info = if let Some(PixelInfo {
+                color, pixel_type, ..
+            }) = first_pixel
+            {
+                (color, pixel_type)
+            } else {
+                backdrop_info
+            };
 
-                    let second_pixel_info = if let Some(PixelInfo {
-                        color, pixel_type, ..
-                    }) = second_pixel
-                    {
-                        (color, pixel_type)
-                    } else {
-                        backdrop_info
-                    };
+            let second_pixel_info = if let Some(PixelInfo {
+                color, pixel_type, ..
+            }) = second_pixel
+            {
+                (color, pixel_type)
+            } else {
+                backdrop_info
+            };
 
-                    if self.special_effect_first_pixel(first_pixel_info.1)
-                        && self.special_effect_second_pixel(second_pixel_info.1)
-                    {
-                        first_pixel_info.0.blend(
-                            self.get_alpha_first_target_coefficient(),
-                            second_pixel_info.0,
-                            self.get_alpha_second_target_coefficient(),
-                        )
-                    } else {
-                        first_pixel_info.0
-                    }
-                }
-                (true, ColorSpecialEffect::BrightnessIncrease) => {
-                    let pixel = pixels[0];
-
-                    let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
-
-                    let (pixel_color, pixel_type) =
-                        if let Some(PixelInfo {
-                            color, pixel_type, ..
-                        }) = pixel
+            // If we have a semi-transparent sprite with highest priority, alpha blending takes priority.
+            //
+            // In this case, we need to ensure that the highest-priority pixel is a sprite, but if so,
+            // the first special effect target doesn't need to select sprite.
+            let drawn_pixel = if sprite_semi_transparent
+                && matches!(first_pixel_info.1, PixelType::Sprite)
+                && self.special_effect_second_pixel(second_pixel_info.1)
+            {
+                first_pixel_info.0.blend(
+                    self.get_alpha_first_target_coefficient(),
+                    second_pixel_info.0,
+                    self.get_alpha_second_target_coefficient(),
+                )
+            } else {
+                match (
+                    displayed_selection.effects_displayed,
+                    self.get_color_special_effect(),
+                ) {
+                    (true, ColorSpecialEffect::AlphaBlending) => {
+                        if self.special_effect_first_pixel(first_pixel_info.1)
+                            && self.special_effect_second_pixel(second_pixel_info.1)
                         {
-                            (color, pixel_type)
+                            first_pixel_info.0.blend(
+                                self.get_alpha_first_target_coefficient(),
+                                second_pixel_info.0,
+                                self.get_alpha_second_target_coefficient(),
+                            )
                         } else {
-                            backdrop_info
-                        };
-
-                    if self.special_effect_first_pixel(pixel_type) {
-                        let new_red = pixel_color.red()
-                            + ((f64::from(31 - pixel_color.red())
-                                * self.get_brightness_coefficient())
-                                as u8);
-                        let new_green = pixel_color.green()
-                            + ((f64::from(31 - pixel_color.green())
-                                * self.get_brightness_coefficient())
-                                as u8);
-                        let new_blue = pixel_color.blue()
-                            + ((f64::from(31 - pixel_color.blue())
-                                * self.get_brightness_coefficient())
-                                as u8);
-
-                        Rgb555::new(new_red, new_green, new_blue)
-                    } else {
-                        pixel_color
+                            first_pixel_info.0
+                        }
                     }
-                }
-                (true, ColorSpecialEffect::BrightnessDecrease) => {
-                    let pixel = pixels[0];
+                    (true, ColorSpecialEffect::BrightnessIncrease) => {
+                        let pixel = pixels[0];
 
-                    let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
+                        let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
 
-                    let (pixel_color, pixel_type) =
-                        if let Some(PixelInfo {
-                            color, pixel_type, ..
-                        }) = pixel
-                        {
-                            (color, pixel_type)
+                        let (pixel_color, pixel_type) =
+                            if let Some(PixelInfo {
+                                color, pixel_type, ..
+                            }) = pixel
+                            {
+                                (color, pixel_type)
+                            } else {
+                                backdrop_info
+                            };
+
+                        if self.special_effect_first_pixel(pixel_type) {
+                            let new_red = pixel_color.red()
+                                + ((f64::from(31 - pixel_color.red())
+                                    * self.get_brightness_coefficient())
+                                    as u8);
+                            let new_green = pixel_color.green()
+                                + ((f64::from(31 - pixel_color.green())
+                                    * self.get_brightness_coefficient())
+                                    as u8);
+                            let new_blue = pixel_color.blue()
+                                + ((f64::from(31 - pixel_color.blue())
+                                    * self.get_brightness_coefficient())
+                                    as u8);
+
+                            Rgb555::new(new_red, new_green, new_blue)
                         } else {
-                            backdrop_info
-                        };
-
-                    if self.special_effect_first_pixel(pixel_type) {
-                        let new_red = pixel_color.red()
-                            - ((f64::from(pixel_color.red()) * self.get_brightness_coefficient())
-                                as u8);
-                        let new_green = pixel_color.green()
-                            - ((f64::from(pixel_color.green()) * self.get_brightness_coefficient())
-                                as u8);
-                        let new_blue = pixel_color.blue()
-                            - ((f64::from(pixel_color.blue()) * self.get_brightness_coefficient())
-                                as u8);
-
-                        Rgb555::new(new_red, new_green, new_blue)
-                    } else {
-                        pixel_color
+                            pixel_color
+                        }
                     }
+                    (true, ColorSpecialEffect::BrightnessDecrease) => {
+                        let pixel = pixels[0];
+
+                        let backdrop_info = (self.bg_palette_ram[0], PixelType::Backdrop);
+
+                        let (pixel_color, pixel_type) =
+                            if let Some(PixelInfo {
+                                color, pixel_type, ..
+                            }) = pixel
+                            {
+                                (color, pixel_type)
+                            } else {
+                                backdrop_info
+                            };
+
+                        if self.special_effect_first_pixel(pixel_type) {
+                            let new_red = pixel_color.red()
+                                - ((f64::from(pixel_color.red())
+                                    * self.get_brightness_coefficient())
+                                    as u8);
+                            let new_green = pixel_color.green()
+                                - ((f64::from(pixel_color.green())
+                                    * self.get_brightness_coefficient())
+                                    as u8);
+                            let new_blue = pixel_color.blue()
+                                - ((f64::from(pixel_color.blue())
+                                    * self.get_brightness_coefficient())
+                                    as u8);
+
+                            Rgb555::new(new_red, new_green, new_blue)
+                        } else {
+                            pixel_color
+                        }
+                    }
+                    (true, ColorSpecialEffect::None) | (false, _) => match pixels[0] {
+                        Some(PixelInfo { color, .. }) => color,
+                        None => self.bg_palette_ram[0],
+                    },
                 }
-                (true, ColorSpecialEffect::None) | (false, _) => match pixels[0] {
-                    Some(PixelInfo { color, .. }) => color,
-                    None => self.bg_palette_ram[0],
-                },
             };
 
             self.back_buffer[usize::from(pixel_y)][usize::from(pixel_x)] = drawn_pixel;
@@ -835,245 +858,6 @@ impl Lcd {
             hblank_entered,
             vblank_entered,
             vcount_matched,
-        }
-    }
-
-    fn get_sprite_pixel(
-        &self,
-        pixel_x: u16,
-        pixel_y: u16,
-        obj_mosaic_horizontal: u16,
-        obj_mosaic_vertical: u16,
-    ) -> SpritePixelQueryInfo {
-        const OBJ_TILE_DATA_VRAM_BASE: usize = 0x10000;
-        const TILE_SIZE: u16 = 8;
-        const WORLD_WIDTH: u16 = 512;
-        const WORLD_HEIGHT: u16 = 256;
-
-        let mut sprite_pixel_info: Option<SpritePixelInfo> = None;
-
-        let mut obj_window = false;
-
-        for obj in self.obj_attributes.iter() {
-            let Some((sprite_tile_width, sprite_tile_height)) = obj.get_obj_tile_dims() else { continue };
-
-            let sprite_width = sprite_tile_width * TILE_SIZE;
-            let sprite_height = sprite_tile_height * TILE_SIZE;
-
-            let sprite_x = obj.get_x_coordinate();
-            let sprite_y = obj.get_y_coordinate();
-
-            let mut base_corner_offset_x = (pixel_x + WORLD_WIDTH - sprite_x) % WORLD_WIDTH;
-            let mut base_corner_offset_y = (pixel_y + WORLD_HEIGHT - sprite_y) % WORLD_HEIGHT;
-
-            if base_corner_offset_x >= (sprite_width * 2)
-                || base_corner_offset_y >= (sprite_height * 2)
-                || ((!obj.get_rotation_scaling_flag() || !obj.get_double_size_flag())
-                    && (base_corner_offset_x >= sprite_width
-                        || base_corner_offset_y >= sprite_height))
-            {
-                continue;
-            }
-
-            let (sprite_offset_x, sprite_offset_y) = if obj.get_rotation_scaling_flag() {
-                let base_corner_offset_x = base_corner_offset_x;
-                let base_corner_offset_y = base_corner_offset_y;
-
-                let rotation_info_idx = obj.get_rotation_scaling_index();
-                let rotation_info = self.obj_rotations[usize::from(rotation_info_idx)];
-
-                let a = half_word_fixed_point_to_float(rotation_info.a);
-                let b = half_word_fixed_point_to_float(rotation_info.b);
-                let c = half_word_fixed_point_to_float(rotation_info.c);
-                let d = half_word_fixed_point_to_float(rotation_info.d);
-
-                let center_offset_adjustment_x = sprite_width / 2;
-                let center_offset_adjustment_y = sprite_height / 2;
-
-                // In a double-sized sprite, where each square represents the size of an original sprite,
-                //   we use "X" as the central reference point when performing transformations. We don't
-                //   move this point all the way back to an offset of WxH, instead only moving it back to
-                //   an offset of (W/2)x(H/2), as represented by the period ("."). This means that in
-                //   double-sized mode, the effective origin of the drawn sprite is at the dot, instead of
-                //   the top left of the below square. This has the effect of moving the drawn sprite over and
-                //   down by half the width & height of the sprite.
-                //     +---+---+
-                //     | . |   |
-                //     +---X---+
-                //     |   |   |
-                //     +---+---+
-                let (base_center_offset_x, base_center_offset_y) = if obj.get_double_size_flag() {
-                    (
-                        f64::from(base_corner_offset_x) - f64::from(sprite_width),
-                        f64::from(base_corner_offset_y) - f64::from(sprite_height),
-                    )
-                } else {
-                    (
-                        f64::from(base_corner_offset_x) - (f64::from(sprite_width) / 2.0),
-                        f64::from(base_corner_offset_y) - (f64::from(sprite_height) / 2.0),
-                    )
-                };
-
-                let center_offset_x = (base_center_offset_x * a) + (base_center_offset_y * b);
-                let center_offset_y = (base_center_offset_x * c) + (base_center_offset_y * d);
-
-                let corner_offset_x = center_offset_x + f64::from(center_offset_adjustment_x);
-                let corner_offset_y = center_offset_y + f64::from(center_offset_adjustment_y);
-
-                if corner_offset_x < 0.0
-                    || corner_offset_x >= f64::from(sprite_width)
-                    || corner_offset_y < 0.0
-                    || corner_offset_y >= f64::from(sprite_height)
-                {
-                    continue;
-                }
-
-                (corner_offset_x as u16, corner_offset_y as u16)
-            } else {
-                if obj.get_obj_disable_flag() {
-                    continue;
-                }
-
-                if obj.get_obj_mosaic() {
-                    base_corner_offset_x -= base_corner_offset_x % obj_mosaic_horizontal;
-                    base_corner_offset_y -= base_corner_offset_y % obj_mosaic_vertical;
-                }
-
-                let base_corner_offset_x = base_corner_offset_x;
-                let base_corner_offset_y = base_corner_offset_y;
-
-                let offset_x = if obj.get_horizontal_flip() {
-                    sprite_width - 1 - base_corner_offset_x
-                } else {
-                    base_corner_offset_x
-                };
-
-                let offset_y = if obj.get_vertical_flip() {
-                    sprite_height - 1 - base_corner_offset_y
-                } else {
-                    base_corner_offset_y
-                };
-
-                (offset_x, offset_y)
-            };
-
-            assert!(sprite_offset_x < sprite_width);
-            assert!(sprite_offset_y < sprite_height);
-
-            let sprite_tile_x = sprite_offset_x / 8;
-            let sprite_tile_y = sprite_offset_y / 8;
-
-            let tile_offset_x = sprite_offset_x % 8;
-            let tile_offset_y = sprite_offset_y % 8;
-
-            let base_tile_number = obj.get_tile_number();
-
-            let palette_idx = match obj.get_palette_depth() {
-                PaletteDepth::EightBit => {
-                    let tile_number = match self.get_obj_tile_mapping() {
-                        ObjectTileMapping::OneDimensional => {
-                            base_tile_number
-                                + (sprite_tile_y * sprite_tile_width * 2)
-                                + (sprite_tile_x * 2)
-                        }
-                        ObjectTileMapping::TwoDimensional => {
-                            base_tile_number + (sprite_tile_y * 32) + (sprite_tile_x * 2)
-                        }
-                    };
-
-                    let tile_idx = OBJ_TILE_DATA_VRAM_BASE
-                        + (usize::from(tile_number) * 32)
-                        + (usize::from(tile_offset_y) * 8)
-                        + usize::from(tile_offset_x);
-
-                    // Ignore out of bounds tile reads, for now.
-                    // TODO: Investigate the HW behavior of these OOB accesses.
-                    if tile_idx >= self.vram.len() {
-                        continue;
-                    }
-
-                    let palette_idx = self.vram[tile_idx];
-
-                    if palette_idx == 0 {
-                        continue;
-                    }
-
-                    palette_idx
-                }
-                PaletteDepth::FourBit => {
-                    let tile_number = match self.get_obj_tile_mapping() {
-                        ObjectTileMapping::OneDimensional => {
-                            base_tile_number + (sprite_tile_y * sprite_tile_width) + sprite_tile_x
-                        }
-                        ObjectTileMapping::TwoDimensional => {
-                            base_tile_number + (sprite_tile_y * 32) + sprite_tile_x
-                        }
-                    };
-
-                    let tile_idx = OBJ_TILE_DATA_VRAM_BASE
-                        + (usize::from(tile_number) * 32)
-                        + (usize::from(tile_offset_y) * 4)
-                        + (usize::from(tile_offset_x) / 2);
-
-                    let tile_data = self.vram[tile_idx];
-
-                    // Ignore out of bounds tile reads, for now.
-                    // TODO: Investigate the HW behavior of these OOB accesses.
-                    if tile_idx >= self.vram.len() {
-                        continue;
-                    }
-
-                    let palette_idx_low = if tile_offset_x % 2 == 0 {
-                        tile_data.get_bit_range(0..=3)
-                    } else {
-                        tile_data.get_bit_range(4..=7)
-                    };
-
-                    if palette_idx_low == 0 {
-                        continue;
-                    }
-
-                    palette_idx_low.set_bit_range(obj.get_palette_number(), 4..=7)
-                }
-            };
-
-            let semi_transparent = match obj.get_obj_mode() {
-                ObjMode::Normal => false,
-                ObjMode::SemiTransparent => true,
-                ObjMode::ObjWindow => {
-                    obj_window = true;
-                    continue;
-                }
-            };
-
-            let priority = obj.get_bg_priority();
-
-            // If we've already found a pixel and our new pixel has lower priority (keeping)
-            // in mind that values closer to zero are considered higher priority, then don't
-            // bother recording this pixel.
-            if let Some(info) = sprite_pixel_info {
-                if info.pixel_info.priority <= priority {
-                    continue;
-                };
-            }
-
-            let new_pixel_info = PixelInfo {
-                color: self.obj_palette_ram[usize::from(palette_idx)],
-                priority,
-                pixel_type: PixelType::Sprite,
-            };
-
-            let new_sprite_pixel_info = SpritePixelInfo {
-                pixel_info: new_pixel_info,
-                semi_transparent,
-            };
-
-            sprite_pixel_info = Some(new_sprite_pixel_info);
-        }
-
-        SpritePixelQueryInfo {
-            sprite_pixel_info,
-            obj_window,
         }
     }
 
