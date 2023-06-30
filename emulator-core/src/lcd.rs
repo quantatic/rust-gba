@@ -97,16 +97,11 @@ enum DisplayFrame {
     Frame1,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 enum PaletteDepth {
     FourBit,
+    #[default]
     EightBit,
-}
-
-impl Default for PaletteDepth {
-    fn default() -> Self {
-        PaletteDepth::EightBit
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -131,31 +126,21 @@ enum AffineDisplayOverflow {
     Wraparound,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 enum ObjectShape {
+    #[default]
     Square,
     Horizontal,
     Vertical,
     Prohibited,
 }
 
-impl Default for ObjectShape {
-    fn default() -> Self {
-        ObjectShape::Square
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 enum ObjMode {
+    #[default]
     Normal,
     SemiTransparent,
     ObjWindow,
-}
-
-impl Default for ObjMode {
-    fn default() -> Self {
-        ObjMode::Normal
-    }
 }
 
 #[derive(Clone, Copy, Debug)]

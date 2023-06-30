@@ -2,14 +2,12 @@ mod sample_source;
 
 use sample_source::sample_source;
 
-use std::time::Duration;
 use std::{fs::File, time::Instant};
 
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use pixels::{wgpu::TextureFormat, PixelsBuilder, SurfaceTexture};
-use rodio::source::SineWave;
-use rodio::{OutputStream, Sink, Source};
+use rodio::{OutputStream, Sink};
 use winit::event_loop::EventLoop;
 use winit::{
     event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},

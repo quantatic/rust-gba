@@ -1,6 +1,6 @@
-use crate::{bus::BusAccessType, cpu::arm::decode_arm, BitManipulation, CpuMode, InstructionSet};
+use crate::{bus::BusAccessType, cpu::arm::decode_arm, BitManipulation, InstructionSet};
 
-use super::{Cpu, ExceptionType, InstructionCondition, InstructionCyclesInfo, Register, ShiftType};
+use super::{Cpu, ExceptionType, InstructionCondition, Register, ShiftType};
 
 use std::{cmp::Ordering, fmt::Display, ops::RangeInclusive};
 
@@ -134,166 +134,9 @@ pub(super) enum ThumbInstructionType {
     },
 }
 
-impl ThumbInstructionType {
-    pub fn cycles_info(&self) -> InstructionCyclesInfo {
-        match self {
-            ThumbInstructionType::Register { operation, .. } => match operation {
-                // 1S for ADD,SUB,MOV,AND,EOR,ADC,SBC,TST,NEG,CMP,CMN,ORR,BIC,MVN
-                ThumbRegisterOperation::Add
-                | ThumbRegisterOperation::Sub
-                | ThumbRegisterOperation::Mov
-                | ThumbRegisterOperation::And
-                | ThumbRegisterOperation::Eor
-                | ThumbRegisterOperation::Adc
-                | ThumbRegisterOperation::Sbc
-                | ThumbRegisterOperation::Tst
-                | ThumbRegisterOperation::Neg
-                | ThumbRegisterOperation::Cmp
-                | ThumbRegisterOperation::Cmn
-                | ThumbRegisterOperation::Orr
-                | ThumbRegisterOperation::Bic
-                | ThumbRegisterOperation::Mvn => InstructionCyclesInfo { i: 0, n: 0, s: 1 },
-                // 1S+1I for LSL,LSR,ASR,ROR
-                ThumbRegisterOperation::Lsl
-                | ThumbRegisterOperation::Lsr
-                | ThumbRegisterOperation::Asr
-                | ThumbRegisterOperation::Ror => InstructionCyclesInfo { i: 1, n: 0, s: 1 },
-                // 1S+mI for MUL on ARMv4 (m=1..4; depending on MSBs of incoming Rd value)
-                // 1S+mI for MUL on ARMv5 (m=3; fucking slow, no matter of MSBs of Rd value)
-                // Lowest common denominator of 1S+1I for now
-                ThumbRegisterOperation::Mul => InstructionCyclesInfo { i: 1, n: 0, s: 1 },
-            },
-            ThumbInstructionType::HighRegister {
-                operation,
-                destination_register,
-                ..
-            } => {
-                // 1S for ADD/MOV/CMP
-                // 2S+1N for ADD/MOV with Rd=R15
-
-                let (s, n, i) = if matches!(destination_register, Register::R15)
-                    && matches!(
-                        operation,
-                        ThumbHighRegisterOperation::Add | ThumbHighRegisterOperation::Mov
-                    ) {
-                    (2, 1, 0)
-                } else {
-                    (1, 0, 0)
-                };
-
-                InstructionCyclesInfo { s, n, i }
-            }
-            // 2S+1N for ... BX
-            // Note: I'm assuming that Blx is 2S+1N as well.
-            ThumbInstructionType::Bx { .. } | ThumbInstructionType::Blx { .. } => {
-                InstructionCyclesInfo { i: 0, n: 1, s: 2 }
-            }
-            // 1S+1N+1I for [all] LDR
-            ThumbInstructionType::Ldr { .. } => InstructionCyclesInfo { i: 1, n: 1, s: 1 },
-            // 2N for [all] STR
-            ThumbInstructionType::Str { .. } => InstructionCyclesInfo { i: 0, n: 2, s: 0 },
-            // Execution Time: 1S
-            ThumbInstructionType::AddSpecial { .. } => InstructionCyclesInfo { i: 0, n: 0, s: 1 },
-            // Execution Time: .. (n-1)S+2N (PUSH).
-            ThumbInstructionType::Push {
-                register_bit_list, ..
-            } => {
-                // for now, assume that LR doesn't count towards n
-                let num_pushed: u8 = register_bit_list
-                    .iter()
-                    .copied()
-                    .filter(|val| *val)
-                    .count()
-                    .try_into()
-                    .expect("failed to convert number of registers pushed to u8");
-
-                let s = num_pushed.saturating_sub(1);
-                let n = 2;
-                let i = 0;
-                InstructionCyclesInfo { s, n, i }
-            }
-            // Execution Time: nS+1N+1I (POP), (n+1)S+2N+1I (POP PC)
-            ThumbInstructionType::Pop {
-                register_bit_list,
-                pop_pc,
-            } => {
-                let num_popped: u8 = register_bit_list
-                    .iter()
-                    .copied()
-                    .filter(|val| *val)
-                    .count()
-                    .try_into()
-                    .expect("failed to convert number of registers popped to u8");
-
-                let (s, n) = if *pop_pc {
-                    (num_popped + 1, 2)
-                } else {
-                    (num_popped, 1)
-                };
-                let i = 1;
-
-                InstructionCyclesInfo { s, n, i }
-            }
-            // Execution Time: ... (n-1)S+2N for STM.
-            ThumbInstructionType::StmiaWriteBack {
-                register_bit_list, ..
-            } => {
-                let num_stored: u8 = register_bit_list
-                    .iter()
-                    .copied()
-                    .filter(|val| *val)
-                    .count()
-                    .try_into()
-                    .expect("failed to convert number of registers stored to u8");
-
-                let s = num_stored.saturating_sub(1);
-                let n = 2;
-                let i = 1;
-
-                InstructionCyclesInfo { s, n, i }
-            }
-            // Execution Time: nS+1N+1I for LDM.
-            ThumbInstructionType::LdmiaWriteBack {
-                register_bit_list, ..
-            } => {
-                let num_loaded: u8 = register_bit_list
-                    .iter()
-                    .copied()
-                    .filter(|val| *val)
-                    .count()
-                    .try_into()
-                    .expect("failed to convert number of registers stored to u8");
-
-                let s = num_loaded;
-                let n = 1;
-                let i = 1;
-
-                InstructionCyclesInfo { s, n, i }
-            }
-            // Execution Time:
-            // 2S+1N if condition true (jump executed)
-            // 1S    if condition false
-            // Note: Use lowest common denominator (1S) for now.
-            ThumbInstructionType::B { .. } => InstructionCyclesInfo { i: 0, n: 0, s: 1 },
-            // Execution Time: 3S+1N (first opcode 1S, second opcode 2S+1N).
-            ThumbInstructionType::BlPartOne { .. } => InstructionCyclesInfo { i: 0, n: 0, s: 1 },
-            ThumbInstructionType::BlPartTwo { .. } => InstructionCyclesInfo { i: 0, n: 1, s: 2 },
-            // Execution Time: 2S+1N.
-            ThumbInstructionType::Swi { .. } => InstructionCyclesInfo { i: 0, n: 1, s: 2 },
-            ThumbInstructionType::Invalid { opcode } => unreachable!("0x{opcode:04X}"),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct ThumbInstruction {
     instruction_type: ThumbInstructionType,
-}
-
-impl ThumbInstruction {
-    pub(super) fn instruction_type(&self) -> ThumbInstructionType {
-        self.instruction_type
-    }
 }
 
 fn get_register_at_offset(opcode: u16, offset: usize) -> Register {
@@ -2335,22 +2178,16 @@ impl Display for ThumbInstruction {
                 }
 
                 let idx_delta = register_bit_list.len() - start_idx;
-                match idx_delta.cmp(&1) {
-                    Ordering::Equal => {
-                        if printed_register {
-                            f.write_str(", ")?;
-                        }
-                        printed_register = true;
+                if idx_delta == 1 {
+                    if printed_register {
+                        f.write_str(", ")?;
                     }
-                    Ordering::Greater => {
-                        if printed_register {
-                            f.write_str(", ")?;
-                        }
-                        printed_register = true;
+                } else if idx_delta > 1 {
+                    if printed_register {
+                        f.write_str(", ")?;
+                    }
 
-                        write!(f, "r{}-r{}", start_idx, register_bit_list.len() - 1)?;
-                    }
-                    _ => {}
+                    write!(f, "r{}-r{}", start_idx, register_bit_list.len() - 1)?;
                 }
 
                 f.write_str("}")?;

@@ -1,8 +1,4 @@
-use std::{
-    collections::VecDeque,
-    sync::mpsc::{channel, Receiver, Sender},
-    time::Duration,
-};
+use std::sync::mpsc::{channel, Receiver, Sender};
 
 use rodio::Source;
 

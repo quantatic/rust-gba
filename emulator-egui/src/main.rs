@@ -488,7 +488,7 @@ impl MyEguiApp {
                 TextEdit::multiline(&mut view_string)
                     .interactive(false)
                     .font(TextStyle::Monospace)
-                    .layouter(&mut |ui, val, wrap_width| {
+                    .layouter(&mut |ui, val, _wrap_width| {
                         ui.fonts(|fonts| {
                             fonts.layout_no_wrap(
                                 val.to_string(),
@@ -517,7 +517,7 @@ impl MyEguiApp {
                 TextEdit::multiline(&mut view_string)
                     .interactive(false)
                     .font(TextStyle::Monospace)
-                    .layouter(&mut |ui, val, wrap_width| {
+                    .layouter(&mut |ui, val, _wrap_width| {
                         ui.fonts(|fonts| {
                             fonts.layout_no_wrap(
                                 val.to_string(),

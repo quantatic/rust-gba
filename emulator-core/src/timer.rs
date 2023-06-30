@@ -10,7 +10,7 @@ enum PrescalerInterval {
     Div1024,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Timer {
     tick: u64,
 
@@ -19,19 +19,6 @@ pub struct Timer {
     control: u16,
 
     startup_delay: bool,
-}
-
-impl Default for Timer {
-    fn default() -> Self {
-        Self {
-            tick: 0,
-            counter: 0,
-            reload: 0,
-            control: 0,
-
-            startup_delay: false,
-        }
-    }
 }
 
 impl Timer {

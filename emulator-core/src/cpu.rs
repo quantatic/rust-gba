@@ -80,13 +80,6 @@ pub struct Cpu {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct InstructionCyclesInfo {
-    i: u8, // internal cycle
-    n: u8, // non-sequential cycle
-    s: u8, // sequential cycle
-}
-
-#[derive(Clone, Copy, Debug)]
 enum ExceptionType {
     Reset,
     Undefined,
@@ -273,7 +266,6 @@ impl Display for Register {
             Self::R15 => f.write_str("pc"),
             Self::Cpsr => f.write_str("cpsr"),
             Self::Spsr => f.write_str("spsr"),
-            _ => todo!("{:?}", self),
         }
     }
 }
@@ -690,10 +682,6 @@ impl Cpu {
             Register::Cpsr => self.cpsr,
         }
     }
-
-    fn pc(&self) -> u32 {
-        self.read_register(Register::R15, |pc| pc)
-    }
 }
 
 pub enum Instruction {
@@ -1069,7 +1057,7 @@ impl Cpu {
                 Instruction::ArmInstruction(instruction)
             }
             InstructionSet::Thumb => {
-                let opcode = self.bus.read_halfword_address_debug(address) as u16;
+                let opcode = self.bus.read_halfword_address_debug(address);
                 let instruction = thumb::decode_thumb(opcode);
                 Instruction::ThumbInstruction(instruction)
             }

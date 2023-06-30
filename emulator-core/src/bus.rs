@@ -1224,8 +1224,8 @@ impl Bus {
                 u16::from_be_bytes([byte, byte])
             }
             _ => {
-                let low_byte = self.read_byte_address_debug(aligned_address) as u8;
-                let high_byte = self.read_byte_address_debug(aligned_address + 1) as u8;
+                let low_byte = self.read_byte_address_debug(aligned_address);
+                let high_byte = self.read_byte_address_debug(aligned_address + 1);
 
                 u16::from_le_bytes([low_byte, high_byte])
             }
@@ -1416,10 +1416,10 @@ impl Bus {
             }
             _ => {
                 let le_bytes = [
-                    self.read_byte_address_debug(aligned_address) as u8,
-                    self.read_byte_address_debug(aligned_address + 1) as u8,
-                    self.read_byte_address_debug(aligned_address + 2) as u8,
-                    self.read_byte_address_debug(aligned_address + 3) as u8,
+                    self.read_byte_address_debug(aligned_address),
+                    self.read_byte_address_debug(aligned_address + 1),
+                    self.read_byte_address_debug(aligned_address + 2),
+                    self.read_byte_address_debug(aligned_address + 3),
                 ];
 
                 u32::from_le_bytes(le_bytes)
@@ -2196,7 +2196,7 @@ impl Bus {
                                 );
                                 self.dma_infos[dma_idx].read_latch =
                                     (u32::from(result) << u16::BITS) | u32::from(result);
-                                result as u16
+                                result
                             };
 
                             self.write_halfword_address(

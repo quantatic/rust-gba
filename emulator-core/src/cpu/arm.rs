@@ -1,8 +1,8 @@
-use super::{Cpu, ExceptionType, InstructionCondition, InstructionCyclesInfo, Register, ShiftType};
+use super::{Cpu, ExceptionType, InstructionCondition, Register, ShiftType};
 
 use crate::bus::BusAccessType;
 use crate::cpu::thumb::decode_thumb;
-use crate::{BitManipulation, Bus, CpuMode, DataAccess, InstructionSet};
+use crate::{BitManipulation, DataAccess, InstructionSet};
 
 use std::fmt::Display;
 use std::ops::RangeInclusive;
@@ -105,115 +105,6 @@ pub(super) enum ArmInstructionType {
     Invalid {
         opcode: u32,
     },
-}
-
-impl ArmInstructionType {
-    pub(super) fn cycles_info(&self) -> InstructionCyclesInfo {
-        match self {
-            ArmInstructionType::Alu {
-                second_operand,
-                destination_operand,
-                ..
-            } => {
-                let mut i = 0;
-                let mut s = 1;
-                let mut n = 0;
-
-                // Add x=1I cycles if Op2 shifted-by-register.
-                if matches!(
-                    second_operand,
-                    AluSecondOperandInfo::Register {
-                        shift_info: ArmRegisterOrImmediate::Register(_),
-                        ..
-                    }
-                ) {
-                    i += 1;
-                }
-
-                // Add y=1S+1N cycles if Rd=R15.
-                if matches!(destination_operand, Register::R15) {
-                    s += 1;
-                    n += 1;
-                }
-
-                InstructionCyclesInfo { i, n, s }
-            }
-            ArmInstructionType::Ldr {
-                destination_register,
-                ..
-            } => {
-                let i = 1;
-                let mut s = 1;
-                let mut n = 1;
-
-                // For normal LDR: 1S+1N+1I. For LDR PC: 2S+2N+1I.
-                if matches!(destination_register, Register::R15) {
-                    s += 1;
-                    n += 1;
-                }
-
-                InstructionCyclesInfo { i, n, s }
-            }
-            ArmInstructionType::Str { .. } => InstructionCyclesInfo { i: 0, n: 2, s: 0 },
-            ArmInstructionType::Ldm {
-                register_bit_list, ..
-            } => {
-                // TODO: handle R15 as loaded register:
-                // For normal LDM, nS+1N+1I. For LDM PC, (n+1)S+2N+1I.
-
-                let num_loaded = register_bit_list
-                    .iter()
-                    .copied()
-                    .filter(|val| *val)
-                    .count()
-                    .try_into()
-                    .expect("failed to convert number of registers loaded to u8");
-
-                let s = num_loaded;
-                let n = 1;
-                let i = 1;
-
-                InstructionCyclesInfo { i, n, s }
-            }
-            ArmInstructionType::Stm {
-                register_bit_list, ..
-            } => {
-                let num_loaded: u8 = register_bit_list
-                    .iter()
-                    .copied()
-                    .filter(|val| *val)
-                    .count()
-                    .try_into()
-                    .expect("failed to convert number of registers stored to u8");
-
-                let s = num_loaded.saturating_sub(1); // account for possibly empty rlist
-                let n = 2;
-                let i = 0;
-
-                InstructionCyclesInfo { i, n, s }
-            }
-            // 1S+2N+1I
-            ArmInstructionType::Swp { .. } => InstructionCyclesInfo { i: 1, n: 2, s: 1 },
-            // Execution Time: 1S.
-            ArmInstructionType::Mrs { .. } | ArmInstructionType::Msr { .. } => {
-                InstructionCyclesInfo { i: 0, n: 0, s: 1 }
-            }
-            // Execution Time: 2S + 1N
-            ArmInstructionType::B { .. } | ArmInstructionType::Bl { .. } => {
-                InstructionCyclesInfo { i: 0, n: 1, s: 2 }
-            }
-            // Execution Time: 2S + 1N
-            ArmInstructionType::Bx { .. } | ArmInstructionType::Blx { .. } => {
-                InstructionCyclesInfo { i: 0, n: 1, s: 2 }
-            }
-            // Execution Time: 2S+1N
-            ArmInstructionType::Swi { .. } => InstructionCyclesInfo { i: 0, n: 1, s: 2 },
-            // TODO: Implement proper logic here for multiplication timings.
-            // For now, have all multiplications take 1S, which is the lowest common denominator.
-            ArmInstructionType::Mul { .. } => InstructionCyclesInfo { i: 0, n: 0, s: 1 },
-            ArmInstructionType::Invalid { opcode } => unreachable!("0x{opcode:08X}"),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
