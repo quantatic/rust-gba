@@ -367,6 +367,7 @@ pub enum FlashCommandState {
     Identification,
     Erase,
     WriteSingleByte,
+    EraseAndWrite128Bytes,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -405,8 +406,8 @@ impl Flash {
     const ATMEL_MANUFACTURER: u8 = 0x1F;
 
     fn new(device_type: u8, manufacturer: u8) -> Self {
-        assert!(device_type != Self::ATMEL_DEVICE_TYPE);
-        assert!(manufacturer != Self::ATMEL_MANUFACTURER);
+        // assert!(device_type != Self::ATMEL_DEVICE_TYPE);
+        // assert!(manufacturer != Self::ATMEL_MANUFACTURER);
 
         Self {
             low_bank: Box::new([0xFF; 0x10000]),
@@ -434,6 +435,7 @@ impl Flash {
     }
 
     fn write_byte(&mut self, value: u8, offset: u32) {
+        println!("{:?}", self.state);
         match self.wanted_write {
             FlashWantedWrite::Write_5555_AA if offset == 0x5555 && value == 0xAA => {
                 self.wanted_write = FlashWantedWrite::Write_2AAA_55;
@@ -457,8 +459,13 @@ impl Flash {
                         self.wanted_write = FlashWantedWrite::Write_5555_AA;
                     }
                     0xA0 => {
-                        self.state = FlashCommandState::WriteSingleByte;
                         self.wanted_write = FlashWantedWrite::CommandData;
+
+                        if self.is_atmel() {
+                            self.state = FlashCommandState::EraseAndWrite128Bytes;
+                        } else {
+                            self.state = FlashCommandState::WriteSingleByte;
+                        }
                     }
                     0xB0 => {
                         self.state = FlashCommandState::BankSwitch;
@@ -484,9 +491,23 @@ impl Flash {
 
                     self.state = FlashCommandState::ReadCommand;
                     self.wanted_write = FlashWantedWrite::Write_5555_AA;
-                }
+                },
+                FlashCommandState::EraseAndWrite128Bytes => {
+                    if self.use_high_bank {
+                        self.high_bank[offset as usize] = value;
+                    } else {
+                        self.low_bank[offset as usize] = value;
+                    }
+
+                    // If at the end of the 128 byte write, revert to reading a new command.
+                    if offset == 0x7F {
+                        self.state = FlashCommandState::ReadCommand;
+                        self.wanted_write = FlashWantedWrite::Write_5555_AA;
+                    }
+                },
                 FlashCommandState::Erase => {
                     match value {
+                        // Erase entire chip
                         0x10 if offset == 0x5555 => {
                             for val in self.low_bank.iter_mut() {
                                 *val = 0xFF;
@@ -496,7 +517,8 @@ impl Flash {
                                 *val = 0xFF;
                             }
                         }
-                        0x30 => {
+                        // Erase 4KB sector
+                        0x30 if !self.is_atmel() => {
                             assert!(offset % 0x1000 == 0);
                             for erase_offset in 0..0x1000 {
                                 if self.use_high_bank {
@@ -506,12 +528,12 @@ impl Flash {
                                 }
                             }
                         }
-                        _ => unreachable!("erase command {:02X}", value),
+                        _ => unreachable!("erase command {:02X} with Atmel: {}", value, self.is_atmel()),
                     }
 
                     self.state = FlashCommandState::ReadCommand;
                     self.wanted_write = FlashWantedWrite::Write_5555_AA;
-                }
+                },
                 _ => unreachable!(
                     "{:02X} {:08X} {:?} {:?}",
                     value, offset, self.state, self.wanted_write
@@ -525,6 +547,10 @@ impl Flash {
                 self.wanted_write
             ),
         }
+    }
+
+    fn is_atmel(&self) -> bool {
+        self.device_type == Self::ATMEL_DEVICE_TYPE && self.manufacturer == Self::ATMEL_MANUFACTURER
     }
 }
 
