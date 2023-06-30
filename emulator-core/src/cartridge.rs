@@ -74,8 +74,8 @@ impl Cartridge {
             let code_bytes = &data[GAME_CODE_BYTE_RANGE];
 
             match backup_types::BACKUP_TYPES_MAP.get(code_bytes).copied() {
-                Some(BackupType::Eeprom512B) => todo!(),
-                Some(BackupType::Eeprom8K) => Backup::Eeprom(Eeprom::default()),
+                Some(BackupType::Eeprom512B) => Backup::Eeprom(Eeprom::new(EepromSize::Eeprom512B)),
+                Some(BackupType::Eeprom8K) => Backup::Eeprom(Eeprom::new(EepromSize::Eeprom8K)),
                 Some(BackupType::Flash {
                     device_type,
                     manufacturer,
@@ -95,8 +95,8 @@ impl Cartridge {
                     assert!(num_matches <= 1);
 
                     if eeprom_match {
-                        log::info!("Using eeprom backup");
-                        Backup::Eeprom(Eeprom::default())
+                        log::info!("Using eeprom backup with size 8K");
+                        Backup::Eeprom(Eeprom::new(EepromSize::Eeprom8K))
                     } else if sram_match {
                         log::info!("Using sram backup");
                         Backup::Sram(Sram::default())
@@ -247,34 +247,64 @@ enum EepromStatus {
     StopBit,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+enum EepromSize {
+    Eeprom512B,
+    Eeprom8K,
+}
+
+impl EepromSize {
+    fn data_bits(self) -> usize {
+        match self {
+            EepromSize::Eeprom512B => 0x1000,
+            EepromSize::Eeprom8K => 0x10000,
+        }
+    }
+
+    fn address_bits(self) -> u8 {
+        match self {
+            EepromSize::Eeprom512B => 6,
+            EepromSize::Eeprom8K => 14,
+        }
+    }
+}
+
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Eeprom {
-    #[serde_as(as = "Box<[_; 0x10000]>")]
-    data: Box<[bool; 0x10000]>,
+    #[serde_as(as = "Box<[_]>")]
+    data: Box<[bool]>,
     rx_bits: u8,
     rx_buffer: u64,
     rx_offset: u16,
     tx_bits: u8,
     tx_offset: u16,
     status: EepromStatus,
+
+    #[serde(default = "eeprom_size_backwards_compat")]
+    size: EepromSize,
 }
 
-impl Default for Eeprom {
-    fn default() -> Self {
+// This is a newly added field, so we use this to set a backwards-compatible default.
+// In order version of the emulator, 8K was the implicit default.
+fn eeprom_size_backwards_compat() -> EepromSize {
+    EepromSize::Eeprom8K
+}
+
+impl Eeprom {
+    fn new(size: EepromSize) -> Self {
         Self {
-            data: Box::new([true; 0x10000]),
+            data: vec![true; size.data_bits()].into_boxed_slice(),
             rx_bits: 0,
             rx_buffer: 0,
             rx_offset: 0,
             tx_bits: 0,
             tx_offset: 0,
             status: EepromStatus::ReceivingCommand,
+            size,
         }
     }
-}
 
-impl Eeprom {
     fn write_hword(&mut self, value: u16) {
         const SET_CHUNK_REQUEST: u64 = 0b11;
         const WRITE_REQUEST: u64 = 0b10;
@@ -292,7 +322,7 @@ impl Eeprom {
                             EepromStatus::OngoingAction(EepromAction::SetReadAddress)
                         }
                         WRITE_REQUEST => EepromStatus::OngoingAction(EepromAction::Write),
-                        _ => todo!("{:064b}", self.rx_buffer),
+                        _ => unreachable!("EEPROM command request: {:064b}", self.rx_buffer),
                     };
 
                     self.rx_bits = 0;
@@ -300,8 +330,8 @@ impl Eeprom {
                 }
             }
             EepromStatus::OngoingAction(EepromAction::SetReadAddress) => {
-                assert!(self.rx_bits <= 14);
-                if self.rx_bits == 14 {
+                assert!(self.rx_bits <= self.size.address_bits());
+                if self.rx_bits == self.size.address_bits() {
                     self.tx_offset = (self.rx_buffer as u16) * 64;
                     self.tx_bits = 0;
 
@@ -311,17 +341,22 @@ impl Eeprom {
                 }
             }
             EepromStatus::OngoingAction(EepromAction::Write) => {
-                assert!(self.rx_bits <= 78);
+                // Doesn't include "write request" or trailing "0" bit.
+                // eeprom address (6 or 14 bits) + 64 bits data.
+                let address_bits = self.size.address_bits();
+                let write_action_size = address_bits + 64;
 
-                if self.rx_bits == 14 {
+                assert!(self.rx_bits <= write_action_size);
+
+                if self.rx_bits == address_bits {
                     self.rx_offset = (self.rx_buffer as u16) * 64;
                     self.rx_buffer = 0;
-                } else if self.rx_bits > 14 {
+                } else if self.rx_bits > address_bits {
                     self.data[usize::from(self.rx_offset)] = bit;
                     self.rx_offset += 1;
                 }
 
-                if self.rx_bits == 78 {
+                if self.rx_bits == write_action_size {
                     self.rx_bits = 0;
                     self.rx_buffer = 0;
                     self.status = EepromStatus::StopBit;
@@ -490,7 +525,7 @@ impl Flash {
 
                     self.state = FlashCommandState::ReadCommand;
                     self.wanted_write = FlashWantedWrite::Write_5555_AA;
-                },
+                }
                 FlashCommandState::EraseAndWrite128Bytes => {
                     if self.use_high_bank {
                         self.high_bank[offset as usize] = value;
@@ -503,7 +538,7 @@ impl Flash {
                         self.state = FlashCommandState::ReadCommand;
                         self.wanted_write = FlashWantedWrite::Write_5555_AA;
                     }
-                },
+                }
                 FlashCommandState::Erase => {
                     match value {
                         // Erase entire chip
@@ -527,12 +562,16 @@ impl Flash {
                                 }
                             }
                         }
-                        _ => unreachable!("erase command {:02X} with Atmel: {}", value, self.is_atmel()),
+                        _ => unreachable!(
+                            "erase command {:02X} with Atmel: {}",
+                            value,
+                            self.is_atmel()
+                        ),
                     }
 
                     self.state = FlashCommandState::ReadCommand;
                     self.wanted_write = FlashWantedWrite::Write_5555_AA;
-                },
+                }
                 _ => unreachable!(
                     "{:02X} {:08X} {:?} {:?}",
                     value, offset, self.state, self.wanted_write
