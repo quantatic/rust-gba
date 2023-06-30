@@ -1380,10 +1380,8 @@ impl Cpu {
                 self.write_register(source_value, destination_register);
 
                 if matches!(destination_register, Register::R15) {
-                    self.pre_decode_thumb =
-                        decode_thumb(self.bus.fetch_thumb_opcode(source_value));
-                    self.prefetch_opcode =
-                        u32::from(self.bus.fetch_thumb_opcode(source_value + 2));
+                    self.pre_decode_thumb = decode_thumb(self.bus.fetch_thumb_opcode(source_value));
+                    self.prefetch_opcode = u32::from(self.bus.fetch_thumb_opcode(source_value + 2));
                     self.write_register(source_value + 4, Register::R15);
                 } else {
                     self.write_register(old_pc + 2, Register::R15);

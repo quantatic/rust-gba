@@ -101,7 +101,7 @@ impl Cpu {
         let mut bus = Bus::new(cartridge);
 
         let pre_decode_thumb = ThumbInstruction {
-            instruction_type: ThumbInstructionType::Invalid { opcode: 0xDEAD }
+            instruction_type: ThumbInstructionType::Invalid { opcode: 0xDEAD },
         };
 
         let pre_decode_arm = decode_arm(bus.fetch_arm_opcode(0));

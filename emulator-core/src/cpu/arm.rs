@@ -1588,7 +1588,8 @@ impl Cpu {
             if matches!(destination_operand, Register::R15) {
                 match self.get_instruction_mode() {
                     InstructionSet::Arm => {
-                        self.pre_decode_arm = decode_arm(self.bus.fetch_arm_opcode(unsigned_result));
+                        self.pre_decode_arm =
+                            decode_arm(self.bus.fetch_arm_opcode(unsigned_result));
                         self.prefetch_opcode = self.bus.fetch_arm_opcode(unsigned_result + 4);
 
                         self.write_register(unsigned_result + 8, Register::R15);
