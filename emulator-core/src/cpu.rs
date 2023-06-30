@@ -10,7 +10,7 @@ use crate::cpu::arm::decode_arm;
 use crate::BitManipulation;
 
 use self::arm::ArmInstruction;
-use self::thumb::ThumbInstruction;
+use self::thumb::{ThumbInstruction, ThumbInstructionType};
 
 #[derive(Clone, Default)]
 struct ModeRegisters {
@@ -74,9 +74,9 @@ pub struct Cpu {
     spsr_und: u32,
     cpsr: u32,
     pub bus: Bus,
-    prefetch_opcode: Option<u32>,
-    pre_decode_arm: Option<ArmInstruction>,
-    pre_decode_thumb: Option<ThumbInstruction>,
+    prefetch_opcode: u32,
+    pre_decode_arm: ArmInstruction,
+    pre_decode_thumb: ThumbInstruction,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -96,7 +96,18 @@ impl Cpu {
         // treated as SPSR in system and user mode
         let cpsr = Self::SYSTEM_MODE_BITS;
 
-        let current_registers = ModeRegisters::default();
+        let mut current_registers = ModeRegisters::default();
+
+        let mut bus = Bus::new(cartridge);
+
+        let pre_decode_thumb = ThumbInstruction {
+            instruction_type: ThumbInstructionType::Invalid { opcode: 0xDEAD }
+        };
+
+        let pre_decode_arm = decode_arm(bus.fetch_arm_opcode(0));
+        let prefetch_opcode = bus.fetch_arm_opcode(4);
+        current_registers.r15 = 8;
+
         Self {
             current_registers,
             r0: 0,
@@ -136,10 +147,10 @@ impl Cpu {
             r14_und: 0,
             spsr_und: 0,
             cpsr,
-            bus: Bus::new(cartridge),
-            pre_decode_arm: None,
-            prefetch_opcode: None,
-            pre_decode_thumb: None,
+            bus,
+            prefetch_opcode,
+            pre_decode_arm,
+            pre_decode_thumb,
         }
     }
 }
@@ -724,35 +735,23 @@ impl Cpu {
                     unreachable!("unaligned ARM pc");
                 }
 
-                let decoded_instruction = self.pre_decode_arm;
-                let prefetched_opcode = self.prefetch_opcode;
-
-                if let Some(decoded) = decoded_instruction {
-                    // println!("{:?}", decoded);
-                    // IRQ must only be dispatched when the pipeline is full.
-                    //
-                    // The return value we push in the IRQ handler is based on the current value of
-                    // PC, which is in turned based on how saturated the prefetch pipeline is. As
-                    // a result, if we attempt to dispatch an interrupt directly after the pipeline
-                    // is flushed (for instance, by a branch), our IRQ handler will push the wrong
-                    // return value.
-                    //
-                    // TODO: Evaluate whether it makes more sense to add custom logic to our
-                    // IRQ handler to check what stage of the instruction pipeline we're in in
-                    // order to calculate the proper return value to save. This may make more sense
-                    // in the long run, but this works for now. This same logic applies to ARM,
-                    // for the same reasons.
-                    if irq_wanted {
-                        self.handle_exception(ExceptionType::InterruptRequest);
-                    } else {
-                        self.execute_arm(decoded);
-                    }
+                // IRQ must only be dispatched when the pipeline is full.
+                //
+                // The return value we push in the IRQ handler is based on the current value of
+                // PC, which is in turned based on how saturated the prefetch pipeline is. As
+                // a result, if we attempt to dispatch an interrupt directly after the pipeline
+                // is flushed (for instance, by a branch), our IRQ handler will push the wrong
+                // return value.
+                //
+                // TODO: Evaluate whether it makes more sense to add custom logic to our
+                // IRQ handler to check what stage of the instruction pipeline we're in in
+                // order to calculate the proper return value to save. This may make more sense
+                // in the long run, but this works for now. This same logic applies to ARM,
+                // for the same reasons.
+                if irq_wanted {
+                    self.handle_exception(ExceptionType::InterruptRequest);
                 } else {
-                    log::error!("ARM prefetch buffer is empty, refilling");
-                    self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(pc));
-                    self.pre_decode_arm = prefetched_opcode.map(arm::decode_arm);
-
-                    self.write_register(pc + 4, Register::R15);
+                    self.execute_arm(self.pre_decode_arm);
                 }
             }
             InstructionSet::Thumb => {
@@ -763,19 +762,10 @@ impl Cpu {
                 let decoded_instruction = self.pre_decode_thumb;
                 let prefetched_opcode = self.prefetch_opcode;
 
-                if let Some(decoded) = decoded_instruction {
-                    if irq_wanted {
-                        self.handle_exception(ExceptionType::InterruptRequest);
-                    } else {
-                        self.execute_thumb(decoded);
-                    }
+                if irq_wanted {
+                    self.handle_exception(ExceptionType::InterruptRequest);
                 } else {
-                    log::error!("Thumb prefetch buffer is empty, refilling");
-                    self.prefetch_opcode = Some(u32::from(self.bus.fetch_thumb_opcode(pc)));
-                    self.pre_decode_thumb =
-                        prefetched_opcode.map(|prefetch| thumb::decode_thumb(prefetch as u16));
-
-                    self.write_register(pc + 2, Register::R15);
+                    self.execute_thumb(self.pre_decode_thumb);
                 }
             }
         };
@@ -859,8 +849,8 @@ impl Cpu {
 
         let new_pc = Self::get_exception_vector_address(exception_type);
 
-        self.pre_decode_arm = Some(decode_arm(self.bus.fetch_arm_opcode(new_pc)));
-        self.prefetch_opcode = Some(self.bus.fetch_arm_opcode(new_pc + 4));
+        self.pre_decode_arm = decode_arm(self.bus.fetch_arm_opcode(new_pc));
+        self.prefetch_opcode = self.bus.fetch_arm_opcode(new_pc + 4);
         self.write_register(new_pc + 8, Register::R15);
     }
 
@@ -1071,25 +1061,27 @@ impl Cpu {
         }
     }
 
+    // TODO: Determine how to calculate this with a permantently filled prefetch buffer.
     pub fn get_executing_pc(&self) -> u32 {
-        let r15 = self.read_register(Register::R15, std::convert::identity);
-        let prefetch_saturated = self.prefetch_opcode.is_some();
-        let decode_saturated = match self.get_instruction_mode() {
-            InstructionSet::Arm => self.pre_decode_arm.is_some(),
-            InstructionSet::Thumb => self.pre_decode_thumb.is_some(),
-        };
+        todo!();
+        // let r15 = self.read_register(Register::R15, std::convert::identity);
+        // let prefetch_saturated = self.prefetch_opcode.is_some();
+        // let decode_saturated = match self.get_instruction_mode() {
+        //     InstructionSet::Arm => self.pre_decode_arm.is_some(),
+        //     InstructionSet::Thumb => self.pre_decode_thumb.is_some(),
+        // };
 
-        let instructions_behind = match (prefetch_saturated, decode_saturated) {
-            (false, false) => 0,
-            (true, false) => 1,
-            (false, true) => {
-                unreachable!("prefetch empty and decode saturated shouldn't be possible")
-            }
-            (true, true) => 2,
-        };
+        // let instructions_behind = match (prefetch_saturated, decode_saturated) {
+        //     (false, false) => 0,
+        //     (true, false) => 1,
+        //     (false, true) => {
+        //         unreachable!("prefetch empty and decode saturated shouldn't be possible")
+        //     }
+        //     (true, true) => 2,
+        // };
 
-        let bytes_behind = instructions_behind * self.get_instruction_width();
+        // let bytes_behind = instructions_behind * self.get_instruction_width();
 
-        r15 - bytes_behind
+        // r15 - bytes_behind
     }
 }
