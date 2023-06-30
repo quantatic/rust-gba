@@ -435,7 +435,6 @@ impl Flash {
     }
 
     fn write_byte(&mut self, value: u8, offset: u32) {
-        println!("{:?}", self.state);
         match self.wanted_write {
             FlashWantedWrite::Write_5555_AA if offset == 0x5555 && value == 0xAA => {
                 self.wanted_write = FlashWantedWrite::Write_2AAA_55;

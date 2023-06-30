@@ -10,7 +10,7 @@ resolver = "2"
 anyhow = "1.0.71"
 lazy_static = "1.4.0"
 log = "0.4.19"
-phf = { version = "0.11.1", features = ["macros"] }
+phf = { version = "0.11.2", features = ["macros"] }
 regex = "1.8.4"
 serde = { version = "1.0.164", features = ["derive"] }
 serde_with = "3.0.0"
