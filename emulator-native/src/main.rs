@@ -2,6 +2,7 @@ mod sample_source;
 
 use sample_source::sample_source;
 
+use std::time::Duration;
 use std::{fs::File, time::Instant};
 
 use anyhow::{anyhow, Result};
@@ -18,6 +19,7 @@ use winit::{
 use emulator_core::{calculate_lcd_checksum, Cartridge, Cpu, Key, Lcd, CYCLES_PER_SECOND};
 
 const APU_SAMPLE_RATE: u32 = 44_100;
+const FPS_TARGET: u32 = 60;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -25,6 +27,9 @@ struct Args {
 
     #[clap(short, long)]
     frames: Option<u64>,
+
+    #[clap(long)]
+    limit_framerate: bool,
 }
 
 #[allow(unused)]
@@ -87,7 +92,7 @@ fn main() -> Result<()> {
     let mut cpu = Cpu::new(cartridge);
 
     let init = Instant::now();
-    let mut last_step = Instant::now();
+    let mut last_frame = Instant::now();
     let mut i = 0;
     let mut apu_samples: u64 = 0;
 
@@ -114,11 +119,17 @@ fn main() -> Result<()> {
                 }
                 pixels.render().expect("failed to render new frame");
 
-                let time_elapsed = last_step.elapsed();
+                if args.limit_framerate {
+                    while last_frame.elapsed() < Duration::from_secs(1) / FPS_TARGET {
+                        std::thread::yield_now();
+                    }
+                }
+
+                let time_elapsed = last_frame.elapsed();
                 let fps = 1.0 / time_elapsed.as_secs_f64();
                 window.set_title(format!("FPS: {}", fps).as_str());
 
-                last_step = Instant::now();
+                last_frame = Instant::now();
                 match args.frames {
                     Some(frames) if i >= frames => *control_flow = ControlFlow::Exit,
                     _ => {}
