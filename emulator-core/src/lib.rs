@@ -20,6 +20,7 @@ pub use cpu::InstructionSet;
 pub use cpu::Register;
 pub use keypad::Key;
 pub use lcd::{Lcd, Rgb555};
+
 pub const CYCLES_PER_SECOND: u64 = 16_777_216;
 
 pub fn calculate_lcd_checksum(cpu: &Cpu) -> u64 {

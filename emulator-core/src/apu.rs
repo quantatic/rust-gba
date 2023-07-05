@@ -1,7 +1,9 @@
 mod dma_fifo;
+mod tone_and_sweep;
 
 use crate::{bit_manipulation::BitManipulation, bus::TimerStepResult, DataAccess};
 use dma_fifo::DmaFifo;
+use tone_and_sweep::ToneAndSweep;
 
 #[derive(Clone, Copy, Debug)]
 enum DmaFifoTimerSelect {
@@ -18,24 +20,23 @@ pub struct Apu {
 
     fifo_a: DmaFifo,
     fifo_b: DmaFifo,
+    tone_and_sweep: ToneAndSweep,
 }
 
 impl Apu {
     // returns a value from -1.0 to 1.0
     pub fn sample(&self) -> f32 {
-        let a_sample = self.fifo_a.sample();
-        let b_sample = self.fifo_b.sample();
+        let tone_and_sweep_sample = self.tone_and_sweep.sample();
 
-        let a_sample_scaled = f32::from(a_sample) / 128.0;
-        let b_sample_scaled = f32::from(b_sample) / 128.0;
+        let tone_and_sweep_sample_scaled = ((f32::from(tone_and_sweep_sample) / 15.0) * 2.0) - 1.0;
 
-        (a_sample_scaled + b_sample_scaled) / 2.0
+        tone_and_sweep_sample_scaled
     }
 }
 
 impl Apu {
     pub(super) fn step(&mut self, timer_result: TimerStepResult) {
-        // todo!()
+        self.tone_and_sweep.step();
     }
 
     pub fn write_fifo_a(&mut self, value: u32) {
@@ -48,6 +49,48 @@ impl Apu {
 }
 
 impl Apu {
+    pub fn read_ch1_sweep<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.tone_and_sweep.read_sweep_register(index)
+    }
+
+    pub fn write_ch1_sweep<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.tone_and_sweep.write_sweep_register(value, index);
+    }
+
+    pub fn read_ch1_duty_length_envelope<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.tone_and_sweep.read_duty_length_envelope(index)
+    }
+
+    pub fn write_ch1_duty_length_envelope<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.tone_and_sweep.write_duty_length_envelope(value, index)
+    }
+
+    pub fn read_ch1_frequency_control<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.tone_and_sweep.read_frequency_control(index)
+    }
+
+    pub fn write_ch1_frequency_control<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.tone_and_sweep.write_frequency_control(value, index)
+    }
+
     pub fn read_channel_lr_volume_enable<T>(&self, index: u32) -> T
     where
         u16: DataAccess<T>,

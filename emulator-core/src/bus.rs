@@ -584,8 +584,14 @@ impl Bus {
     const BLEND_BRIGHTNESS_BASE: u32 = 0x04000054;
     const BLEND_BRIGHTNESS_END: u32 = Self::BLEND_BRIGHTNESS_BASE + 1;
 
-    const SOUND_BASE: u32 = 0x04000060;
-    const SOUND_END: u32 = 0x040000A8;
+    const CHANNEL_1_SWEEP_BASE: u32 = 0x04000060;
+    const CHANNEL_1_SWEEP_END: u32 = Self::CHANNEL_1_SWEEP_BASE + 1;
+
+    const CHANNEL_1_DUTY_LENGTH_ENVELOPE_BASE: u32 = 0x04000062;
+    const CHANNEL_1_DUTY_LENGTH_ENVELOPE_END: u32 = Self::CHANNEL_1_DUTY_LENGTH_ENVELOPE_BASE + 1;
+
+    const CHANNEL_1_FREQUENCY_CONTROL_BASE: u32 = 0x04000064;
+    const CHANNEL_1_FREQUENCY_CONTROL_END: u32 = Self::CHANNEL_1_FREQUENCY_CONTROL_BASE + 1;
 
     const SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE: u32 = 0x04000080;
     const SOUND_CHANNEL_LR_VOLUME_ENABLE_END: u32 = Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE + 1;
@@ -897,6 +903,17 @@ impl Bus {
                 self.lcd.read_alpha_blending_coefficients(address & 0b1)
             }
 
+            Self::CHANNEL_1_SWEEP_BASE..=Self::CHANNEL_1_SWEEP_END => {
+                self.apu.read_ch1_sweep(address & 0b1)
+            }
+            Self::CHANNEL_1_DUTY_LENGTH_ENVELOPE_BASE
+                ..=Self::CHANNEL_1_DUTY_LENGTH_ENVELOPE_END => {
+                self.apu.read_ch1_duty_length_envelope(address & 0b1)
+            }
+            Self::CHANNEL_1_FREQUENCY_CONTROL_BASE..=Self::CHANNEL_1_FREQUENCY_CONTROL_END => {
+                self.apu.read_ch1_frequency_control(address & 0b1)
+            }
+
             Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE
                 ..=Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_END => {
                 self.apu.read_channel_lr_volume_enable(address & 0b1)
@@ -910,8 +927,6 @@ impl Bus {
             Self::SOUND_PWM_CONTROL_BASE..=Self::SOUND_PWM_CONTROL_END => {
                 self.apu.read_sound_pwm_control(address & 0b11)
             }
-
-            Self::SOUND_BASE..=Self::SOUND_END => 0,
 
             Self::DMA_0_CONTROL_BASE..=Self::DMA_0_CONTROL_END => {
                 self.dma_infos[0].read_dma_control(address & 0b1)
@@ -1618,6 +1633,17 @@ impl Bus {
                 .lcd
                 .write_brightness_coefficient(value, address.get_bit_range(0..=0)),
 
+            Self::CHANNEL_1_SWEEP_BASE..=Self::CHANNEL_1_SWEEP_END => {
+                self.apu.write_ch1_sweep(value, address & 0b1)
+            }
+            Self::CHANNEL_1_DUTY_LENGTH_ENVELOPE_BASE
+                ..=Self::CHANNEL_1_DUTY_LENGTH_ENVELOPE_END => self
+                .apu
+                .write_ch1_duty_length_envelope(value, address & 0b1),
+            Self::CHANNEL_1_FREQUENCY_CONTROL_BASE..=Self::CHANNEL_1_FREQUENCY_CONTROL_END => {
+                self.apu.write_ch1_frequency_control(value, address & 0b1)
+            }
+
             Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE
                 ..=Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_END => self
                 .apu
@@ -1630,9 +1656,6 @@ impl Bus {
             }
             Self::SOUND_PWM_CONTROL_BASE..=Self::SOUND_PWM_CONTROL_END => {
                 self.apu.write_sound_pwm_control(value, address & 0b11)
-            }
-            Self::SOUND_BASE..=Self::SOUND_END => {
-                // println!("stubbed sound write {:02X} -> [{:08X}]", value, address)
             }
 
             Self::DMA_0_SOURCE_BASE..=Self::DMA_0_SOURCE_END => {

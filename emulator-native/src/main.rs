@@ -100,12 +100,21 @@ fn main() -> Result<()> {
         match event {
             Event::MainEventsCleared => {
                 let cycle_start = cpu.bus.cycle_count();
-                while (cpu.bus.cycle_count() - cycle_start) < (CYCLES_PER_SECOND / 60) {
+                let mut apu_samples = 0;
+                loop {
+                    let cycles_elapsed = cpu.bus.cycle_count() - cycle_start;
+
                     cpu.fetch_decode_execute();
 
-                    while cpu.bus.cycle_count() > (apu_samples * u64::from(APU_SAMPLE_RATE)) {
+                    while cycles_elapsed
+                        > (apu_samples * CYCLES_PER_SECOND / u64::from(APU_SAMPLE_RATE))
+                    {
                         source_sender.push(cpu.sample_apu());
                         apu_samples += 1;
+                    }
+
+                    if cycles_elapsed >= (CYCLES_PER_SECOND / 60) {
+                        break;
                     }
                 }
 
