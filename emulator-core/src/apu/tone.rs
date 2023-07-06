@@ -1,4 +1,4 @@
-use std::{collections::btree_map::Range, ops::RangeInclusive};
+use std::ops::RangeInclusive;
 
 use crate::{bit_manipulation::BitManipulation, data_access::DataAccess, CYCLES_PER_SECOND};
 
@@ -10,13 +10,6 @@ const SEQUENCER_CLOCK_PERIOD: u64 = CYCLES_PER_SECOND / SEQUENCER_CLOCK_FREQUENC
 
 const LENGTH_COUNTER_CLOCKS: [bool; 8] = [true, false, true, false, true, false, true, false];
 const VOLUME_ENVELOPE_CLOCKS: [bool; 8] = [false, false, false, false, false, false, false, true];
-const SWEEP_CLOCKS: [bool; 8] = [false, false, true, false, false, false, true, false];
-
-#[derive(Clone, Debug)]
-enum SweepBehavior {
-    FrequencyIncrease,
-    FrequencyDecrease,
-}
 
 #[derive(Clone, Debug)]
 enum EnvelopeBehavior {
@@ -25,12 +18,9 @@ enum EnvelopeBehavior {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct ToneAndSweep {
-    sweep_register: u16,
+pub struct Tone {
     duty_length_envelope: u16,
     frequency_control: u16,
-
-    frequency_sweep_enabled: bool,
 
     length_counter: u8,
 
@@ -40,15 +30,12 @@ pub struct ToneAndSweep {
     wave_duty_index: u8,
     wave_duty_timer_ticks_left: u16,
     envelope_ticks_left: u8,
-    sweep_ticks_left: u8,
 
     enabled: bool,
     volume: u8,
-
-    frequency_shadow: u16,
 }
 
-impl ToneAndSweep {
+impl Tone {
     pub fn step(&mut self) {
         if self.clock % SEQUENCER_CLOCK_PERIOD == 0 {
             if LENGTH_COUNTER_CLOCKS[usize::from(self.frame_sequencer_idx)] {
@@ -81,63 +68,6 @@ impl ToneAndSweep {
                     } else {
                         self.get_envelope_sweep_period()
                     }
-                }
-            }
-
-            if SWEEP_CLOCKS[usize::from(self.frame_sequencer_idx)] {
-                self.sweep_ticks_left = self.sweep_ticks_left.saturating_sub(1);
-                if self.sweep_ticks_left == 0 {
-                    if self.frequency_sweep_enabled && self.get_sweep_period() != 0 {
-                        let new_frequency = match self.get_sweep_behavior() {
-                            SweepBehavior::FrequencyIncrease => {
-                                self.frequency_shadow
-                                    + (self.frequency_shadow >> self.get_sweep_shift())
-                            }
-                            SweepBehavior::FrequencyDecrease => {
-                                self.frequency_shadow
-                                    - (self.frequency_shadow >> self.get_sweep_shift())
-                            }
-                        };
-
-                        // The sweep timer is clocked at 128 Hz by the frame sequencer. When it generates a clock and the sweep's
-                        // internal enabled flag is set and the sweep period is not zero, a new frequency is calculated and the overflow check is performed.
-                        //
-                        // If the new frequency is 2047 or less and the sweep shift is not zero, this new frequency is written
-                        // back to the shadow frequency and square 1's frequency in NR13 and NR14, then frequency calculation and
-                        // overflow check are run AGAIN immediately using this new value, but this second new frequency is not written back.
-                        if self.get_sweep_shift() != 0 {
-                            if new_frequency > 2047 {
-                                self.enabled = false;
-                            }
-
-                            self.frequency_shadow = new_frequency;
-                            self.set_frequency(new_frequency);
-
-                            // If the new frequency is 2047 or less and the sweep shift is not zero, this new frequency is written back to
-                            // the shadow frequency and square 1's frequency in NR13 and NR14, then frequency calculation and overflow check
-                            // are run AGAIN immediately using this new value, but this second new frequency is not written back.
-                            let test_frequency = match self.get_sweep_behavior() {
-                                SweepBehavior::FrequencyIncrease => {
-                                    self.frequency_shadow
-                                        + (self.frequency_shadow >> self.get_sweep_shift())
-                                }
-                                SweepBehavior::FrequencyDecrease => {
-                                    self.frequency_shadow
-                                        - (self.frequency_shadow >> self.get_sweep_shift())
-                                }
-                            };
-
-                            if test_frequency > 2047 {
-                                self.enabled = false;
-                            }
-                        }
-                    }
-
-                    self.sweep_ticks_left = if self.get_sweep_period() == 0 {
-                        8
-                    } else {
-                        self.get_sweep_period()
-                    };
                 }
             }
 
@@ -181,33 +111,10 @@ impl ToneAndSweep {
         if self.length_counter == 0 {
             self.length_counter = 64;
         }
-
-        self.frequency_sweep_enabled = self.get_sweep_period() > 0 || self.get_sweep_shift() > 0;
-        self.frequency_shadow = self.get_frequency();
     }
 }
 
-impl ToneAndSweep {
-    fn get_sweep_shift(&self) -> u8 {
-        const SWEEP_SHIFT_BIT_RANGE: RangeInclusive<usize> = 0..=2;
-
-        self.sweep_register.get_bit_range(SWEEP_SHIFT_BIT_RANGE) as u8
-    }
-
-    fn get_sweep_behavior(&self) -> SweepBehavior {
-        const SWEEP_BEHAVIOR_BIT_INDEX: usize = 3;
-        if self.sweep_register.get_bit(SWEEP_BEHAVIOR_BIT_INDEX) {
-            SweepBehavior::FrequencyDecrease
-        } else {
-            SweepBehavior::FrequencyIncrease
-        }
-    }
-
-    fn get_sweep_period(&self) -> u8 {
-        const SWEEP_PERIOD_BIT_RANGE: RangeInclusive<usize> = 4..=6;
-        self.sweep_register.get_bit_range(SWEEP_PERIOD_BIT_RANGE) as u8
-    }
-
+impl Tone {
     fn get_sound_length(&self) -> u8 {
         const SOUND_LENGTH_BIT_RANGE: RangeInclusive<usize> = 0..=5;
         self.duty_length_envelope
@@ -284,22 +191,7 @@ impl ToneAndSweep {
     }
 }
 
-impl ToneAndSweep {
-    pub fn read_sweep_register<T>(&self, index: u32) -> T
-    where
-        u16: DataAccess<T>,
-    {
-        self.sweep_register.get_data(index)
-    }
-
-    pub fn write_sweep_register<T>(&mut self, value: T, index: u32)
-    where
-        u16: DataAccess<T>,
-    {
-        const SWEEP_WRITE_MASK: u16 = 0x007F;
-        self.sweep_register = self.sweep_register.set_data(value, index) & SWEEP_WRITE_MASK;
-    }
-
+impl Tone {
     pub fn read_duty_length_envelope<T>(&self, index: u32) -> T
     where
         u16: DataAccess<T>,

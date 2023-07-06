@@ -593,6 +593,12 @@ impl Bus {
     const CHANNEL_1_FREQUENCY_CONTROL_BASE: u32 = 0x04000064;
     const CHANNEL_1_FREQUENCY_CONTROL_END: u32 = Self::CHANNEL_1_FREQUENCY_CONTROL_BASE + 1;
 
+    const CHANNEL_2_DUTY_LENGTH_ENVELOPE_BASE: u32 = 0x04000068;
+    const CHANNEL_2_DUTY_LENGTH_ENVELOPE_END: u32 = Self::CHANNEL_2_DUTY_LENGTH_ENVELOPE_BASE + 1;
+
+    const CHANNEL_2_FREQUENCY_CONTROL_BASE: u32 = 0x0400006C;
+    const CHANNEL_2_FREQUENCY_CONTROL_END: u32 = Self::CHANNEL_2_FREQUENCY_CONTROL_BASE + 1;
+
     const SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE: u32 = 0x04000080;
     const SOUND_CHANNEL_LR_VOLUME_ENABLE_END: u32 = Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE + 1;
 
@@ -912,6 +918,14 @@ impl Bus {
             }
             Self::CHANNEL_1_FREQUENCY_CONTROL_BASE..=Self::CHANNEL_1_FREQUENCY_CONTROL_END => {
                 self.apu.read_ch1_frequency_control(address & 0b1)
+            }
+
+            Self::CHANNEL_2_DUTY_LENGTH_ENVELOPE_BASE
+                ..=Self::CHANNEL_2_DUTY_LENGTH_ENVELOPE_END => {
+                self.apu.read_ch2_duty_length_envelope(address & 0b1)
+            }
+            Self::CHANNEL_2_FREQUENCY_CONTROL_BASE..=Self::CHANNEL_2_FREQUENCY_CONTROL_END => {
+                self.apu.read_ch2_frequency_control(address & 0b1)
             }
 
             Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE
@@ -1642,6 +1656,14 @@ impl Bus {
                 .write_ch1_duty_length_envelope(value, address & 0b1),
             Self::CHANNEL_1_FREQUENCY_CONTROL_BASE..=Self::CHANNEL_1_FREQUENCY_CONTROL_END => {
                 self.apu.write_ch1_frequency_control(value, address & 0b1)
+            }
+
+            Self::CHANNEL_2_DUTY_LENGTH_ENVELOPE_BASE
+                ..=Self::CHANNEL_2_DUTY_LENGTH_ENVELOPE_END => self
+                .apu
+                .write_ch2_duty_length_envelope(value, address & 0b1),
+            Self::CHANNEL_2_FREQUENCY_CONTROL_BASE..=Self::CHANNEL_2_FREQUENCY_CONTROL_END => {
+                self.apu.write_ch2_frequency_control(value, address & 0b1)
             }
 
             Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE
