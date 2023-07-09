@@ -346,8 +346,5 @@ impl ToneAndSweep {
         }
 
         self.frequency_control = self.frequency_control.set_bit(TRIGGER_BIT_INDEX, false);
-        if self.get_length_flag() {
-            log::error!("length flag set");
-        }
     }
 }

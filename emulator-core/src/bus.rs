@@ -599,6 +599,18 @@ impl Bus {
     const CHANNEL_2_FREQUENCY_CONTROL_BASE: u32 = 0x0400006C;
     const CHANNEL_2_FREQUENCY_CONTROL_END: u32 = Self::CHANNEL_2_FREQUENCY_CONTROL_BASE + 1;
 
+    const CHANNEL_3_STOP_WAVE_RAM_SELECT_BASE: u32 = 0x04000070;
+    const CHANNEL_3_STOP_WAVE_RAM_SELECT_END: u32 = Self::CHANNEL_3_STOP_WAVE_RAM_SELECT_BASE + 1;
+
+    const CHANNEL_3_LENGTH_VOLUME_BASE: u32 = 0x04000072;
+    const CHANNEL_3_LENGTH_VOLUME_END: u32 = Self::CHANNEL_3_LENGTH_VOLUME_BASE + 1;
+
+    const CHANNEL_3_FREQUENCY_CONTROL_BASE: u32 = 0x04000074;
+    const CHANNEL_3_FREQUENCY_CONTROL_END: u32 = Self::CHANNEL_3_FREQUENCY_CONTROL_BASE + 1;
+
+    const CHANNEL_3_WAVE_RAM_BASE: u32 = 0x04000090;
+    const CHANNEL_3_WAVE_RAM_END: u32 = Self::CHANNEL_3_WAVE_RAM_BASE + 15;
+
     const SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE: u32 = 0x04000080;
     const SOUND_CHANNEL_LR_VOLUME_ENABLE_END: u32 = Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE + 1;
 
@@ -927,6 +939,20 @@ impl Bus {
             Self::CHANNEL_2_FREQUENCY_CONTROL_BASE..=Self::CHANNEL_2_FREQUENCY_CONTROL_END => {
                 self.apu.read_ch2_frequency_control(address & 0b1)
             }
+
+            Self::CHANNEL_3_STOP_WAVE_RAM_SELECT_BASE
+                ..=Self::CHANNEL_3_STOP_WAVE_RAM_SELECT_END => {
+                self.apu.read_ch3_stop_wave_ram_select(address & 0b1)
+            }
+            Self::CHANNEL_3_LENGTH_VOLUME_BASE..=Self::CHANNEL_3_LENGTH_VOLUME_END => {
+                self.apu.read_ch3_length_volume(address & 0b1)
+            }
+            Self::CHANNEL_3_FREQUENCY_CONTROL_BASE..=Self::CHANNEL_3_FREQUENCY_CONTROL_END => {
+                self.apu.read_ch3_frequency_control(address & 0b1)
+            }
+            Self::CHANNEL_3_WAVE_RAM_BASE..=Self::CHANNEL_3_WAVE_RAM_END => self
+                .apu
+                .read_ch3_wave_ram_byte(address - Self::CHANNEL_3_WAVE_RAM_BASE),
 
             Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE
                 ..=Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_END => {
@@ -1665,6 +1691,20 @@ impl Bus {
             Self::CHANNEL_2_FREQUENCY_CONTROL_BASE..=Self::CHANNEL_2_FREQUENCY_CONTROL_END => {
                 self.apu.write_ch2_frequency_control(value, address & 0b1)
             }
+
+            Self::CHANNEL_3_STOP_WAVE_RAM_SELECT_BASE
+                ..=Self::CHANNEL_3_STOP_WAVE_RAM_SELECT_END => self
+                .apu
+                .write_ch3_stop_wave_ram_select(value, address & 0b1),
+            Self::CHANNEL_3_LENGTH_VOLUME_BASE..=Self::CHANNEL_3_LENGTH_VOLUME_END => {
+                self.apu.write_ch3_length_volume(value, address & 0b1)
+            }
+            Self::CHANNEL_3_FREQUENCY_CONTROL_BASE..=Self::CHANNEL_3_FREQUENCY_CONTROL_END => {
+                self.apu.write_ch3_frequency_control(value, address & 0b1)
+            }
+            Self::CHANNEL_3_WAVE_RAM_BASE..=Self::CHANNEL_3_WAVE_RAM_END => self
+                .apu
+                .write_ch3_wave_ram_byte(value, address - Self::CHANNEL_3_WAVE_RAM_BASE),
 
             Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE
                 ..=Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_END => self

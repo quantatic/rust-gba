@@ -2,11 +2,16 @@ mod dma_fifo;
 
 mod tone;
 mod tone_and_sweep;
+mod wave;
+
+use std::ops::RangeInclusive;
 
 use crate::{bit_manipulation::BitManipulation, bus::TimerStepResult, DataAccess};
+
 use dma_fifo::DmaFifo;
 use tone::Tone;
 use tone_and_sweep::ToneAndSweep;
+use wave::Wave;
 
 #[derive(Clone, Copy, Debug)]
 enum DmaFifoTimerSelect {
@@ -25,6 +30,7 @@ pub struct Apu {
     fifo_b: DmaFifo,
     tone_and_sweep: ToneAndSweep,
     tone: Tone,
+    wave: Wave,
 }
 
 impl Apu {
@@ -32,11 +38,13 @@ impl Apu {
     pub fn sample(&self) -> f32 {
         let tone_and_sweep_sample = self.tone_and_sweep.sample();
         let tone_sample = self.tone.sample();
+        let wave_sample = self.wave.sample();
 
         let tone_and_sweep_sample_scaled = ((f32::from(tone_and_sweep_sample) / 15.0) * 2.0) - 1.0;
         let tone_sample_scaled = ((f32::from(tone_sample) / 15.0) * 2.0) - 1.0;
+        let wave_sample_scaled = ((f32::from(wave_sample) / 15.0) * 2.0) - 1.0;
 
-        (tone_and_sweep_sample_scaled + tone_sample_scaled) / 2.0
+        (tone_and_sweep_sample_scaled + tone_sample_scaled + wave_sample_scaled) / 3.0
     }
 }
 
@@ -44,6 +52,7 @@ impl Apu {
     pub(super) fn step(&mut self, timer_result: TimerStepResult) {
         self.tone_and_sweep.step();
         self.tone.step();
+        self.wave.step();
     }
 
     pub fn write_fifo_a(&mut self, value: u32) {
@@ -126,6 +135,74 @@ impl Apu {
         u16: DataAccess<T>,
     {
         self.tone.write_frequency_control(value, index)
+    }
+}
+
+impl Apu {
+    pub fn read_ch3_stop_wave_ram_select<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.wave.read_stop_wave_ram_select(index)
+    }
+
+    pub fn write_ch3_stop_wave_ram_select<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.wave.write_stop_wave_ram_select(value, index);
+    }
+
+    pub fn read_ch3_length_volume<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.wave.read_length_volume(index)
+    }
+
+    pub fn write_ch3_length_volume<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.wave.write_length_volume(value, index);
+    }
+
+    pub fn read_ch3_frequency_control<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.wave.read_frequency_control(index)
+    }
+
+    pub fn write_ch3_frequency_control<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.wave.write_frequency_control(value, index)
+    }
+
+    pub fn read_ch3_wave_ram_byte(&self, offset: u32) -> u8 {
+        self.wave.read_wave_ram_byte(offset)
+    }
+
+    pub fn write_ch3_wave_ram_byte(&mut self, value: u8, offset: u32) {
+        self.wave.write_wave_ram_byte(value, offset)
+    }
+}
+
+impl Apu {
+    fn get_master_volume_right(&self) -> u8 {
+        const MASTER_VOLUME_RIGHT_BIT_RANGE: RangeInclusive<usize> = 0..=2;
+
+        self.channel_lr_volume_enable
+            .get_bit_range(MASTER_VOLUME_RIGHT_BIT_RANGE) as u8
+    }
+
+    fn get_master_volume_left(&self) -> u8 {
+        const MASTER_VOLUME_LEFT_BIT_RANGE: RangeInclusive<usize> = 4..=6;
+
+        self.channel_lr_volume_enable
+            .get_bit_range(MASTER_VOLUME_LEFT_BIT_RANGE) as u8
     }
 }
 

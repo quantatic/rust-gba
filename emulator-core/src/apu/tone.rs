@@ -178,12 +178,6 @@ impl Tone {
             .get_bit_range(Self::FREQUENCY_BIT_RANGE)
     }
 
-    fn set_frequency(&mut self, new_frequency: u16) {
-        self.frequency_control = self
-            .frequency_control
-            .set_bit_range(new_frequency, Self::FREQUENCY_BIT_RANGE);
-    }
-
     fn get_length_flag(&self) -> bool {
         const LENGTH_FLAG_BIT_INDEX: usize = 14;
 
@@ -238,8 +232,5 @@ impl Tone {
         }
 
         self.frequency_control = self.frequency_control.set_bit(TRIGGER_BIT_INDEX, false);
-        if self.get_length_flag() {
-            log::error!("length flag set");
-        }
     }
 }
