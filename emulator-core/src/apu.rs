@@ -1,5 +1,6 @@
 mod dma_fifo;
 
+mod noise;
 mod tone;
 mod tone_and_sweep;
 mod wave;
@@ -9,6 +10,7 @@ use std::ops::RangeInclusive;
 use crate::{bit_manipulation::BitManipulation, bus::TimerStepResult, DataAccess};
 
 use dma_fifo::DmaFifo;
+use noise::Noise;
 use tone::Tone;
 use tone_and_sweep::ToneAndSweep;
 use wave::Wave;
@@ -31,20 +33,68 @@ pub struct Apu {
     tone_and_sweep: ToneAndSweep,
     tone: Tone,
     wave: Wave,
+    noise: Noise,
 }
 
 impl Apu {
     // returns a value from -1.0 to 1.0
-    pub fn sample(&self) -> f32 {
+    pub fn sample(&self) -> [f32; 2] {
         let tone_and_sweep_sample = self.tone_and_sweep.sample();
         let tone_sample = self.tone.sample();
         let wave_sample = self.wave.sample();
+        let noise_sample = self.noise.sample();
 
-        let tone_and_sweep_sample_scaled = ((f32::from(tone_and_sweep_sample) / 15.0) * 2.0) - 1.0;
-        let tone_sample_scaled = ((f32::from(tone_sample) / 15.0) * 2.0) - 1.0;
-        let wave_sample_scaled = ((f32::from(wave_sample) / 15.0) * 2.0) - 1.0;
+        let tone_and_sweep_sample_scaled =
+            (((f32::from(tone_and_sweep_sample) / 15.0) * 2.0) - 1.0) / 4.0;
+        let tone_sample_scaled = (((f32::from(tone_sample) / 15.0) * 2.0) - 1.0) / 4.0;
+        let wave_sample_scaled = (((f32::from(wave_sample) / 15.0) * 2.0) - 1.0) / 4.0;
+        let noise_sample_scaled = (((f32::from(noise_sample) / 15.0) * 2.0) - 1.0) / 4.0;
 
-        (tone_and_sweep_sample_scaled + tone_sample_scaled + wave_sample_scaled) / 3.0
+        let left_enabled = self.get_enable_flags_left();
+        let right_enabled = self.get_enable_flags_left();
+        // let left_enabled = [false, false, false, true];
+        // let right_enabled = [false, false, false, true];
+        // log::error!("{:?} {:?}", left_enabled, right_enabled);
+
+        // let left_enabled = [false, false, false, true];
+        // let right_enabled = [false, false, false, true];
+
+        let mut sample_left = 0.0;
+        let mut sample_right = 0.0;
+
+        if left_enabled[0] {
+            sample_left += tone_and_sweep_sample_scaled;
+        }
+
+        if right_enabled[0] {
+            sample_right += tone_and_sweep_sample_scaled;
+        }
+
+        if left_enabled[1] {
+            sample_left += tone_sample_scaled;
+        }
+
+        if right_enabled[1] {
+            sample_right += tone_sample_scaled;
+        }
+
+        if left_enabled[2] {
+            sample_left += wave_sample_scaled;
+        }
+
+        if right_enabled[2] {
+            sample_right += wave_sample_scaled;
+        }
+
+        if left_enabled[3] {
+            sample_left += noise_sample_scaled;
+        }
+
+        if right_enabled[3] {
+            sample_right += noise_sample_scaled;
+        }
+
+        [sample_left, sample_right]
     }
 }
 
@@ -53,6 +103,7 @@ impl Apu {
         self.tone_and_sweep.step();
         self.tone.step();
         self.wave.step();
+        self.noise.step();
     }
 
     pub fn write_fifo_a(&mut self, value: u32) {
@@ -191,6 +242,36 @@ impl Apu {
 }
 
 impl Apu {
+    pub fn read_ch4_length_envelope<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.noise.read_length_envelope(index)
+    }
+
+    pub fn write_ch4_length_envelope<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.noise.write_length_envelope(value, index)
+    }
+
+    pub fn read_ch4_frequency_control<T>(&self, index: u32) -> T
+    where
+        u16: DataAccess<T>,
+    {
+        self.noise.read_frequency_control(index)
+    }
+
+    pub fn write_ch4_frequency_control<T>(&mut self, value: T, index: u32)
+    where
+        u16: DataAccess<T>,
+    {
+        self.noise.write_frequency_control(value, index)
+    }
+}
+
+impl Apu {
     fn get_master_volume_right(&self) -> u8 {
         const MASTER_VOLUME_RIGHT_BIT_RANGE: RangeInclusive<usize> = 0..=2;
 
@@ -203,6 +284,36 @@ impl Apu {
 
         self.channel_lr_volume_enable
             .get_bit_range(MASTER_VOLUME_LEFT_BIT_RANGE) as u8
+    }
+
+    fn get_enable_flags_right(&self) -> [bool; 4] {
+        const ENABLE_FLAGS_RIGHT_BIT_RANGE: RangeInclusive<usize> = 8..=11;
+
+        let enabled_raw = self
+            .channel_lr_volume_enable
+            .get_bit_range(ENABLE_FLAGS_RIGHT_BIT_RANGE);
+
+        let mut result = [false; 4];
+        for idx in 0..result.len() {
+            result[idx] = enabled_raw.get_bit(idx);
+        }
+
+        result
+    }
+
+    fn get_enable_flags_left(&self) -> [bool; 4] {
+        const ENABLE_FLAGS_LEFT_BIT_RANGE: RangeInclusive<usize> = 12..=15;
+
+        let enabled_raw = self
+            .channel_lr_volume_enable
+            .get_bit_range(ENABLE_FLAGS_LEFT_BIT_RANGE);
+
+        let mut result = [false; 4];
+        for idx in 0..result.len() {
+            result[idx] = enabled_raw.get_bit(idx);
+        }
+
+        result
     }
 }
 

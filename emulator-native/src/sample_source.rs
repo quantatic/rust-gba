@@ -36,7 +36,7 @@ impl Source for SampleSource {
     }
 
     fn channels(&self) -> u16 {
-        1
+        2
     }
 
     fn sample_rate(&self) -> u32 {

@@ -771,7 +771,7 @@ impl Cpu {
         };
     }
 
-    pub fn sample_apu(&self) -> f32 {
+    pub fn sample_apu(&self) -> [f32; 2] {
         self.bus.apu.sample()
     }
 

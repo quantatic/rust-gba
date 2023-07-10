@@ -611,6 +611,12 @@ impl Bus {
     const CHANNEL_3_WAVE_RAM_BASE: u32 = 0x04000090;
     const CHANNEL_3_WAVE_RAM_END: u32 = Self::CHANNEL_3_WAVE_RAM_BASE + 15;
 
+    const CHANNEL_4_LENGTH_ENVELOPE_BASE: u32 = 0x04000078;
+    const CHANNEL_4_LENGTH_ENVELOPE_END: u32 = Self::CHANNEL_4_LENGTH_ENVELOPE_BASE + 1;
+
+    const CHANNEL_4_FREQUENCY_CONTROL_BASE: u32 = 0x0400007C;
+    const CHANNEL_4_FREQUENCY_CONTROL_END: u32 = Self::CHANNEL_4_FREQUENCY_CONTROL_BASE + 1;
+
     const SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE: u32 = 0x04000080;
     const SOUND_CHANNEL_LR_VOLUME_ENABLE_END: u32 = Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE + 1;
 
@@ -953,6 +959,13 @@ impl Bus {
             Self::CHANNEL_3_WAVE_RAM_BASE..=Self::CHANNEL_3_WAVE_RAM_END => self
                 .apu
                 .read_ch3_wave_ram_byte(address - Self::CHANNEL_3_WAVE_RAM_BASE),
+
+            Self::CHANNEL_4_LENGTH_ENVELOPE_BASE..=Self::CHANNEL_4_LENGTH_ENVELOPE_END => {
+                self.apu.read_ch4_length_envelope(address & 0b1)
+            }
+            Self::CHANNEL_4_FREQUENCY_CONTROL_BASE..=Self::CHANNEL_4_FREQUENCY_CONTROL_END => {
+                self.apu.read_ch4_frequency_control(address & 0b1)
+            }
 
             Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE
                 ..=Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_END => {
@@ -1705,6 +1718,13 @@ impl Bus {
             Self::CHANNEL_3_WAVE_RAM_BASE..=Self::CHANNEL_3_WAVE_RAM_END => self
                 .apu
                 .write_ch3_wave_ram_byte(value, address - Self::CHANNEL_3_WAVE_RAM_BASE),
+
+            Self::CHANNEL_4_LENGTH_ENVELOPE_BASE..=Self::CHANNEL_4_LENGTH_ENVELOPE_END => {
+                self.apu.write_ch4_length_envelope(value, address & 0b1)
+            }
+            Self::CHANNEL_4_FREQUENCY_CONTROL_BASE..=Self::CHANNEL_4_FREQUENCY_CONTROL_END => {
+                self.apu.write_ch4_frequency_control(value, address & 0b1)
+            }
 
             Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_BASE
                 ..=Self::SOUND_CHANNEL_LR_VOLUME_ENABLE_END => self

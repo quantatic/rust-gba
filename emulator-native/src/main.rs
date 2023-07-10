@@ -109,7 +109,9 @@ fn main() -> Result<()> {
                     while cycles_elapsed
                         > (apu_samples * CYCLES_PER_SECOND / u64::from(APU_SAMPLE_RATE))
                     {
-                        source_sender.push(cpu.sample_apu());
+                        let sample = cpu.sample_apu();
+                        source_sender.push(sample[0]);
+                        source_sender.push(sample[1]);
                         apu_samples += 1;
                     }
 
