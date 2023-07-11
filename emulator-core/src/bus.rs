@@ -26,7 +26,7 @@ enum BiosReadBehavior {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TimerStepResult {
-    overflows: [bool; 4],
+    pub overflows: [bool; 4],
 }
 
 #[derive(Clone)]
@@ -44,7 +44,7 @@ pub struct Bus {
     pub open_bus_iwram_data: u32, // no other memory controller latch has visible side-effects.
     open_bus_bios_data: u32,      // most recently fetched BIOS opcode
     bios_read_behavior: BiosReadBehavior,
-    pretfetch_sequential: bool, // whether the next pre-fetch will use sequential access
+    prefetch_sequential: bool, // whether the next pre-fetch will use sequential access
     pub lcd: Lcd,
     pub apu: Apu,
     pub keypad: Keypad,
@@ -85,7 +85,7 @@ impl Bus {
             open_bus_bios_data: 0,
             open_bus_iwram_data: 0,
             bios_read_behavior: BiosReadBehavior::TrueValue,
-            pretfetch_sequential: false,
+            prefetch_sequential: false,
             lcd: Lcd::default(),
             apu: Apu::default(),
             keypad: Keypad::default(),
@@ -119,12 +119,15 @@ enum DmaStartTiming {
 #[derive(Clone, Copy, Debug)]
 struct DmaInfo {
     source_addr: u32,
+    source_addr_internal: u32,
     source_addr_mask: u32,
 
     dest_addr: u32,
+    dest_addr_internal: u32,
     dest_addr_mask: u32,
 
     word_count: u16,
+    word_count_internal: u16,
     word_count_mask: u16,
 
     dma_control: u16,
@@ -141,12 +144,15 @@ impl DmaInfo {
     fn dma_0() -> Self {
         Self {
             source_addr: Default::default(),
+            source_addr_internal: Default::default(),
             source_addr_mask: 0x07FFFFFF,
 
             dest_addr: Default::default(),
+            dest_addr_internal: Default::default(),
             dest_addr_mask: 0x07FFFFFF,
 
             word_count: Default::default(),
+            word_count_internal: Default::default(),
             word_count_mask: 0x3FFF,
 
             dma_control: Default::default(),
@@ -159,12 +165,15 @@ impl DmaInfo {
     fn dma_1() -> Self {
         Self {
             source_addr: Default::default(),
+            source_addr_internal: Default::default(),
             source_addr_mask: 0x0FFFFFFF,
 
             dest_addr: Default::default(),
+            dest_addr_internal: Default::default(),
             dest_addr_mask: 0x07FFFFFF,
 
             word_count: Default::default(),
+            word_count_internal: Default::default(),
             word_count_mask: 0x3FFF,
 
             dma_control: Default::default(),
@@ -177,12 +186,15 @@ impl DmaInfo {
     fn dma_2() -> Self {
         Self {
             source_addr: Default::default(),
+            source_addr_internal: Default::default(),
             source_addr_mask: 0x0FFFFFFF,
 
             dest_addr: Default::default(),
+            dest_addr_internal: Default::default(),
             dest_addr_mask: 0x07FFFFFF,
 
             word_count: Default::default(),
+            word_count_internal: Default::default(),
             word_count_mask: 0x3FFF,
 
             dma_control: Default::default(),
@@ -195,12 +207,15 @@ impl DmaInfo {
     fn dma_3() -> Self {
         Self {
             source_addr: Default::default(),
+            source_addr_internal: Default::default(),
             source_addr_mask: 0x0FFFFFFF,
 
             dest_addr: Default::default(),
+            dest_addr_internal: Default::default(),
             dest_addr_mask: 0x0FFFFFFF,
 
             word_count: Default::default(),
+            word_count_internal: Default::default(),
             word_count_mask: 0xFFFF,
 
             dma_control: Default::default(),
@@ -266,12 +281,16 @@ impl DmaInfo {
         let old_dma_enable = self.get_dma_enable();
         self.dma_control = self.dma_control.set_data(value, index);
 
-        // DMA immedietly is started on rising edge of DMA enable.
-        if !old_dma_enable
-            && self.get_dma_enable()
-            && matches!(self.get_dma_start_timing(), DmaStartTiming::Immediately)
-        {
-            self.dma_requested = true;
+        // Upon DMA Enable (Bit 15) changing from 0 to 1: Reloads SAD, DAD, CNT_L.
+        if !old_dma_enable && self.get_dma_enable() {
+            self.source_addr_internal = self.source_addr;
+            self.dest_addr_internal = self.dest_addr;
+            self.word_count_internal = self.word_count;
+
+            // DMA immedietly is started on rising edge of DMA enable.
+            if matches!(self.get_dma_start_timing(), DmaStartTiming::Immediately) {
+                self.dma_requested = true;
+            }
         }
     }
 }
@@ -349,8 +368,8 @@ impl DmaInfo {
         self.dma_control.get_bit(Self::DMA_ENABLE_BIT_INDEX)
     }
 
-    fn set_dma_enable(&mut self, set: bool) {
-        self.dma_control = self.dma_control.set_bit(Self::DMA_ENABLE_BIT_INDEX, set);
+    fn clear_dma_enabled(&mut self) {
+        self.dma_control = self.dma_control.set_bit(Self::DMA_ENABLE_BIT_INDEX, false);
     }
 
     fn get_dma_requested(&self) -> bool {
@@ -425,14 +444,14 @@ impl Bus {
             self.bios_read_behavior = BiosReadBehavior::PrefetchValue;
         }
 
-        let access_type = if self.pretfetch_sequential {
+        let access_type = if self.prefetch_sequential {
             BusAccessType::Sequential
         } else {
             BusAccessType::NonSequential
         };
         let result = self.read_word_address(address, access_type);
 
-        self.pretfetch_sequential = true;
+        self.prefetch_sequential = true;
         result
     }
 
@@ -443,14 +462,14 @@ impl Bus {
             self.bios_read_behavior = BiosReadBehavior::PrefetchValue;
         }
 
-        let access_type = if self.pretfetch_sequential {
+        let access_type = if self.prefetch_sequential {
             BusAccessType::Sequential
         } else {
             BusAccessType::NonSequential
         };
         let result = self.read_halfword_address(address, access_type);
 
-        self.pretfetch_sequential = true;
+        self.prefetch_sequential = true;
         result
     }
 }
@@ -628,6 +647,12 @@ impl Bus {
 
     const SOUND_PWM_CONTROL_BASE: u32 = 0x04000088;
     const SOUND_PWM_CONTROL_END: u32 = Self::SOUND_PWM_CONTROL_BASE + 3;
+
+    const DMA_FIFO_A_BASE: u32 = 0x040000A0;
+    const DMA_FIFO_A_END: u32 = Self::DMA_FIFO_A_BASE + 3;
+
+    const DMA_FIFO_B_BASE: u32 = 0x040000A4;
+    const DMA_FIFO_B_END: u32 = Self::DMA_FIFO_B_BASE + 3;
 
     const DMA_0_SOURCE_BASE: u32 = 0x040000B0;
     const DMA_0_SOURCE_END: u32 = Self::DMA_0_SOURCE_BASE + 3;
@@ -863,7 +888,7 @@ impl Bus {
             }
         };
 
-        self.pretfetch_sequential = false;
+        self.prefetch_sequential = false;
         result
     }
 
@@ -1222,7 +1247,7 @@ impl Bus {
             }
         };
 
-        self.pretfetch_sequential = false;
+        self.prefetch_sequential = false;
         result
     }
 
@@ -1406,7 +1431,7 @@ impl Bus {
         };
 
         self.open_bus_data = result;
-        self.pretfetch_sequential = false;
+        self.prefetch_sequential = false;
         result
     }
 
@@ -1447,6 +1472,7 @@ impl Bus {
 
                 u32::from_le_bytes(le_bytes)
             }
+
             Self::PALETTE_RAM_BASE..=Self::PALETTE_RAM_END => {
                 let offset = (aligned_address - Self::PALETTE_RAM_BASE) % Self::PALETTER_RAM_SIZE;
                 self.lcd.read_palette_ram_word(offset)
@@ -1555,7 +1581,7 @@ impl Bus {
             _ => {}
         };
 
-        self.pretfetch_sequential = false;
+        self.prefetch_sequential = false;
         self.write_byte_address_debug(value, address);
     }
 
@@ -1931,7 +1957,7 @@ impl Bus {
             _ => {}
         };
 
-        self.pretfetch_sequential = false;
+        self.prefetch_sequential = false;
         self.write_halfword_address_debug(value, address);
     }
 
@@ -2069,7 +2095,7 @@ impl Bus {
             _ => {}
         };
 
-        self.pretfetch_sequential = false;
+        self.prefetch_sequential = false;
         self.write_word_address_debug(value, address);
     }
 
@@ -2097,6 +2123,10 @@ impl Bus {
                 self.board_wram[(actual_offset + 2) as usize] = le_bytes[2];
                 self.board_wram[(actual_offset + 3) as usize] = le_bytes[3];
             }
+
+            Self::DMA_FIFO_A_BASE..=Self::DMA_FIFO_A_END => self.apu.write_fifo_a(value),
+            Self::DMA_FIFO_B_BASE..=Self::DMA_FIFO_B_END => self.apu.write_fifo_b(value),
+
             Self::TIMER_0_COUNTER_RELOAD_BASE..=Self::TIMER_0_CONTROL_END => {
                 self.timers[0].write_timer_counter_reload_word(value)
             }
@@ -2109,6 +2139,7 @@ impl Bus {
             Self::TIMER_3_COUNTER_RELOAD_BASE..=Self::TIMER_3_CONTROL_END => {
                 self.timers[3].write_timer_counter_reload_word(value)
             }
+
             Self::OAM_BASE..=Self::OAM_END => {
                 let offset = (aligned_address - Self::OAM_BASE) % Self::OAM_SIZE;
 
@@ -2266,18 +2297,38 @@ impl Bus {
     fn step_dma(&mut self) {
         for dma_idx in 0..self.dma_infos.len() {
             let dma = &mut self.dma_infos[dma_idx];
-            if dma.get_dma_requested() {
+
+            // These will store the currently accessed source/dest as the DMA progresses.
+            let mut dma_dest = dma.dest_addr_internal;
+            let mut dma_source = dma.source_addr_internal;
+
+            // Sound DMA (FIFO Timing Mode) (DMA1 and DMA2 only)
+            // In this mode, the DMA Repeat bit must be set, and the destination address must be FIFO_A (040000A0h) or FIFO_B (040000A4h).
+            let is_sound_dma = dma.get_dma_repeat()
+                && ((dma_dest == Self::DMA_FIFO_A_BASE && self.apu.poll_fifo_a_wants_dma())
+                    || (dma_dest == Self::DMA_FIFO_B_BASE && self.apu.poll_fifo_b_wants_dma()))
+                && (dma_idx == 1 || dma_idx == 2)
+                && matches!(dma.get_dma_start_timing(), DmaStartTiming::Special);
+
+            if dma.get_dma_requested() || is_sound_dma {
                 // Before any reads, we must acknowlege the DMA request.
                 // Else, we may recursively attempt to handle this DMA during
                 // bus read/writes.
                 dma.set_dma_requested(false);
 
-                let mut dma_source = dma.source_addr;
-                let mut dma_dest = dma.dest_addr;
-                let original_dest = dma_dest;
-                let dma_length = usize::from(dma.word_count);
+                // Upon DMA request from sound controller, 4 units of 32bits (16 bytes) are transferred (both Word Count register and DMA Transfer Type bit are ignored).
+                let dma_length = if is_sound_dma {
+                    4
+                } else {
+                    usize::from(dma.word_count_internal)
+                };
 
-                let transfer_type = dma.get_dma_transfer_type();
+                let transfer_type = if is_sound_dma {
+                    DmaTransferType::Bit32
+                } else {
+                    dma.get_dma_transfer_type()
+                };
+
                 let transfer_size = match transfer_type {
                     DmaTransferType::Bit16 => 2,
                     DmaTransferType::Bit32 => 4,
@@ -2347,33 +2398,40 @@ impl Bus {
                             DmaAddrControl::Decrement => {
                                 dma_source = dma_source.wrapping_sub(transfer_size)
                             }
-                            DmaAddrControl::Increment | DmaAddrControl::IncrementReload => {
+                            DmaAddrControl::Increment => {
                                 dma_source = dma_source.wrapping_add(transfer_size)
                             }
+                            DmaAddrControl::IncrementReload => unreachable!(),
                         };
                     }
 
-                    match dma.get_dest_addr_control() {
-                        DmaAddrControl::Fixed => {}
-                        DmaAddrControl::Decrement => {
-                            dma_dest = dma_dest.wrapping_sub(transfer_size)
-                        }
-                        DmaAddrControl::Increment | DmaAddrControl::IncrementReload => {
-                            dma_dest = dma_dest.wrapping_add(transfer_size)
-                        }
-                    };
+                    // The destination address will not be incremented in FIFO mode.
+                    if !is_sound_dma {
+                        match dma.get_dest_addr_control() {
+                            DmaAddrControl::Fixed => {}
+                            DmaAddrControl::Decrement => {
+                                dma_dest = dma_dest.wrapping_sub(transfer_size)
+                            }
+                            DmaAddrControl::Increment | DmaAddrControl::IncrementReload => {
+                                dma_dest = dma_dest.wrapping_add(transfer_size)
+                            }
+                        };
+                    }
                 }
 
                 let dma = &mut self.dma_infos[dma_idx];
-                if matches!(dma.get_dest_addr_control(), DmaAddrControl::IncrementReload) {
-                    dma_dest = original_dest;
-                }
 
-                dma.source_addr = dma_source;
-                dma.dest_addr = dma_dest;
+                dma.source_addr_internal = dma_source;
+                dma.dest_addr_internal = dma_dest;
 
-                if !dma.get_dma_repeat() {
-                    dma.set_dma_enable(false);
+                if dma.get_dma_repeat() {
+                    dma.word_count_internal = dma.word_count;
+
+                    if matches!(dma.get_dest_addr_control(), DmaAddrControl::IncrementReload) {
+                        dma.dest_addr_internal = dma.dest_addr;
+                    }
+                } else {
+                    dma.clear_dma_enabled();
                 }
 
                 if dma.get_irq_at_end() {

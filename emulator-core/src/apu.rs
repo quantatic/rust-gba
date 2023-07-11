@@ -43,6 +43,8 @@ impl Apu {
         let tone_sample = self.tone.sample();
         let wave_sample = self.wave.sample();
         let noise_sample = self.noise.sample();
+        let dma_fifo_a_sample = self.fifo_a.sample();
+        let dma_fifo_b_sample = self.fifo_b.sample();
 
         let tone_and_sweep_sample_scaled =
             (((f32::from(tone_and_sweep_sample) / 15.0) * 2.0) - 1.0) / 4.0;
@@ -50,8 +52,16 @@ impl Apu {
         let wave_sample_scaled = (((f32::from(wave_sample) / 15.0) * 2.0) - 1.0) / 4.0;
         let noise_sample_scaled = (((f32::from(noise_sample) / 15.0) * 2.0) - 1.0) / 4.0;
 
+        let dma_fifo_a_scaled = (((f32::from(dma_fifo_a_sample) / 255.0) * 2.0) - 1.0) / 4.0;
+        let dma_fifo_b_scaled = (((f32::from(dma_fifo_b_sample) / 255.0) * 2.0) - 1.0) / 4.0;
+
         let left_enabled = self.get_enable_flags_left();
         let right_enabled = self.get_enable_flags_left();
+
+        let dma_a_enabled = self.get_dma_sound_a_enable();
+        let dma_b_enabled = self.get_dma_sound_b_enable();
+
+        // log::error!("{:?}", dma_a_enabled);
         // let left_enabled = [false, false, false, true];
         // let right_enabled = [false, false, false, true];
         // log::error!("{:?} {:?}", left_enabled, right_enabled);
@@ -94,6 +104,22 @@ impl Apu {
             sample_right += noise_sample_scaled;
         }
 
+        if dma_a_enabled.0 {
+            sample_left += dma_fifo_a_scaled;
+        }
+
+        if dma_a_enabled.1 {
+            sample_right += dma_fifo_a_scaled;
+        }
+
+        if dma_b_enabled.0 {
+            sample_left += dma_fifo_b_scaled;
+        }
+
+        if dma_b_enabled.1 {
+            sample_right += dma_fifo_b_scaled;
+        }
+
         [sample_left, sample_right]
     }
 }
@@ -104,6 +130,19 @@ impl Apu {
         self.tone.step();
         self.wave.step();
         self.noise.step();
+
+        let sound_a_overflow = match self.get_dma_sound_a_timer_select() {
+            DmaFifoTimerSelect::Timer0 => timer_result.overflows[0],
+            DmaFifoTimerSelect::Timer1 => timer_result.overflows[1],
+        };
+
+        let sound_b_overflow = match self.get_dma_sound_b_timer_select() {
+            DmaFifoTimerSelect::Timer0 => timer_result.overflows[0],
+            DmaFifoTimerSelect::Timer1 => timer_result.overflows[1],
+        };
+
+        self.fifo_a.step(sound_a_overflow);
+        self.fifo_b.step(sound_b_overflow);
     }
 
     pub fn write_fifo_a(&mut self, value: u32) {
@@ -112,6 +151,14 @@ impl Apu {
 
     pub fn write_fifo_b(&mut self, value: u32) {
         self.fifo_b.write_data(value);
+    }
+
+    pub fn poll_fifo_a_wants_dma(&mut self) -> bool {
+        self.fifo_a.poll_wants_dma()
+    }
+
+    pub fn poll_fifo_b_wants_dma(&mut self) -> bool {
+        self.fifo_b.poll_wants_dma()
     }
 }
 

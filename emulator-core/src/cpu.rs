@@ -1061,27 +1061,10 @@ impl Cpu {
         }
     }
 
-    // TODO: Determine how to calculate this with a permantently filled prefetch buffer.
     pub fn get_executing_pc(&self) -> u32 {
-        todo!();
-        // let r15 = self.read_register(Register::R15, std::convert::identity);
-        // let prefetch_saturated = self.prefetch_opcode.is_some();
-        // let decode_saturated = match self.get_instruction_mode() {
-        //     InstructionSet::Arm => self.pre_decode_arm.is_some(),
-        //     InstructionSet::Thumb => self.pre_decode_thumb.is_some(),
-        // };
+        let r15 = self.read_register(Register::R15, std::convert::identity);
 
-        // let instructions_behind = match (prefetch_saturated, decode_saturated) {
-        //     (false, false) => 0,
-        //     (true, false) => 1,
-        //     (false, true) => {
-        //         unreachable!("prefetch empty and decode saturated shouldn't be possible")
-        //     }
-        //     (true, true) => 2,
-        // };
-
-        // let bytes_behind = instructions_behind * self.get_instruction_width();
-
-        // r15 - bytes_behind
+        let bytes_behind = 2 * self.get_instruction_width();
+        r15 - bytes_behind
     }
 }
