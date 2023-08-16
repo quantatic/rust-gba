@@ -5,6 +5,7 @@ use rodio::Source;
 pub struct SampleSource {
     receiver: Receiver<f32>,
     sample_rate: u32,
+    last_sample: f32,
 }
 
 pub struct SampleSourceSender {
@@ -19,6 +20,7 @@ pub fn sample_source(sample_rate: u32) -> (SampleSourceSender, SampleSource) {
     let sample_source = SampleSource {
         receiver,
         sample_rate,
+        last_sample: 0.0,
     };
 
     (sample_source_sender, sample_source)
@@ -52,6 +54,10 @@ impl Iterator for SampleSource {
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.receiver.recv().ok()
+        if let Ok(sample) = self.receiver.try_recv() {
+            self.last_sample = sample;
+        }
+
+        Some(self.last_sample)
     }
 }
