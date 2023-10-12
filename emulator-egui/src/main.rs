@@ -12,7 +12,10 @@ use std::{
 };
 
 use eframe::{
-    egui::{self, CollapsingHeader, ScrollArea, Slider, TextEdit, TextStyle, TextureOptions, Ui},
+    egui::{
+        self, load::SizedTexture, CollapsingHeader, ImageSource, ScrollArea, Slider, TextEdit,
+        TextStyle, TextureOptions, Ui,
+    },
     epaint::ColorImage,
 };
 use emulator_core::{
@@ -450,7 +453,10 @@ impl MyEguiApp {
             .ctx()
             .load_texture("gba-texture", image, TextureOptions::NEAREST);
 
-        ui.image(texture.id(), ui.available_size());
+        ui.image(ImageSource::Texture(SizedTexture {
+            id: texture.id(),
+            size: ui.available_size(),
+        }));
     }
 
     fn memory_viewer(&self, ui: &mut Ui) {
