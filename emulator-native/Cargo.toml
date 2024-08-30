@@ -7,13 +7,13 @@ resolver = "2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.75"
-clap = { version = "4.4.6", features = ["derive"] }
+anyhow = "1.0.86"
+clap = { version = "4.5.16", features = ["derive"] }
 emulator-core = { path = "../emulator-core" }
-env_logger = "0.10.0"
-log = "0.4.20"
+env_logger = "0.10.2"
+log = "0.4.22"
 pixels = "0.13.0"
-rodio = "0.17.1"
+rodio = "0.17.3"
 serde_cbor = "0.11.2"
-serde_json = "1.0.107"
+serde_json = "1.0.127"
 winit = "0.28.7"
